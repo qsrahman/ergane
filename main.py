@@ -164,33 +164,37 @@ def run_turn(
     # Create a copy of the context for this turn to avoid mutating the main
     # context if the API call fails.
     turn_context: ResponseInputParam = [*context, {"role": "user", "content": prompt}]
-    trim_context(turn_context, config.model, config.max_context_tokens)
+    if trim_context(turn_context, config.model, config.max_context_tokens):
+        print("[Context trimmed: oldest turns dropped]")
     print()
 
+    request = {
+        "store": False,
+        "input": turn_context,
+        "model": config.model,
+        "instructions": instructions,
+    }
     if config.streaming:
-        with client.responses.stream(
-            store=False,
-            input=turn_context,
-            model=config.model,
-            instructions=instructions,
-        ) as stream:
+        response = None
+        with client.responses.stream(**request) as stream:
             for event in stream:
                 if event.type == "response.output_text.delta":
                     print(event.delta, end="", flush=True)
-            response = stream.get_final_response()
+                # Take the final response from the terminal event: get_final_response()
+                # raises unless the stream ends with response.completed.
+                elif (
+                    event.type == "response.completed"
+                    or event.type == "response.incomplete"
+                    or event.type == "response.failed"
+                ):
+                    response = event.response
+        print()
+        if response is None:
+            raise RuntimeError("Stream ended without a final response")
     else:
-        response = client.responses.create(
-            store=False,
-            input=turn_context,
-            model=config.model,
-            instructions=instructions,
-        )
+        response = client.responses.create(**request)
 
-    # Handle non-completed statuses
     if response.status != "completed":
-        if config.streaming:
-            print()  # Ensure we are on a new line after streaming
-
         if response.status == "incomplete":
             reason = (
                 response.incomplete_details.reason
@@ -200,12 +204,7 @@ def run_turn(
             print(f"[Response incomplete: {reason}]")
         elif response.status == "failed":
             error = response.error
-            if error is None:
-                message = "unknown error"
-            elif error.code:
-                message = f"{error.code}: {error.message}"
-            else:
-                message = error.message
+            message = f"{error.code}: {error.message}" if error else "unknown error"
             print(f"[Response failed: {message}]")
         else:
             print(f"[Response not completed: {response.status}]")
@@ -220,7 +219,8 @@ def run_turn(
                 "content": response.output_text,
             }
         )
-        print() if config.streaming else print(response.output_text)
+        if not config.streaming:
+            print(response.output_text)
 
 
 def main() -> None:
@@ -242,23 +242,19 @@ def main() -> None:
         except KeyboardInterrupt, EOFError:
             break
 
-        # Strip leading and trailing whitespace from the prompt.
         prompt = prompt.strip()
-        # Skip empty prompts after stripping whitespace.
         if not prompt:
             continue
-        # Check for exit commands.
         if prompt.lower() in {"/exit", "/quit"}:
             break
 
         try:
-            # Run a single turn of the AI coding agent with the current prompt.
             run_turn(client, context, prompt)
         except KeyboardInterrupt:
-            continue
+            print()  # end the partially streamed line
         except Exception as exc:  # noqa: BLE001
             print(f"Agent error: {type(exc).__name__}: {exc}")
-        print()  # Ensure a new line after an error message
+        print()
     print("Bye.")
 
 

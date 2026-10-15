@@ -4,16 +4,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`muagent` is a minimal interactive terminal chat agent built on the OpenAI **Responses API**. The whole program lives in `main.py`. There are no tests, linter, or formatter configured yet.
+`muagent` is a minimal interactive terminal chat agent built on the OpenAI **Responses API**. The whole program lives in `main.py`. No linter or formatter is configured.
 
 ## Commands
 
 Uses `uv` with Python 3.14 (`.python-version`, `requires-python >= 3.14`).
 
 ```bash
-uv sync              # install dependencies into .venv
+uv sync              # install dependencies (including pytest) into .venv
 uv run main.py       # start the REPL (/exit or /quit to leave)
+uv run pytest        # run the tests
+uv run pytest tests/test_main.py::TestTrimContext::test_drops_oldest_turns_first  # single test
 ```
+
+## Tests
+
+- `tests/conftest.py` runs a fake Responses API (`fake_server` fixture) on a local port, using the real SDK client and streaming parser. The last input message picks the outcome: `"incomplete"`, `"failed"`, or anything else for a completed `"Hello world"` reply. Request bodies are recorded in `fake_server.requests`.
+- The autouse `isolate_config` fixture keeps `.env` and the config environment variables out of `Config`. Note that `Config.model_validate(...)` still reads `.env`, so don't remove the fixture.
+- Tests inject config by monkeypatching `main.get_config` (see the `use_config` fixture in `test_main.py`).
 
 ## Configuration
 

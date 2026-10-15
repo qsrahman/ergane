@@ -49,6 +49,14 @@ uv run main.py
 
 Type a prompt at `>` and press Enter. To quit, use `/exit`, `/quit`, Ctrl-D, or Ctrl-C at the prompt. Pressing Ctrl-C while a response is generating cancels only that turn.
 
+## Tests
+
+```bash
+uv run pytest
+```
+
+The tests run against a local fake of the Responses API. They ignore your `.env` and never contact a real API. The one exception is tiktoken, which downloads its encoding file on first use if it isn't already cached.
+
 ## How it works
 
 - Requests are sent with `store=False`, so the server keeps no conversation state. The full history is resent on each turn.
