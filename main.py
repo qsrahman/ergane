@@ -1,0 +1,266 @@
+import json
+import platform
+import sys
+from datetime import date
+from functools import cache
+from pathlib import Path
+
+import tiktoken
+from openai import OpenAI
+from openai.types.responses import ResponseInputParam
+from pydantic import Field, ValidationError
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+try:
+    import readline  # noqa: F401  # line editing and history for input()
+except ImportError:  # not available on Windows
+    pass
+
+SYSTEM_PROMPT = """
+You are an expert, fed up and sassy assistant who hates answering questions.
+Operating rules:
+- Be concise and direct.
+- Write math in Unicode (∑ ∫ √ π α β θ ± × ÷ ≤ ≥ ≈ ∈ ∞, x² x₁, a/b for fractions). 
+- NEVER use LaTeX. This terminal doesn't render `$...$`, `\frac{}{}`, or other LaTeX/KaTeX syntax; it shows literal backslashes and dollar signs instead.
+"""
+
+
+class Config(BaseSettings):
+    """Configuration for the AI agent."""
+
+    model_config = SettingsConfigDict(
+        extra="ignore",
+        env_file=Path(__file__).parent / ".env",
+    )
+    model: str = Field(
+        min_length=1,
+        default="gpt-5.4-mini",
+        validation_alias="OPENAI_MODEL",
+    )
+    api_key: str = Field(
+        min_length=1,
+        validation_alias="OPENAI_API_KEY",
+    )
+    base_url: str | None = Field(
+        default=None,
+        validation_alias="OPENAI_BASE_URL",
+    )
+    streaming: bool = Field(
+        default=True,
+        validation_alias="STREAMING",
+    )
+    max_context_tokens: int = Field(
+        default=64 * 1024,
+        gt=0,
+        validation_alias="MAX_CONTEXT_TOKENS",
+    )
+
+
+@cache
+def get_config() -> Config:
+    """Load and validate the agent configuration on first use.
+
+    Returns:
+        The validated Config object.
+
+    Raises:
+        SystemExit: If the configuration is invalid.
+    """
+    try:
+        return Config()  # pyright: ignore[reportCallIssue]
+    except ValidationError as exc:
+        print("Configuration error:", file=sys.stderr)
+        for error in exc.errors():
+            field = ".".join(str(part) for part in error["loc"])
+            print(f"  - {field}: {error['msg']}", file=sys.stderr)
+        raise SystemExit(1) from None
+
+
+@cache
+def get_encoding(model: str) -> tiktoken.Encoding:
+    """Get the token encoding for the specified model.
+
+    Args:
+        model: The name of the model.
+
+    Returns:
+        The token encoding for the model.
+    """
+    try:
+        return tiktoken.encoding_for_model(model)
+    except KeyError:
+        return tiktoken.get_encoding("o200k_base")
+
+
+def count_context_tokens(context: ResponseInputParam, model: str) -> int:
+    """Count the number of tokens in the conversation context for the specified model.
+
+    Args:
+        context: The current conversation context.
+        model: The model name.
+
+    Returns:
+        The number of tokens in the context.
+    """
+    text = json.dumps(context, ensure_ascii=False)
+    return len(get_encoding(model).encode_ordinary(text))
+
+
+def trim_context(
+    context: ResponseInputParam,
+    model: str,
+    max_tokens: int,
+) -> bool:
+    """Trim the conversation context to fit within the maximum token limit.
+
+    Args:
+        context: The current conversation context.
+        model: The model name.
+        max_tokens: The maximum allowed number of tokens.
+
+    Returns:
+        True if the context was trimmed, False otherwise.
+    """
+    trimmed = False
+    while count_context_tokens(context, model) > max_tokens:
+        user_turn_starts = [
+            i
+            for i, item in enumerate(context)
+            if isinstance(item, dict) and item.get("role") == "user"
+        ]
+        # If we only have 1 or 0 user turns left, we can't trim further without
+        # dropping the initial prompt.
+        if len(user_turn_starts) < 2:
+            break
+
+        # Drop everything up to the second user turn
+        del context[: user_turn_starts[1]]
+        trimmed = True
+
+    return trimmed
+
+
+def run_turn(
+    client: OpenAI,
+    context: ResponseInputParam,
+    prompt: str,
+) -> None:
+    """Run a single turn of interaction with the AI assistant.
+
+    Args:
+        client: The OpenAI client instance.
+        context: The current conversation context.
+        prompt: The user's input prompt.
+    """
+    config = get_config()
+
+    instructions = (
+        f"{SYSTEM_PROMPT}\n"
+        "Environment:\n"
+        f"- Operating system: {platform.platform()}\n"
+        f"- Current date: {date.today().isoformat()}\n"
+    )
+
+    # Create a copy of the context for this turn to avoid mutating the main
+    # context if the API call fails.
+    turn_context: ResponseInputParam = [*context, {"role": "user", "content": prompt}]
+    trim_context(turn_context, config.model, config.max_context_tokens)
+    print()
+
+    if config.streaming:
+        with client.responses.stream(
+            store=False,
+            input=turn_context,
+            model=config.model,
+            instructions=instructions,
+        ) as stream:
+            for event in stream:
+                if event.type == "response.output_text.delta":
+                    print(event.delta, end="", flush=True)
+            response = stream.get_final_response()
+    else:
+        response = client.responses.create(
+            store=False,
+            input=turn_context,
+            model=config.model,
+            instructions=instructions,
+        )
+
+    # Handle non-completed statuses
+    if response.status != "completed":
+        if config.streaming:
+            print()  # Ensure we are on a new line after streaming
+
+        if response.status == "incomplete":
+            reason = (
+                response.incomplete_details.reason
+                if response.incomplete_details
+                else "unknown"
+            )
+            print(f"[Response incomplete: {reason}]")
+        elif response.status == "failed":
+            error = response.error
+            if error is None:
+                message = "unknown error"
+            elif error.code:
+                message = f"{error.code}: {error.message}"
+            else:
+                message = error.message
+            print(f"[Response failed: {message}]")
+        else:
+            print(f"[Response not completed: {response.status}]")
+        return
+
+    # Commit only after a completed response so failed requests don't corrupt history.
+    context[:] = turn_context
+    if response.output_text:
+        context.append(
+            {
+                "role": "assistant",
+                "content": response.output_text,
+            }
+        )
+        print() if config.streaming else print(response.output_text)
+
+
+def main() -> None:
+    """Entry point for the AI coding agent CLI."""
+    config = get_config()
+    context: ResponseInputParam = []
+
+    client = OpenAI(
+        api_key=config.api_key,
+        base_url=config.base_url,
+    )
+
+    print(f"AI coding agent | model: {config.model}")
+    print("Type '/exit' or '/quit' to stop.\n")
+
+    while True:
+        try:
+            prompt = input("> ")
+        except KeyboardInterrupt, EOFError:
+            break
+
+        # Strip leading and trailing whitespace from the prompt.
+        prompt = prompt.strip()
+        # Skip empty prompts after stripping whitespace.
+        if not prompt:
+            continue
+        # Check for exit commands.
+        if prompt.lower() in {"/exit", "/quit"}:
+            break
+
+        try:
+            # Run a single turn of the AI coding agent with the current prompt.
+            run_turn(client, context, prompt)
+        except KeyboardInterrupt:
+            continue
+        except Exception as exc:  # noqa: BLE001
+            print(f"Agent error: {type(exc).__name__}: {exc}")
+        print()  # Ensure a new line after an error message
+    print("Bye.")
+
+
+if __name__ == "__main__":
+    main()
