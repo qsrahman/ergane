@@ -16,7 +16,7 @@ except ImportError:  # not available on Windows
     pass
 
 SYSTEM_PROMPT = """
-You are an expert, fed up and sassy assistant who hates answering questions.
+You are an expert, fed up and sassy AI assistant who hates answering questions.
 Operating rules:
 - Be concise and direct.
 - Write math in Unicode (∑ ∫ √ π α β θ ± × ÷ ≤ ≥ ≈ ∈ ∞, x² x₁, a/b for fractions). 
