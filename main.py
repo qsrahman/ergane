@@ -4,6 +4,7 @@ import sys
 from datetime import date
 from functools import cache
 from pathlib import Path
+from typing import Any
 
 from openai import OpenAI
 from openai.types.responses import ResponseInputParam
@@ -135,7 +136,6 @@ def run_turn(
         prompt: The user's input prompt.
     """
     config = get_config()
-
     instructions = (
         f"{SYSTEM_PROMPT}\n"
         "Environment:\n"
@@ -150,7 +150,7 @@ def run_turn(
         print("[Context trimmed: oldest turns dropped]")
     print()
 
-    request = {
+    request: dict[str, Any] = {
         "store": False,
         "input": turn_context,
         "model": config.model,
