@@ -57,10 +57,10 @@ Type a prompt at `>` and press Enter. To quit, use `/exit`, `/quit`, Ctrl-D, or 
 uv run pytest
 ```
 
-The tests run against a local fake of the Responses API. They ignore your `.env` and never contact a real API. The one exception is tiktoken, which downloads its encoding file on first use if it isn't already cached.
+The tests run against a local fake of the Responses API. They ignore your `.env` and make no external network calls.
 
 ## How it works
 
 - Requests are sent with `store=False`, so the server keeps no conversation state. The full history is resent on each turn.
 - A turn is added to the history only after the response completes with text. Failed, incomplete or empty responses leave the history unchanged.
-- When the history exceeds `MAX_CONTEXT_TOKENS`, the oldest turns are dropped first. The count is a tiktoken estimate.
+- When the history exceeds `MAX_CONTEXT_TOKENS`, the oldest turns are dropped first. Tokens are estimated at about 4 bytes of UTF-8 per token, which works with any backend's tokenizer.

@@ -40,28 +40,31 @@ class TestTrimContext:
         context = make_context(2)
         original = list(context)
 
-        assert not main.trim_context(context, "gpt-4o", max_tokens=10_000)
+        assert not main.trim_context(context, max_tokens=10_000)
         assert context == original
 
     @pytest.mark.parametrize("kept_turns", [1, 2])
     def test_drops_only_as_many_oldest_turns_as_needed(self, kept_turns):
         context = make_context(3)
         newest = context[-2 * kept_turns :]
-        budget = sum(main.count_item_tokens(item, "gpt-4o") for item in newest)
+        budget = sum(main.count_item_tokens(item) for item in newest)
 
-        assert main.trim_context(context, "gpt-4o", max_tokens=budget)
+        assert main.trim_context(context, max_tokens=budget)
         assert context == newest
 
     def test_keeps_last_user_turn_even_if_over_budget(self):
         context: ResponseInputParam = [{"role": "user", "content": "word " * 100}]
         original = list(context)
 
-        assert not main.trim_context(context, "gpt-4o", max_tokens=1)
+        assert not main.trim_context(context, max_tokens=1)
         assert context == original
 
 
-def test_get_encoding_falls_back_for_unknown_model():
-    assert main.get_encoding("gemma4:cloud").name == "o200k_base"
+def test_count_item_tokens_counts_utf8_bytes():
+    ascii_item = {"role": "user", "content": "a" * 12}
+    cjk_item = {"role": "user", "content": "字" * 12}
+
+    assert main.count_item_tokens(cjk_item) > main.count_item_tokens(ascii_item)
 
 
 def test_get_config_exits_on_missing_api_key(capsys: pytest.CaptureFixture[str]):

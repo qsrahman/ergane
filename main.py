@@ -5,7 +5,6 @@ from datetime import date
 from functools import cache
 from pathlib import Path
 
-import tiktoken
 from openai import OpenAI
 from openai.types.responses import ResponseInputParam
 from pydantic import Field, ValidationError
@@ -76,52 +75,34 @@ def get_config() -> Config:
         raise SystemExit(1) from None
 
 
-@cache
-def get_encoding(model: str) -> tiktoken.Encoding:
-    """Get the token encoding for the specified model.
-
-    Args:
-        model: The name of the model.
-
-    Returns:
-        The token encoding for the model.
-    """
-    try:
-        return tiktoken.encoding_for_model(model)
-    except KeyError:
-        return tiktoken.get_encoding("o200k_base")
-
-
-def count_item_tokens(item: object, model: str) -> int:
-    """Estimate the number of tokens in one conversation item for the specified model.
+def count_item_tokens(item: object) -> int:
+    """Estimate the number of tokens in one conversation item.
 
     Args:
         item: A single conversation context item.
-        model: The model name.
 
     Returns:
-        The number of tokens in the JSON-serialized item.
+        The estimated number of tokens in the JSON-serialized item.
     """
-    text = json.dumps(item, ensure_ascii=False)
-    return len(get_encoding(model).encode_ordinary(text))
+    # ~4 bytes per token on average; tokenizer-agnostic, so it suits any backend.
+    # UTF-8 bytes rather than characters keep non-Latin text from being undercounted.
+    return len(json.dumps(item, ensure_ascii=False).encode()) // 4 + 1
 
 
 def trim_context(
     context: ResponseInputParam,
-    model: str,
     max_tokens: int,
 ) -> bool:
     """Trim the conversation context to fit within the maximum token limit.
 
     Args:
         context: The current conversation context.
-        model: The model name.
         max_tokens: The maximum allowed number of tokens.
 
     Returns:
         True if the context was trimmed, False otherwise.
     """
-    counts = [count_item_tokens(item, model) for item in context]
+    counts = [count_item_tokens(item) for item in context]
     total = sum(counts)
     user_turn_starts = [
         i
@@ -165,7 +146,7 @@ def run_turn(
     # Create a copy of the context for this turn to avoid mutating the main
     # context if the API call fails.
     turn_context: ResponseInputParam = [*context, {"role": "user", "content": prompt}]
-    if trim_context(turn_context, config.model, config.max_context_tokens):
+    if trim_context(turn_context, config.max_context_tokens):
         print("[Context trimmed: oldest turns dropped]")
     print()
 
@@ -244,7 +225,7 @@ def main() -> None:
     while True:
         try:
             prompt = input("> ")
-        except KeyboardInterrupt, EOFError:
+        except (KeyboardInterrupt, EOFError):
             break
 
         prompt = prompt.strip()

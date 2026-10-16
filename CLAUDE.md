@@ -33,7 +33,7 @@ Settings come from environment variables or `.env` next to `main.py`, loaded by 
 |---|---|---|
 | `OPENAI_API_KEY` | — | required |
 | `OPENAI_BASE_URL` | `None` | for OpenAI-compatible endpoints |
-| `OPENAI_MODEL` | `gpt-5.4-mini` | also selects the tiktoken encoding (falls back to `o200k_base`) |
+| `OPENAI_MODEL` | `gpt-5.4-mini` | |
 | `STREAMING` | `true` | stream deltas vs. single `responses.create` |
 | `MAX_CONTEXT_TOKENS` | `65536` | client-side history budget; excludes instructions and output |
 
@@ -43,7 +43,7 @@ Settings come from environment variables or `.env` next to `main.py`, loaded by 
 
 - **Stateless API calls:** every request uses `store=False`; the full conversation is resent each turn as a `ResponseInputParam` list held in `main()`. The system prompt plus environment info (OS, current date) is passed via `instructions`, not stored in the history.
 - **Transactional history:** `run_turn` builds `turn_context` as a copy of the history plus the new user message, and only commits it back to `context` (`context[:] = ...`) after a `completed` response with non-empty `output_text`. Failed, incomplete or empty responses and exceptions leave history untouched, so user and assistant messages always alternate. Preserve this invariant when changing the turn flow.
-- **Context trimming:** `trim_context` estimates each item's tokens once (tiktoken over its JSON) and drops whole turns from the front (each up to the next `user` message) until under budget. It never drops the most recent user turn, so a single oversized prompt can still exceed the limit.
+- **Context trimming:** `trim_context` estimates each item's tokens once (UTF-8 bytes of its JSON ÷ 4, tokenizer-agnostic) and drops whole turns from the front (each up to the next `user` message) until under budget. It never drops the most recent user turn, so a single oversized prompt can still exceed the limit.
 - **REPL errors:** Ctrl-C during a turn cancels just that turn; other exceptions are printed as `Agent error: ...` and the loop continues.
 
 ## Conventions
