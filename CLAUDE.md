@@ -12,7 +12,7 @@ Uses `uv` with Python 3.14 (`.python-version`, `requires-python >= 3.14`).
 
 ```bash
 uv sync              # install dependencies (including pytest) into .venv
-uv run muagent       # start the REPL (/exit or /quit to leave); same as `uv run main.py`
+uv run muagent       # start the REPL; same as `uv run main.py`
 uv run pytest        # run the tests
 uv run pytest tests/test_main.py::TestRepl::test_strips_input_and_skips_blank_lines  # single test
 ```
@@ -44,10 +44,9 @@ Settings come from environment variables or `.env` next to `main.py`, loaded by 
 - **Stateless API calls:** every request uses `store=False`; the full conversation is resent each turn as a `ResponseInputParam` list held in `main()`. The system prompt plus environment info (OS, current date) is passed via `instructions`, not stored in the history.
 - **Transactional history:** `run_turn` builds `turn_context` as a copy of the history plus the new user message, and only commits it back to `context` (`context[:] = ...`) after a `completed` response with non-empty `output_text`. Failed, incomplete or empty responses and exceptions leave history untouched, so user and assistant messages always alternate. Preserve this invariant when changing the turn flow.
 - **Context trimming:** `trim_context` estimates each item's tokens once (UTF-8 bytes of its JSON ÷ 4, tokenizer-agnostic) and drops whole turns from the front (each up to the next `user` message) until under budget. It never drops the most recent user turn, so a single oversized prompt can still exceed the limit.
-- **REPL errors:** Ctrl-C during a turn cancels just that turn; other exceptions are printed as `Agent error: ...` and the loop continues.
+- **REPL:** `main()` handles the slash commands (`/reset` clears the history, `/clear` clears the screen with ANSI codes, `/exit` and `/quit` quit) before anything reaches `run_turn`. Ctrl-C during a turn cancels just that turn; other exceptions are printed as `Agent error: ...` and the loop continues.
 
 ## Conventions
 
-- Targets Python 3.14 syntax, e.g. the unparenthesized `except KeyboardInterrupt, EOFError:` (PEP 758) is intentional, not a bug.
 - Google-style docstrings (`Args:` / `Returns:` / `Raises:`) on functions.
 - Output is a plain terminal: the system prompt forbids LaTeX in favor of Unicode math. Keep that constraint if editing the prompt.

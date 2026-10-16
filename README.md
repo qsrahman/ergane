@@ -49,7 +49,15 @@ uv run muagent
 
 `uv run main.py` also works.
 
-Type a prompt at `>` and press Enter. To quit, use `/exit`, `/quit`, Ctrl-D, or Ctrl-C at the prompt. Pressing Ctrl-C while a response is generating cancels only that turn.
+Type a prompt at `>` and press Enter. To quit, use `/exit`, `/quit`, Ctrl-D, or Ctrl-C at the prompt.
+
+| Command | Effect |
+|---|---|
+| `/reset` | Clear the conversation history and start fresh |
+| `/clear` | Clear the terminal screen; the history is kept |
+| `/exit`, `/quit` | Quit |
+
+Commands are case-insensitive. Pressing Ctrl-C while a response is generating cancels only that turn.
 
 ## Tests
 

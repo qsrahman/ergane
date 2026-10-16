@@ -4,7 +4,6 @@ import sys
 from datetime import date
 from functools import cache
 from pathlib import Path
-from typing import Any
 
 from openai import OpenAI
 from openai.types.responses import ResponseInputParam
@@ -150,7 +149,7 @@ def run_turn(
         print("[Context trimmed: oldest turns dropped]")
     print()
 
-    request: dict[str, Any] = {
+    request = {
         "store": False,
         "input": turn_context,
         "model": config.model,
@@ -220,7 +219,7 @@ def main() -> None:
     )
 
     print(f"AI coding agent | model: {config.model}")
-    print("Type '/exit' or '/quit' to stop.\n")
+    print("Commands: /reset (clear history), /clear (clear screen), /exit or /quit.\n")
 
     while True:
         try:
@@ -231,8 +230,17 @@ def main() -> None:
         prompt = prompt.strip()
         if not prompt:
             continue
-        if prompt.lower() in {"/exit", "/quit"}:
+        command = prompt.lower()
+        if command in {"/exit", "/quit"}:
             break
+        if command == "/reset":
+            context.clear()
+            print("[History reset]\n")
+            continue
+        if command == "/clear":
+            # Clear the screen and scrollback, then move the cursor home, like `clear`.
+            print("\033[2J\033[3J\033[H", end="", flush=True)
+            continue
 
         try:
             run_turn(client, context, prompt)

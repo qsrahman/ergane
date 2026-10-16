@@ -147,7 +147,8 @@ class TestRepl:
         """Run main() with scripted input; returns the prompts passed to run_turn.
 
         Each scripted entry is either a line of input or an exception that
-        input() raises. A callable passed as `turn` replaces run_turn.
+        input() raises. A callable passed as `turn` is called with each prompt
+        and the conversation history in place of run_turn.
         """
         use_config()
 
@@ -161,10 +162,10 @@ class TestRepl:
                     raise line
                 return line
 
-            def fake_run_turn(_client, _context, prompt: str) -> None:
+            def fake_run_turn(_client, context, prompt: str) -> None:
                 prompts.append(prompt)
                 if turn:
-                    turn(prompt)
+                    turn(prompt, context)
 
             monkeypatch.setattr("builtins.input", fake_input)
             monkeypatch.setattr(main, "run_turn", fake_run_turn)
@@ -184,16 +185,44 @@ class TestRepl:
         assert repl(["", "   ", "  hi  ", "/exit"]) == ["hi"]
 
     def test_ctrl_c_cancels_only_the_current_turn(self, repl):
-        def turn(prompt: str) -> None:
+        def turn(prompt: str, _context) -> None:
             if prompt == "slow":
                 raise KeyboardInterrupt
 
         assert repl(["slow", "next", "/exit"], turn) == ["slow", "next"]
 
     def test_turn_errors_are_reported_and_loop_continues(self, repl, capsys):
-        def turn(prompt: str) -> None:
+        def turn(prompt: str, _context) -> None:
             if prompt == "bad":
                 raise ValueError("boom")
 
         assert repl(["bad", "next", "/exit"], turn) == ["bad", "next"]
         assert "Agent error: ValueError: boom" in capsys.readouterr().out
+
+    @staticmethod
+    def committing_turn(history_sizes: list[int]):
+        """A fake turn that records the history size, then commits the prompt."""
+
+        def turn(prompt: str, context) -> None:
+            history_sizes.append(len(context))
+            context.append({"role": "user", "content": prompt})
+
+        return turn
+
+    def test_reset_clears_history(self, repl, capsys):
+        sizes: list[int] = []
+
+        prompts = repl(["a", "b", " /Reset ", "c", "/exit"], self.committing_turn(sizes))
+
+        assert prompts == ["a", "b", "c"]
+        assert sizes == [0, 1, 0]
+        assert "[History reset]" in capsys.readouterr().out
+
+    def test_clear_clears_screen_and_keeps_history(self, repl, capsys):
+        sizes: list[int] = []
+
+        prompts = repl(["a", "/clear", "b", "/exit"], self.committing_turn(sizes))
+
+        assert prompts == ["a", "b"]
+        assert sizes == [0, 1]
+        assert "\033[2J\033[3J\033[H" in capsys.readouterr().out
