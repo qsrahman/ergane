@@ -92,17 +92,17 @@ def get_encoding(model: str) -> tiktoken.Encoding:
         return tiktoken.get_encoding("o200k_base")
 
 
-def count_context_tokens(context: ResponseInputParam, model: str) -> int:
-    """Count the number of tokens in the conversation context for the specified model.
+def count_item_tokens(item: object, model: str) -> int:
+    """Estimate the number of tokens in one conversation item for the specified model.
 
     Args:
-        context: The current conversation context.
+        item: A single conversation context item.
         model: The model name.
 
     Returns:
-        The number of tokens in the context.
+        The number of tokens in the JSON-serialized item.
     """
-    text = json.dumps(context, ensure_ascii=False)
+    text = json.dumps(item, ensure_ascii=False)
     return len(get_encoding(model).encode_ordinary(text))
 
 
@@ -121,23 +121,24 @@ def trim_context(
     Returns:
         True if the context was trimmed, False otherwise.
     """
-    trimmed = False
-    while count_context_tokens(context, model) > max_tokens:
-        user_turn_starts = [
-            i
-            for i, item in enumerate(context)
-            if isinstance(item, dict) and item.get("role") == "user"
-        ]
-        # If we only have 1 or 0 user turns left, we can't trim further without
-        # dropping the initial prompt.
-        if len(user_turn_starts) < 2:
+    counts = [count_item_tokens(item, model) for item in context]
+    total = sum(counts)
+    user_turn_starts = [
+        i
+        for i, item in enumerate(context)
+        if isinstance(item, dict) and item.get("role") == "user"
+    ]
+
+    # Drop whole turns from the front, but never the last user turn.
+    start = 0
+    for turn_start in user_turn_starts[1:]:
+        if total <= max_tokens:
             break
+        total -= sum(counts[start:turn_start])
+        start = turn_start
 
-        # Drop everything up to the second user turn
-        del context[: user_turn_starts[1]]
-        trimmed = True
-
-    return trimmed
+    del context[:start]
+    return start > 0
 
 
 def run_turn(
@@ -210,17 +211,21 @@ def run_turn(
             print(f"[Response not completed: {response.status}]")
         return
 
+    # Committing a turn without a reply would leave two user messages in a row.
+    if not response.output_text:
+        print("[No text in response]")
+        return
+
     # Commit only after a completed response so failed requests don't corrupt history.
     context[:] = turn_context
-    if response.output_text:
-        context.append(
-            {
-                "role": "assistant",
-                "content": response.output_text,
-            }
-        )
-        if not config.streaming:
-            print(response.output_text)
+    context.append(
+        {
+            "role": "assistant",
+            "content": response.output_text,
+        }
+    )
+    if not config.streaming:
+        print(response.output_text)
 
 
 def main() -> None:

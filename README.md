@@ -39,13 +39,15 @@ Environment variables take precedence over `.env`.
 | `OPENAI_BASE_URL` | OpenAI default | Base URL for an OpenAI-compatible API |
 | `OPENAI_MODEL` | `gpt-5.4-mini` | Model name |
 | `STREAMING` | `true` | Stream tokens as they arrive |
-| `MAX_CONTEXT_TOKENS` | `65536` | Token budget for the conversation history sent each turn |
+| `MAX_CONTEXT_TOKENS` | `65536` | Token budget for the conversation history sent each turn. It excludes the system instructions and the reply, so keep it well below the model's context window. |
 
 ## Usage
 
 ```bash
-uv run main.py
+uv run muagent
 ```
+
+`uv run main.py` also works.
 
 Type a prompt at `>` and press Enter. To quit, use `/exit`, `/quit`, Ctrl-D, or Ctrl-C at the prompt. Pressing Ctrl-C while a response is generating cancels only that turn.
 
@@ -60,5 +62,5 @@ The tests run against a local fake of the Responses API. They ignore your `.env`
 ## How it works
 
 - Requests are sent with `store=False`, so the server keeps no conversation state. The full history is resent on each turn.
-- A turn is added to the history only after the response completes. Failed or incomplete responses leave the history unchanged.
+- A turn is added to the history only after the response completes with text. Failed, incomplete or empty responses leave the history unchanged.
 - When the history exceeds `MAX_CONTEXT_TOKENS`, the oldest turns are dropped first. The count is a tiktoken estimate.

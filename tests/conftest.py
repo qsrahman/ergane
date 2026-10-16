@@ -42,6 +42,8 @@ def final_event(scenario: str) -> tuple[str, dict]:
             [MESSAGE],
             incomplete_details={"reason": "max_output_tokens"},
         )
+    if scenario == "empty":
+        return "response.completed", make_response("completed")
     if scenario == "failed":
         return "response.failed", make_response(
             "failed",
@@ -54,7 +56,8 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     """Minimal fake of POST /v1/responses.
 
     The last input item's content selects the scenario: "incomplete",
-    "failed", or anything else for a completed response.
+    "failed", "empty" (completed with no output), or anything else for a
+    completed response.
     """
 
     def log_message(self, format, *args):

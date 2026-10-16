@@ -43,10 +43,11 @@ class TestTrimContext:
         assert not main.trim_context(context, "gpt-4o", max_tokens=10_000)
         assert context == original
 
-    def test_drops_oldest_turns_first(self):
+    @pytest.mark.parametrize("kept_turns", [1, 2])
+    def test_drops_only_as_many_oldest_turns_as_needed(self, kept_turns):
         context = make_context(3)
-        newest = context[-2:]
-        budget = main.count_context_tokens(newest, "gpt-4o")
+        newest = context[-2 * kept_turns :]
+        budget = sum(main.count_item_tokens(item, "gpt-4o") for item in newest)
 
         assert main.trim_context(context, "gpt-4o", max_tokens=budget)
         assert context == newest
@@ -92,6 +93,7 @@ class TestRunTurn:
         [
             ("incomplete", "[Response incomplete: max_output_tokens]"),
             ("failed", "[Response failed: server_error: boom]"),
+            ("empty", "[No text in response]"),
         ],
     )
     def test_unsuccessful_response_leaves_history_untouched(
@@ -134,3 +136,61 @@ class TestRunTurn:
 
         assert "[Context trimmed: oldest turns dropped]" in capsys.readouterr().out
         assert fake_server.requests[-1]["input"] == [{"role": "user", "content": "hi"}]
+
+
+class TestRepl:
+    @pytest.fixture
+    def repl(self, monkeypatch: pytest.MonkeyPatch, use_config):
+        """Run main() with scripted input; returns the prompts passed to run_turn.
+
+        Each scripted entry is either a line of input or an exception that
+        input() raises. A callable passed as `turn` replaces run_turn.
+        """
+        use_config()
+
+        def run(inputs: list, turn=None) -> list[str]:
+            lines = iter(inputs)
+            prompts: list[str] = []
+
+            def fake_input(_prompt: str) -> str:
+                line = next(lines)
+                if isinstance(line, BaseException):
+                    raise line
+                return line
+
+            def fake_run_turn(_client, _context, prompt: str) -> None:
+                prompts.append(prompt)
+                if turn:
+                    turn(prompt)
+
+            monkeypatch.setattr("builtins.input", fake_input)
+            monkeypatch.setattr(main, "run_turn", fake_run_turn)
+            main.main()
+            return prompts
+
+        return run
+
+    @pytest.mark.parametrize(
+        "stop", ["/exit", "/quit", "  /EXIT  ", EOFError(), KeyboardInterrupt()]
+    )
+    def test_stops_on_exit_command_or_eof(self, repl, capsys, stop):
+        assert repl([stop]) == []
+        assert capsys.readouterr().out.endswith("Bye.\n")
+
+    def test_strips_input_and_skips_blank_lines(self, repl):
+        assert repl(["", "   ", "  hi  ", "/exit"]) == ["hi"]
+
+    def test_ctrl_c_cancels_only_the_current_turn(self, repl):
+        def turn(prompt: str) -> None:
+            if prompt == "slow":
+                raise KeyboardInterrupt
+
+        assert repl(["slow", "next", "/exit"], turn) == ["slow", "next"]
+
+    def test_turn_errors_are_reported_and_loop_continues(self, repl, capsys):
+        def turn(prompt: str) -> None:
+            if prompt == "bad":
+                raise ValueError("boom")
+
+        assert repl(["bad", "next", "/exit"], turn) == ["bad", "next"]
+        assert "Agent error: ValueError: boom" in capsys.readouterr().out
