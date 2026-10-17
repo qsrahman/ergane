@@ -2,7 +2,6 @@ import json
 import platform
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
@@ -75,6 +74,9 @@ class Context:
     def draft(self, prompt: str) -> tuple[ResponseInputParam, bool]:
         """Build the next request's input without changing the history.
 
+        Old turns are dropped from the front, a whole turn at a time, until the
+        input fits the token budget. The new user message is always kept.
+
         Args:
             prompt: The user's new message.
 
@@ -83,7 +85,25 @@ class Context:
             whether any old turns were dropped.
         """
         items: ResponseInputParam = [*self.items, {"role": "user", "content": prompt}]
-        start = self._trim_start(items)
+        # ~4 bytes of UTF-8 per token on average: tokenizer-agnostic, so it suits any
+        # backend, and counting bytes keeps non-Latin text from being undercounted.
+        counts = [
+            len(json.dumps(item, ensure_ascii=False).encode()) // 4 + 1
+            for item in items
+        ]
+        total = sum(counts)
+        user_turn_starts = [
+            i
+            for i, item in enumerate(items)
+            if isinstance(item, dict) and item.get("role") == "user"
+        ]
+
+        start = 0
+        for turn_start in user_turn_starts[1:]:
+            if total <= self.max_tokens:
+                break
+            total -= sum(counts[start:turn_start])
+            start = turn_start
         return items[start:], start > 0
 
     def commit(self, draft: ResponseInputParam, reply: str) -> None:
@@ -99,58 +119,9 @@ class Context:
         """Forget the whole history."""
         self.items = []
 
-    def _trim_start(self, items: ResponseInputParam) -> int:
-        """Find where the kept items start so they fit within the token budget.
-
-        Whole turns are dropped from the front, but never the last user turn.
-
-        Args:
-            items: The candidate input for the next request.
-
-        Returns:
-            The index of the first item to keep.
-        """
-        counts = [self._count_item_tokens(item) for item in items]
-        total = sum(counts)
-        user_turn_starts = [
-            i
-            for i, item in enumerate(items)
-            if isinstance(item, dict) and item.get("role") == "user"
-        ]
-
-        start = 0
-        for turn_start in user_turn_starts[1:]:
-            if total <= self.max_tokens:
-                break
-            total -= sum(counts[start:turn_start])
-            start = turn_start
-        return start
-
-    @staticmethod
-    def _count_item_tokens(item: object) -> int:
-        """Estimate the number of tokens in one conversation item.
-
-        Args:
-            item: A single conversation context item.
-
-        Returns:
-            The estimated number of tokens in the JSON-serialized item.
-        """
-        # ~4 bytes per token on average; tokenizer-agnostic, so it suits any backend.
-        # UTF-8 bytes rather than characters keep non-Latin text from being undercounted.
-        return len(json.dumps(item, ensure_ascii=False).encode()) // 4 + 1
-
 
 class TurnError(Exception):
     """A response that did not complete with text; the history is unchanged."""
-
-
-@dataclass(frozen=True)
-class Turn:
-    """The outcome of a successful turn."""
-
-    reply: str
-    trimmed: bool  # whether old turns were dropped to fit the token budget
 
 
 class Agent:
@@ -174,8 +145,8 @@ class Agent:
         self,
         prompt: str,
         on_text: Callable[[str], None] = lambda text: None,
-    ) -> Turn:
-        """Send one user message and return the reply.
+    ) -> bool:
+        """Send one user message, passing the reply text to on_text.
 
         The turn is added to the conversation only if the response completes
         with text.
@@ -186,7 +157,7 @@ class Agent:
                 streaming, or once with the whole reply otherwise.
 
         Returns:
-            The reply and whether old turns were trimmed.
+            Whether old turns were dropped to fit the token budget.
 
         Raises:
             TurnError: If the response is incomplete, failed, refused or has no text.
@@ -206,7 +177,7 @@ class Agent:
         self.context.commit(draft, response.output_text)
         if not self.config.streaming:
             on_text(response.output_text)
-        return Turn(response.output_text, trimmed)
+        return trimmed
 
     @staticmethod
     def _check(response: Response) -> None:
@@ -354,8 +325,7 @@ class Repl:
 
         notice = None
         try:
-            turn = self.agent.run_turn(prompt, on_text=write)
-            if turn.trimmed:
+            if self.agent.run_turn(prompt, on_text=write):
                 notice = "[Context trimmed: oldest turns dropped]"
         except TurnError as exc:
             notice = f"[{exc}]"

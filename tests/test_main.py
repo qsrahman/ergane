@@ -53,16 +53,23 @@ class TestContext:
 
     @pytest.mark.parametrize("kept_turns", [1, 2])
     def test_draft_drops_only_as_many_oldest_turns_as_needed(self, kept_turns):
-        history = make_context(3)
-        newest = [*history[-2 * kept_turns :], {"role": "user", "content": "new"}]
-        budget = sum(main.Context._count_item_tokens(item) for item in newest)
-        context = main.Context(max_tokens=budget)
+        # Each turn is about 2,000 tokens, so a budget of kept_turns and a half
+        # keeps exactly kept_turns, whatever the estimate's per-item overhead.
+        big = "x" * 4000
+        history: ResponseInputParam = []
+        for i in range(3):
+            history.append({"role": "user", "content": f"{i}{big}"})
+            history.append({"role": "assistant", "content": big})
+        context = main.Context(max_tokens=kept_turns * 2000 + 1000)
         context.items = history
 
         draft, trimmed = context.draft("new")
 
         assert trimmed
-        assert draft == newest
+        assert draft == [
+            *history[-2 * kept_turns :],
+            {"role": "user", "content": "new"},
+        ]
 
     def test_draft_keeps_last_user_turn_even_if_over_budget(self):
         context = main.Context(max_tokens=1)
@@ -92,22 +99,30 @@ class TestContext:
 
         assert context.items == []
 
-    def test_count_item_tokens_counts_utf8_bytes(self):
-        ascii_item = {"role": "user", "content": "a" * 12}
-        cjk_item = {"role": "user", "content": "字" * 12}
+    def test_draft_counts_utf8_bytes_so_non_latin_text_is_not_undercounted(self):
+        # The same number of characters is about 3x the bytes in CJK as in ASCII,
+        # so only the CJK history goes over the budget.
+        def draft_trimmed(text: str) -> bool:
+            context = main.Context(max_tokens=200)
+            context.items = [
+                {"role": "user", "content": text},
+                {"role": "assistant", "content": "ok"},
+            ]
+            _, trimmed = context.draft("new")
+            return trimmed
 
-        count = main.Context._count_item_tokens
-        assert count(cjk_item) > count(ascii_item)
+        assert not draft_trimmed("a" * 400)
+        assert draft_trimmed("字" * 400)
 
 
 @pytest.mark.parametrize("streaming", [True, False])
 class TestAgentRunTurn:
-    def test_completed_response_is_returned_and_committed(self, make_agent, streaming):
+    def test_completed_response_is_committed(self, make_agent, streaming):
         agent = make_agent(STREAMING=streaming)
 
-        turn = agent.run_turn("hi")
+        trimmed = agent.run_turn("hi")
 
-        assert turn == main.Turn(reply=TEXT, trimmed=False)
+        assert trimmed is False
         assert agent.context.items == [
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": TEXT},
@@ -171,9 +186,9 @@ class TestAgentRunTurn:
         agent = make_agent(STREAMING=streaming, MAX_CONTEXT_TOKENS=1)
         agent.context.items = make_context(2)
 
-        turn = agent.run_turn("hi")
+        trimmed = agent.run_turn("hi")
 
-        assert turn.trimmed
+        assert trimmed is True
         assert fake_server.requests[-1]["input"] == [{"role": "user", "content": "hi"}]
 
 
@@ -216,11 +231,11 @@ class TestRepl:
             agent = main.Agent(make_config())
             prompts: list[str] = []
 
-            def fake_run_turn(prompt: str, on_text=None) -> main.Turn:
+            def fake_run_turn(prompt: str, on_text=None) -> bool:
                 prompts.append(prompt)
                 if turn:
                     turn(prompt, agent.context)
-                return main.Turn(reply="", trimmed=False)
+                return False
 
             monkeypatch.setattr(agent, "run_turn", fake_run_turn)
             run_repl(monkeypatch, agent, inputs)
