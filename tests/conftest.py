@@ -118,7 +118,6 @@ def isolate_config(monkeypatch: pytest.MonkeyPatch) -> None:
         "MAX_CONTEXT_TOKENS",
     ):
         monkeypatch.delenv(name, raising=False)
-    main.get_config.cache_clear()
 
 
 @pytest.fixture
