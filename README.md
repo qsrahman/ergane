@@ -53,11 +53,12 @@ Type a prompt at `>` and press Enter. To quit, use `/exit`, `/quit`, Ctrl-D, or 
 
 | Command | Effect |
 |---|---|
+| `/help` | List the commands |
 | `/reset` | Clear the conversation history and start fresh |
 | `/clear` | Clear the terminal screen; the history is kept |
 | `/exit`, `/quit` | Quit |
 
-Commands are case-insensitive. Pressing Ctrl-C while a response is generating cancels only that turn.
+Commands are case-insensitive. A mistyped command such as `/rest` is reported instead of being sent to the model. Pressing Ctrl-C while a response is generating cancels only that turn.
 
 ## Tests
 

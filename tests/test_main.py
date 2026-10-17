@@ -1,3 +1,4 @@
+import re
 from http.server import ThreadingHTTPServer
 
 import pytest
@@ -99,48 +100,58 @@ class TestContext:
         assert count(cjk_item) > count(ascii_item)
 
 
-def test_config_load_exits_on_missing_api_key(capsys: pytest.CaptureFixture[str]):
-    with pytest.raises(SystemExit) as exc:
-        main.Config.load()
-
-    assert exc.value.code == 1
-    assert "OPENAI_API_KEY" in capsys.readouterr().err
-
-
 @pytest.mark.parametrize("streaming", [True, False])
 class TestAgentRunTurn:
-    def test_completed_response_is_committed_to_history(
-        self, make_agent, capsys, streaming
+    def test_completed_response_is_returned_and_committed(
+        self, make_agent, streaming
     ):
         agent = make_agent(STREAMING=streaming)
 
-        agent.run_turn("hi")
+        turn = agent.run_turn("hi")
 
+        assert turn == main.Turn(reply=TEXT, trimmed=False)
         assert agent.context.items == [
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": TEXT},
         ]
-        assert TEXT in capsys.readouterr().out
+
+    def test_passes_reply_text_to_on_text(self, make_agent, streaming):
+        agent = make_agent(STREAMING=streaming)
+        pieces: list[str] = []
+
+        agent.run_turn("hi", on_text=pieces.append)
+
+        # Streamed deltas arrive one by one; otherwise the whole reply at once.
+        assert pieces == (["Hello", " world"] if streaming else [TEXT])
+
+    def test_does_no_terminal_output(self, make_agent, capsys, streaming):
+        agent = make_agent(STREAMING=streaming)
+
+        agent.run_turn("hi")
+        with pytest.raises(main.TurnError):
+            agent.run_turn("failed")
+
+        assert capsys.readouterr() == ("", "")
 
     @pytest.mark.parametrize(
         ("prompt", "message"),
         [
-            ("incomplete", "[Response incomplete: max_output_tokens]"),
-            ("failed", "[Response failed: server_error: boom]"),
-            ("empty", "[No text in response]"),
+            ("incomplete", "Response incomplete: max_output_tokens"),
+            ("failed", "Response failed: server_error: boom"),
+            ("empty", "No text in response"),
         ],
     )
-    def test_unsuccessful_response_leaves_history_untouched(
-        self, make_agent, capsys, streaming, prompt, message
+    def test_unsuccessful_response_raises_and_leaves_history_untouched(
+        self, make_agent, streaming, prompt, message
     ):
         agent = make_agent(STREAMING=streaming)
         agent.context.items = make_context(1)
         original = list(agent.context.items)
 
-        agent.run_turn(prompt)
+        with pytest.raises(main.TurnError, match=f"^{re.escape(message)}$"):
+            agent.run_turn(prompt)
 
         assert agent.context.items == original
-        assert message in capsys.readouterr().out
 
     def test_sends_full_history_statelessly(self, make_agent, fake_server, streaming):
         agent = make_agent(STREAMING=streaming)
@@ -157,14 +168,31 @@ class TestAgentRunTurn:
             "second",
         ]
 
-    def test_reports_trimmed_context(self, make_agent, fake_server, capsys, streaming):
+    def test_reports_trimmed_context(self, make_agent, fake_server, streaming):
         agent = make_agent(STREAMING=streaming, MAX_CONTEXT_TOKENS=1)
         agent.context.items = make_context(2)
 
-        agent.run_turn("hi")
+        turn = agent.run_turn("hi")
 
-        assert "[Context trimmed: oldest turns dropped]" in capsys.readouterr().out
+        assert turn.trimmed
         assert fake_server.requests[-1]["input"] == [{"role": "user", "content": "hi"}]
+
+
+def run_repl(monkeypatch: pytest.MonkeyPatch, agent: main.Agent, inputs: list) -> None:
+    """Run a Repl over scripted input.
+
+    Each entry is either a line of input or an exception that input() raises.
+    """
+    lines = iter(inputs)
+
+    def fake_input(_prompt: str) -> str:
+        line = next(lines)
+        if isinstance(line, BaseException):
+            raise line
+        return line
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    main.Repl(agent).run()
 
 
 class TestRepl:
@@ -172,30 +200,22 @@ class TestRepl:
     def repl(self, monkeypatch: pytest.MonkeyPatch):
         """Run a Repl with scripted input; returns the prompts sent to the agent.
 
-        Each scripted entry is either a line of input or an exception that
-        input() raises. A callable passed as `turn` is called with each prompt
-        and the agent's context in place of Agent.run_turn.
+        A callable passed as `turn` is called with each prompt and the agent's
+        context in place of Agent.run_turn.
         """
 
         def run(inputs: list, turn=None) -> list[str]:
             agent = main.Agent(make_config())
-            lines = iter(inputs)
             prompts: list[str] = []
 
-            def fake_input(_prompt: str) -> str:
-                line = next(lines)
-                if isinstance(line, BaseException):
-                    raise line
-                return line
-
-            def fake_run_turn(prompt: str) -> None:
+            def fake_run_turn(prompt: str, on_text=None) -> main.Turn:
                 prompts.append(prompt)
                 if turn:
                     turn(prompt, agent.context)
+                return main.Turn(reply="", trimmed=False)
 
-            monkeypatch.setattr("builtins.input", fake_input)
             monkeypatch.setattr(agent, "run_turn", fake_run_turn)
-            main.Repl(agent).run()
+            run_repl(monkeypatch, agent, inputs)
             return prompts
 
         return run
@@ -239,7 +259,9 @@ class TestRepl:
     def test_reset_clears_history(self, repl, capsys):
         sizes: list[int] = []
 
-        prompts = repl(["a", "b", " /Reset ", "c", "/exit"], self.committing_turn(sizes))
+        prompts = repl(
+            ["a", "b", " /Reset ", "c", "/exit"], self.committing_turn(sizes)
+        )
 
         assert prompts == ["a", "b", "c"]
         assert sizes == [0, 2, 0]
@@ -254,6 +276,56 @@ class TestRepl:
         assert sizes == [0, 2]
         assert "\033[2J\033[3J\033[H" in capsys.readouterr().out
 
+    def test_help_lists_every_command(self, repl, capsys):
+        repl(["/help", "/exit"])
+
+        out = capsys.readouterr().out
+        for name in ("/help", "/reset", "/clear", "/exit", "/quit"):
+            assert name in out
+
+    def test_unknown_command_is_not_sent_to_the_agent(self, repl, capsys):
+        assert repl(["/rest", "/exit"]) == []
+        assert "[Unknown command: /rest. Type /help" in capsys.readouterr().out
+
+    def test_slash_prompt_with_spaces_goes_to_the_agent(self, repl):
+        prompt = "/usr/bin is missing"
+
+        assert repl([prompt, "/exit"]) == [prompt]
+
+
+@pytest.mark.parametrize("streaming", [True, False])
+class TestReplRendering:
+    """The Repl against a real Agent and the fake server."""
+
+    def test_prints_the_reply(self, monkeypatch, make_agent, capsys, streaming):
+        run_repl(monkeypatch, make_agent(STREAMING=streaming), ["hi", "/exit"])
+
+        assert f"\n{TEXT}\n\nBye." in capsys.readouterr().out
+
+    @pytest.mark.parametrize(
+        ("prompt", "notice"),
+        [
+            ("incomplete", "[Response incomplete: max_output_tokens]"),
+            ("failed", "[Response failed: server_error: boom]"),
+            ("empty", "[No text in response]"),
+        ],
+    )
+    def test_reports_unsuccessful_responses_on_their_own_line(
+        self, monkeypatch, make_agent, capsys, streaming, prompt, notice
+    ):
+        run_repl(monkeypatch, make_agent(STREAMING=streaming), [prompt, "/exit"])
+
+        assert f"\n{notice}\n" in capsys.readouterr().out
+
+    def test_reports_trimmed_context(self, monkeypatch, make_agent, capsys, streaming):
+        agent = make_agent(STREAMING=streaming, MAX_CONTEXT_TOKENS=1)
+        agent.context.items = make_context(2)
+
+        run_repl(monkeypatch, agent, ["hi", "/exit"])
+
+        out = capsys.readouterr().out
+        assert f"{TEXT}\n[Context trimmed: oldest turns dropped]\n" in out
+
 
 def test_main_wires_config_agent_and_repl(monkeypatch: pytest.MonkeyPatch, capsys):
     monkeypatch.setenv("OPENAI_API_KEY", "test")
@@ -265,3 +337,11 @@ def test_main_wires_config_agent_and_repl(monkeypatch: pytest.MonkeyPatch, capsy
     out = capsys.readouterr().out
     assert "model: wired-model" in out
     assert out.endswith("Bye.\n")
+
+
+def test_main_exits_on_invalid_config(capsys: pytest.CaptureFixture[str]):
+    with pytest.raises(SystemExit) as exc:
+        main.main()
+
+    assert exc.value.code == 1
+    assert "OPENAI_API_KEY" in capsys.readouterr().err

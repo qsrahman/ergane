@@ -1,9 +1,11 @@
 import json
 import platform
 import sys
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Self
+from typing import TypedDict
 
 from openai import OpenAI
 from openai.types.responses import Response, ResponseInputParam
@@ -53,25 +55,6 @@ class Config(BaseSettings):
         gt=0,
         validation_alias="MAX_CONTEXT_TOKENS",
     )
-
-    @classmethod
-    def load(cls) -> Self:
-        """Load and validate the configuration from the environment and .env.
-
-        Returns:
-            The validated Config object.
-
-        Raises:
-            SystemExit: If the configuration is invalid.
-        """
-        try:
-            return cls()  # pyright: ignore[reportCallIssue]
-        except ValidationError as exc:
-            print("Configuration error:", file=sys.stderr)
-            for error in exc.errors():
-                field = ".".join(str(part) for part in error["loc"])
-                print(f"  - {field}: {error['msg']}", file=sys.stderr)
-            raise SystemExit(1) from None
 
 
 class Context:
@@ -159,8 +142,32 @@ class Context:
         return len(json.dumps(item, ensure_ascii=False).encode()) // 4 + 1
 
 
+class TurnError(Exception):
+    """A response that did not complete with text; the history is unchanged."""
+
+
+@dataclass(frozen=True)
+class Turn:
+    """The outcome of a successful turn."""
+
+    reply: str
+    trimmed: bool  # whether old turns were dropped to fit the token budget
+
+
+class Request(TypedDict):
+    """Arguments shared by streaming and non-streaming Responses API calls.
+
+    Typed so that pyright checks them when they are unpacked into either call.
+    """
+
+    store: bool
+    input: ResponseInputParam
+    model: str
+    instructions: str
+
+
 class Agent:
-    """Sends conversation turns to the model and prints the replies."""
+    """Sends conversation turns to the model. Does no terminal I/O of its own."""
 
     def __init__(self, config: Config, client: OpenAI | None = None) -> None:
         """Create an agent with an empty conversation.
@@ -176,55 +183,68 @@ class Agent:
         )
         self.context = Context(config.max_context_tokens)
 
-    def run_turn(self, prompt: str) -> None:
-        """Send one user message and print the reply.
+    def run_turn(
+        self,
+        prompt: str,
+        on_text: Callable[[str], None] = lambda text: None,
+    ) -> Turn:
+        """Send one user message and return the reply.
 
         The turn is added to the conversation only if the response completes
         with text.
 
         Args:
             prompt: The user's input prompt.
+            on_text: Called with each piece of reply text as it arrives when
+                streaming, or once with the whole reply otherwise.
+
+        Returns:
+            The reply and whether old turns were trimmed.
+
+        Raises:
+            TurnError: If the response is incomplete, failed or has no text.
         """
         draft, trimmed = self.context.draft(prompt)
-        if trimmed:
-            print("[Context trimmed: oldest turns dropped]")
-        print()
-
-        request = {
-            "store": False,
-            "input": draft,
-            "model": self.config.model,
-            "instructions": self._instructions(),
-        }
+        request = Request(
+            store=False,
+            input=draft,
+            model=self.config.model,
+            instructions=self._instructions(),
+        )
         if self.config.streaming:
-            response = self._stream(request)
+            response = self._stream(request, on_text)
         else:
             response = self.client.responses.create(**request)
 
-        if response.status != "completed":
-            if response.status == "incomplete":
-                reason = (
-                    response.incomplete_details.reason
-                    if response.incomplete_details
-                    else "unknown"
-                )
-                print(f"[Response incomplete: {reason}]")
-            elif response.status == "failed":
-                error = response.error
-                message = f"{error.code}: {error.message}" if error else "unknown error"
-                print(f"[Response failed: {message}]")
-            else:
-                print(f"[Response not completed: {response.status}]")
-            return
-
-        # Committing a turn without a reply would leave two user messages in a row.
-        if not response.output_text:
-            print("[No text in response]")
-            return
-
+        self._check(response)
         self.context.commit(draft, response.output_text)
         if not self.config.streaming:
-            print(response.output_text)
+            on_text(response.output_text)
+        return Turn(response.output_text, trimmed)
+
+    @staticmethod
+    def _check(response: Response) -> None:
+        """Make sure a response completed with text.
+
+        Args:
+            response: The final response of a turn.
+
+        Raises:
+            TurnError: If the response is incomplete, failed or has no text.
+        """
+        if response.status == "incomplete":
+            details = response.incomplete_details
+            reason = details.reason if details else "unknown"
+            raise TurnError(f"Response incomplete: {reason}")
+        if response.status == "failed":
+            error = response.error
+            message = f"{error.code}: {error.message}" if error else "unknown error"
+            raise TurnError(f"Response failed: {message}")
+        if response.status != "completed":
+            raise TurnError(f"Response not completed: {response.status}")
+        # Committing a turn without a reply would leave two user messages in a row.
+        if not response.output_text:
+            raise TurnError("No text in response")
 
     def _instructions(self) -> str:
         """Build the system instructions, including details of the environment."""
@@ -235,11 +255,12 @@ class Agent:
             f"- Current date: {date.today().isoformat()}\n"
         )
 
-    def _stream(self, request: dict) -> Response:
-        """Stream a response, printing text deltas as they arrive.
+    def _stream(self, request: Request, on_text: Callable[[str], None]) -> Response:
+        """Stream a response, passing text deltas to on_text as they arrive.
 
         Args:
             request: Keyword arguments for the Responses API.
+            on_text: Called with each text delta.
 
         Returns:
             The final response, whatever its status.
@@ -251,7 +272,7 @@ class Agent:
         with self.client.responses.stream(**request) as stream:
             for event in stream:
                 if event.type == "response.output_text.delta":
-                    print(event.delta, end="", flush=True)
+                    on_text(event.delta)
                 # Take the final response from the terminal event: get_final_response()
                 # raises unless the stream ends with response.completed.
                 elif (
@@ -260,7 +281,6 @@ class Agent:
                     or event.type == "response.failed"
                 ):
                     response = event.response
-        print()
         if response is None:
             raise RuntimeError("Stream ended without a final response")
         return response
@@ -277,19 +297,19 @@ class Repl:
         """
         self.agent = agent
         self.running = False
-        self.commands = {
-            "/reset": self.reset,
-            "/clear": self.clear,
-            "/exit": self.stop,
-            "/quit": self.stop,
+        # Each command maps to its handler and the description shown by /help.
+        self.commands: dict[str, tuple[Callable[[], None], str]] = {
+            "/help": (self.help, "list commands"),
+            "/reset": (self.reset, "clear the conversation history"),
+            "/clear": (self.clear, "clear the screen; the history is kept"),
+            "/exit": (self.stop, "quit"),
+            "/quit": (self.stop, "quit"),
         }
 
     def run(self) -> None:
         """Read and handle prompts until the user quits."""
         print(f"AI coding agent | model: {self.agent.config.model}")
-        print(
-            "Commands: /reset (clear history), /clear (clear screen), /exit or /quit.\n"
-        )
+        print("Type /help to list commands.\n")
 
         self.running = True
         while self.running:
@@ -302,23 +322,55 @@ class Repl:
 
             command = self.commands.get(prompt.lower())
             if command:
-                command()
+                handler, _ = command
+                handler()
+            # A single word starting with "/" is a mistyped command, not a
+            # prompt; longer input such as "/usr/bin is missing" still goes
+            # to the model.
+            elif prompt.startswith("/") and " " not in prompt:
+                print(f"[Unknown command: {prompt}. Type /help to list commands.]\n")
             else:
                 self.ask(prompt)
         print("Bye.")
 
     def ask(self, prompt: str) -> None:
-        """Run one turn, reporting errors without leaving the loop.
+        """Run one turn, printing the reply as it arrives and reporting
+        problems without leaving the loop.
 
         Args:
             prompt: The user's input prompt.
         """
+        print()
+        wrote_text = False
+
+        def write(text: str) -> None:
+            nonlocal wrote_text
+            wrote_text = True
+            print(text, end="", flush=True)
+
+        notice = None
         try:
-            self.agent.run_turn(prompt)
+            turn = self.agent.run_turn(prompt, on_text=write)
+            if turn.trimmed:
+                notice = "[Context trimmed: oldest turns dropped]"
+        except TurnError as exc:
+            notice = f"[{exc}]"
         except KeyboardInterrupt:
-            print()  # end the partially streamed line
+            pass
         except Exception as exc:  # noqa: BLE001
-            print(f"Agent error: {type(exc).__name__}: {exc}")
+            notice = f"Agent error: {type(exc).__name__}: {exc}"
+
+        if wrote_text:
+            print()  # end the reply line
+        if notice:
+            print(notice)
+        print()
+
+    def help(self) -> None:
+        """List the available commands."""
+        width = max(len(name) for name in self.commands)
+        for name, (_, description) in self.commands.items():
+            print(f"  {name:<{width}}  {description}")
         print()
 
     def reset(self) -> None:
@@ -337,8 +389,21 @@ class Repl:
 
 
 def main() -> None:
-    """Entry point for the AI coding agent CLI."""
-    Repl(Agent(Config.load())).run()
+    """Entry point for the AI coding agent CLI.
+
+    Raises:
+        SystemExit: If the configuration is invalid.
+    """
+    try:
+        config = Config()  # pyright: ignore[reportCallIssue]
+    except ValidationError as exc:
+        print("Configuration error:", file=sys.stderr)
+        for error in exc.errors():
+            field = ".".join(str(part) for part in error["loc"])
+            print(f"  - {field}: {error['msg']}", file=sys.stderr)
+        raise SystemExit(1) from None
+
+    Repl(Agent(config)).run()
 
 
 if __name__ == "__main__":
