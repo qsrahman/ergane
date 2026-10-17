@@ -4,7 +4,7 @@ from http.server import ThreadingHTTPServer
 
 import pytest
 
-import main
+from muagent import main
 from fake_api import FakeResponsesHandler
 
 

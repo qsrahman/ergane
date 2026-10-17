@@ -3,7 +3,6 @@ import platform
 import sys
 from collections.abc import Callable
 from datetime import date
-from pathlib import Path
 
 from openai import OpenAI
 from openai.types.responses import Response, ResponseInputParam
@@ -29,7 +28,8 @@ class Config(BaseSettings):
 
     model_config = SettingsConfigDict(
         extra="ignore",
-        env_file=Path(__file__).parent / ".env",
+        # Relative to the current directory, so it works for installed packages too.
+        env_file=".env",
     )
     model: str = Field(
         min_length=1,

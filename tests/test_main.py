@@ -5,7 +5,7 @@ import pytest
 from openai import OpenAI
 from openai.types.responses import ResponseInputParam
 
-import main
+from muagent import main
 from fake_api import REFUSAL, TEXT
 
 

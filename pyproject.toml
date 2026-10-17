@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Minimal terminal chat agent built on the OpenAI Responses API"
 readme = "README.md"
 requires-python = ">=3.14"
+authors = [
+    { name = "Qazi Sami ur Rahman", email = "qsrahmans@gmail.com" }
+]
 dependencies = [
     "openai>=3.31.0",
     "pydantic>=2.14.1",
@@ -11,14 +14,11 @@ dependencies = [
 ]
 
 [project.scripts]
-muagent = "main:main"
+muagent = "muagent.main:main"
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-only-include = ["main.py"]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
@@ -29,8 +29,3 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-
-[tool.ruff]
-target-version = "py313"
-# tests/ holds first-party modules (fake_api) for import sorting.
-src = [".", "tests"]

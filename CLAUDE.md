@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`muagent` is a minimal interactive terminal chat agent built on the OpenAI **Responses API**. The whole program lives in `main.py`.
+`muagent` is a minimal interactive terminal chat agent built on the OpenAI **Responses API**. It's a `src`-layout package: the whole program lives in `src/muagent/main.py`.
 
 ## Commands
 
@@ -12,11 +12,11 @@ Uses `uv` with Python 3.14 (`.python-version`, `requires-python >= 3.14`).
 
 ```bash
 uv sync              # install dependencies (including pytest) into .venv
-uv run muagent       # start the REPL; same as `uv run main.py`
+uv run muagent       # start the REPL; same as `uv run python -m muagent.main`
 uv run pytest        # run the tests
 uv run pytest tests/test_main.py::TestRepl::test_strips_input_and_skips_blank_lines  # single test
 uv run ruff check . && uv run ruff format --check .   # lint and format check
-uvx pyright --pythonpath .venv/bin/python main.py tests   # type check (pyright isn't a dependency)
+uvx pyright --pythonpath .venv/bin/python src tests   # type check (pyright isn't a dependency)
 ```
 
 ## Tests
@@ -25,11 +25,11 @@ uvx pyright --pythonpath .venv/bin/python main.py tests   # type check (pyright 
 - The autouse `isolate_config` fixture keeps `.env` and the config environment variables out of `Config`. Note that `Config.model_validate(...)` still reads `.env`, so don't remove the fixture.
 - Tests build objects directly instead of monkeypatching. `make_config(...)` builds a `Config`, and the `make_agent` fixture builds an `Agent` wired to the fake server. `Agent` tests check return values and `TurnError`, not printed output. `TestRepl` replaces `agent.run_turn` on a single instance, and `TestReplRendering` drives a real `Agent` through `run_repl()`.
 
-The `muagent` script comes from `[project.scripts]` and is built with hatchling, with only `main.py` in the wheel. `uv sync` installs it in editable mode. A non-editable install, such as `uv tool install`, would look for `.env` in site-packages, because `Config` finds `.env` relative to `main.py`.
+The package is built with `uv_build`, which expects `src/muagent/__init__.py`. The `muagent` script is `muagent.main:main` in `[project.scripts]`, and `uv sync` installs the package in editable mode. Tests import it as `from muagent import main`.
 
 ## Configuration
 
-Settings come from environment variables or `.env` next to `main.py`, loaded by `Config` (pydantic-settings):
+Settings come from environment variables or a `.env` file in the current working directory, loaded by `Config` (pydantic-settings):
 
 | Variable | Default | Notes |
 |---|---|---|

@@ -20,7 +20,7 @@ A minimal terminal chat agent built on the OpenAI [Responses API](https://platfo
 uv sync
 ```
 
-Create a `.env` file in the project root. It is git-ignored.
+Create a `.env` file in the directory you run `muagent` from, usually the project root. It is git-ignored.
 
 ```dotenv
 OPENAI_API_KEY=sk-...
@@ -47,7 +47,7 @@ Environment variables take precedence over `.env`.
 uv run muagent
 ```
 
-`uv run main.py` also works.
+`uv run python -m muagent.main` also works.
 
 Type a prompt at `>` and press Enter. To quit, use `/exit`, `/quit`, Ctrl-D, or Ctrl-C at the prompt.
 
