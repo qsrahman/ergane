@@ -303,11 +303,11 @@ class Repl:
         self.running = False
         # Each command maps to its handler and the description shown by /help.
         self.commands: dict[str, tuple[Callable[[], None], str]] = {
-            "/help": (self.help, "list commands"),
-            "/reset": (self.reset, "clear the conversation history"),
-            "/clear": (self.clear, "clear the screen; the history is kept"),
+            "/clear": (self.clear, "clear the screen"),
             "/exit": (self.stop, "quit"),
+            "/help": (self.help, "list commands"),
             "/quit": (self.stop, "quit"),
+            "/reset": (self.reset, "clear the conversation history"),
         }
 
     def run(self) -> None:
