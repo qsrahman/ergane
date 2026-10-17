@@ -189,7 +189,7 @@ class Agent:
             The reply and whether old turns were trimmed.
 
         Raises:
-            TurnError: If the response is incomplete, failed or has no text.
+            TurnError: If the response is incomplete, failed, refused or has no text.
         """
         draft, trimmed = self.context.draft(prompt)
         if self.config.streaming:
@@ -216,7 +216,7 @@ class Agent:
             response: The final response of a turn.
 
         Raises:
-            TurnError: If the response is incomplete, failed or has no text.
+            TurnError: If the response is incomplete, failed, refused or has no text.
         """
         if response.status == "incomplete":
             details = response.incomplete_details
@@ -230,6 +230,15 @@ class Agent:
             raise TurnError(f"Response not completed: {response.status}")
         # Committing a turn without a reply would leave two user messages in a row.
         if not response.output_text:
+            refusal = "".join(
+                part.refusal
+                for item in response.output
+                if item.type == "message"
+                for part in item.content
+                if part.type == "refusal"
+            )
+            if refusal:
+                raise TurnError(f"Refused: {refusal}")
             raise TurnError("No text in response")
 
     def _instructions(self) -> str:

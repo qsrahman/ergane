@@ -6,7 +6,7 @@ from openai import OpenAI
 from openai.types.responses import ResponseInputParam
 
 import main
-from fake_api import TEXT
+from fake_api import REFUSAL, TEXT
 
 
 def make_context(turns: int) -> ResponseInputParam:
@@ -137,6 +137,7 @@ class TestAgentRunTurn:
             ("incomplete", "Response incomplete: max_output_tokens"),
             ("failed", "Response failed: server_error: boom"),
             ("empty", "No text in response"),
+            ("refusal", f"Refused: {REFUSAL}"),
         ],
     )
     def test_unsuccessful_response_raises_and_leaves_history_untouched(
@@ -316,6 +317,7 @@ class TestReplRendering:
             ("incomplete", "[Response incomplete: max_output_tokens]"),
             ("failed", "[Response failed: server_error: boom]"),
             ("empty", "[No text in response]"),
+            ("refusal", f"[Refused: {REFUSAL}]"),
         ],
     )
     def test_reports_unsuccessful_responses_on_their_own_line(

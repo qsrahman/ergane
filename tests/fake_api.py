@@ -11,6 +11,11 @@ MESSAGE = {
     "status": "completed",
     "content": [{"type": "output_text", "text": TEXT, "annotations": []}],
 }
+REFUSAL = "I can't help with that."
+REFUSAL_MESSAGE = {
+    **MESSAGE,
+    "content": [{"type": "refusal", "refusal": REFUSAL}],
+}
 
 
 def make_response(status: str, output: list | None = None, **extra) -> dict:
@@ -38,6 +43,8 @@ def final_event(scenario: str) -> tuple[str, dict]:
             [MESSAGE],
             incomplete_details={"reason": "max_output_tokens"},
         )
+    if scenario == "refusal":
+        return "response.completed", make_response("completed", [REFUSAL_MESSAGE])
     if scenario == "empty":
         return "response.completed", make_response("completed")
     if scenario == "failed":
@@ -52,8 +59,9 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     """Minimal fake of POST /v1/responses.
 
     The last input item's content selects the scenario: "incomplete",
-    "failed", "empty" (completed with no output), "truncated" (a stream that
-    ends without a terminal event), or anything else for a completed response.
+    "failed", "empty" (completed with no output), "refusal", "truncated" (a
+    stream that ends without a terminal event), or anything else for a
+    completed response.
     """
 
     def log_message(self, format, *args):
@@ -88,17 +96,23 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
         if body["input"][-1]["content"] == "truncated":
             return
         if response["output"]:
+            message = response["output"][0]
+            part = message["content"][0]
             ids = {"item_id": "msg_1", "output_index": 0, "content_index": 0}
-            part = MESSAGE["content"][0]
             send(
                 "response.output_item.added",
                 output_index=0,
-                item={**MESSAGE, "status": "in_progress", "content": []},
+                item={**message, "status": "in_progress", "content": []},
             )
-            send("response.content_part.added", **ids, part={**part, "text": ""})
-            for delta in ("Hello", " world"):
-                send("response.output_text.delta", **ids, delta=delta, logprobs=[])
-            send("response.output_text.done", **ids, text=TEXT, logprobs=[])
+            if part["type"] == "refusal":
+                send("response.content_part.added", **ids, part={**part, "refusal": ""})
+                send("response.refusal.delta", **ids, delta=REFUSAL)
+                send("response.refusal.done", **ids, refusal=REFUSAL)
+            else:
+                send("response.content_part.added", **ids, part={**part, "text": ""})
+                for delta in ("Hello", " world"):
+                    send("response.output_text.delta", **ids, delta=delta, logprobs=[])
+                send("response.output_text.done", **ids, text=TEXT, logprobs=[])
             send("response.content_part.done", **ids, part=part)
-            send("response.output_item.done", output_index=0, item=MESSAGE)
+            send("response.output_item.done", output_index=0, item=message)
         send(event_type, response=response)

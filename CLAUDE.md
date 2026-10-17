@@ -21,7 +21,7 @@ uvx pyright --pythonpath .venv/bin/python main.py tests   # type check (pyright 
 
 ## Tests
 
-- `tests/fake_api.py` is a fake Responses API, and the `fake_server` fixture in `tests/conftest.py` runs it on a local port, using the real SDK client and streaming parser. The last input message picks the outcome: `"incomplete"`, `"failed"`, `"empty"` (completed with no output), `"truncated"` (a stream with no terminal event), or anything else for a completed `"Hello world"` reply. Request bodies are recorded in `fake_server.requests`.
+- `tests/fake_api.py` is a fake Responses API, and the `fake_server` fixture in `tests/conftest.py` runs it on a local port, using the real SDK client and streaming parser. The last input message picks the outcome: `"incomplete"`, `"failed"`, `"empty"` (completed with no output), `"refusal"`, `"truncated"` (a stream with no terminal event), or anything else for a completed `"Hello world"` reply. Request bodies are recorded in `fake_server.requests`.
 - The autouse `isolate_config` fixture keeps `.env` and the config environment variables out of `Config`. Note that `Config.model_validate(...)` still reads `.env`, so don't remove the fixture.
 - Tests build objects directly instead of monkeypatching. `make_config(...)` builds a `Config`, and the `make_agent` fixture builds an `Agent` wired to the fake server. `Agent` tests check return values and `TurnError`, not printed output. `TestRepl` replaces `agent.run_turn` on a single instance, and `TestReplRendering` drives a real `Agent` through `run_repl()`.
 
