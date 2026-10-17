@@ -52,8 +52,8 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     """Minimal fake of POST /v1/responses.
 
     The last input item's content selects the scenario: "incomplete",
-    "failed", "empty" (completed with no output), or anything else for a
-    completed response.
+    "failed", "empty" (completed with no output), "truncated" (a stream that
+    ends without a terminal event), or anything else for a completed response.
     """
 
     def log_message(self, format, *args):
@@ -85,6 +85,8 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
             self.wfile.write(f"event: {type_}\ndata: {json.dumps(event)}\n\n".encode())
 
         send("response.created", response=make_response("in_progress"))
+        if body["input"][-1]["content"] == "truncated":
+            return
         if response["output"]:
             ids = {"item_id": "msg_1", "output_index": 0, "content_index": 0}
             part = MESSAGE["content"][0]

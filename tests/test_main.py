@@ -176,6 +176,15 @@ class TestAgentRunTurn:
         assert fake_server.requests[-1]["input"] == [{"role": "user", "content": "hi"}]
 
 
+def test_stream_without_final_response_raises(make_agent):
+    agent = make_agent(STREAMING=True)
+
+    with pytest.raises(main.TurnError, match="^Stream ended without a final response$"):
+        agent.run_turn("truncated")
+
+    assert agent.context.items == []
+
+
 def run_repl(monkeypatch: pytest.MonkeyPatch, agent: main.Agent, inputs: list) -> None:
     """Run a Repl over scripted input.
 

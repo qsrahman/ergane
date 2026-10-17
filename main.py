@@ -5,7 +5,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import TypedDict
 
 from openai import OpenAI
 from openai.types.responses import Response, ResponseInputParam
@@ -154,18 +153,6 @@ class Turn:
     trimmed: bool  # whether old turns were dropped to fit the token budget
 
 
-class Request(TypedDict):
-    """Arguments shared by streaming and non-streaming Responses API calls.
-
-    Typed so that pyright checks them when they are unpacked into either call.
-    """
-
-    store: bool
-    input: ResponseInputParam
-    model: str
-    instructions: str
-
-
 class Agent:
     """Sends conversation turns to the model. Does no terminal I/O of its own."""
 
@@ -205,16 +192,15 @@ class Agent:
             TurnError: If the response is incomplete, failed or has no text.
         """
         draft, trimmed = self.context.draft(prompt)
-        request = Request(
-            store=False,
-            input=draft,
-            model=self.config.model,
-            instructions=self._instructions(),
-        )
         if self.config.streaming:
-            response = self._stream(request, on_text)
+            response = self._stream(draft, on_text)
         else:
-            response = self.client.responses.create(**request)
+            response = self.client.responses.create(
+                store=False,
+                input=draft,
+                model=self.config.model,
+                instructions=self._instructions(),
+            )
 
         self._check(response)
         self.context.commit(draft, response.output_text)
@@ -255,21 +241,30 @@ class Agent:
             f"- Current date: {date.today().isoformat()}\n"
         )
 
-    def _stream(self, request: Request, on_text: Callable[[str], None]) -> Response:
+    def _stream(
+        self,
+        draft: ResponseInputParam,
+        on_text: Callable[[str], None],
+    ) -> Response:
         """Stream a response, passing text deltas to on_text as they arrive.
 
         Args:
-            request: Keyword arguments for the Responses API.
+            draft: The input for this turn.
             on_text: Called with each text delta.
 
         Returns:
             The final response, whatever its status.
 
         Raises:
-            RuntimeError: If the stream ends without a final response.
+            TurnError: If the stream ends without a final response.
         """
         response = None
-        with self.client.responses.stream(**request) as stream:
+        with self.client.responses.stream(
+            store=False,
+            input=draft,
+            model=self.config.model,
+            instructions=self._instructions(),
+        ) as stream:
             for event in stream:
                 if event.type == "response.output_text.delta":
                     on_text(event.delta)
@@ -282,7 +277,7 @@ class Agent:
                 ):
                     response = event.response
         if response is None:
-            raise RuntimeError("Stream ended without a final response")
+            raise TurnError("Stream ended without a final response")
         return response
 
 
