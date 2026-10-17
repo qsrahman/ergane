@@ -356,7 +356,7 @@ class Repl:
         except TurnError as exc:
             notice = f"[{exc}]"
         except KeyboardInterrupt:
-            pass
+            notice = "[Cancelled]"
         except Exception as exc:  # noqa: BLE001
             notice = f"Agent error: {type(exc).__name__}: {exc}"
 

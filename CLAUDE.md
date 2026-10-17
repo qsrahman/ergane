@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`muagent` is a minimal interactive terminal chat agent built on the OpenAI **Responses API**. The whole program lives in `main.py`. No linter or formatter is configured.
+`muagent` is a minimal interactive terminal chat agent built on the OpenAI **Responses API**. The whole program lives in `main.py`.
 
 ## Commands
 
@@ -15,11 +15,13 @@ uv sync              # install dependencies (including pytest) into .venv
 uv run muagent       # start the REPL; same as `uv run main.py`
 uv run pytest        # run the tests
 uv run pytest tests/test_main.py::TestRepl::test_strips_input_and_skips_blank_lines  # single test
+uv run ruff check . && uv run ruff format --check .   # lint and format check
+uvx pyright --pythonpath .venv/bin/python main.py tests   # type check (pyright isn't a dependency)
 ```
 
 ## Tests
 
-- `tests/conftest.py` runs a fake Responses API (`fake_server` fixture) on a local port, using the real SDK client and streaming parser. The last input message picks the outcome: `"incomplete"`, `"failed"`, `"empty"` (completed with no output), or anything else for a completed `"Hello world"` reply. Request bodies are recorded in `fake_server.requests`.
+- `tests/fake_api.py` is a fake Responses API, and the `fake_server` fixture in `tests/conftest.py` runs it on a local port, using the real SDK client and streaming parser. The last input message picks the outcome: `"incomplete"`, `"failed"`, `"empty"` (completed with no output), or anything else for a completed `"Hello world"` reply. Request bodies are recorded in `fake_server.requests`.
 - The autouse `isolate_config` fixture keeps `.env` and the config environment variables out of `Config`. Note that `Config.model_validate(...)` still reads `.env`, so don't remove the fixture.
 - Tests build objects directly instead of monkeypatching. `make_config(...)` builds a `Config`, and the `make_agent` fixture builds an `Agent` wired to the fake server. `Agent` tests check return values and `TurnError`, not printed output. `TestRepl` replaces `agent.run_turn` on a single instance, and `TestReplRendering` drives a real `Agent` through `run_repl()`.
 
@@ -51,6 +53,8 @@ Settings come from environment variables or `.env` next to `main.py`, loaded by 
 - **`Repl`** owns all terminal I/O. `commands` maps each slash command to `(handler, description)`, matched case-insensitively, and `/help` lists them from that dict. To add a command, add one entry. A single word starting with `/` that isn't a command prints "Unknown command" instead of reaching the model. Anything else goes to `ask()`, which prints the streamed reply, then any `TurnError`, `Agent error: ...` or trim notice on its own line. Ctrl-C cancels just that turn, and the loop continues.
 
 ## Conventions
+
+- ruff's `target-version = "py313"` is deliberate, even though `requires-python` is 3.14. With a 3.14 target, `ruff format` strips the parentheses from `except (A, B):`, which is the PEP 758 style; this code keeps them.
 
 - Google-style docstrings (`Args:` / `Returns:` / `Raises:`) on functions.
 - Output is a plain terminal: the system prompt forbids LaTeX in favor of Unicode math. Keep that constraint if editing the prompt.

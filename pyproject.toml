@@ -23,6 +23,7 @@ only-include = ["main.py"]
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "ruff>=0.17.1",
 ]
 
 [tool.pytest.ini_options]
@@ -31,3 +32,5 @@ testpaths = ["tests"]
 
 [tool.ruff]
 target-version = "py313"
+# tests/ holds first-party modules (fake_api) for import sorting.
+src = [".", "tests"]

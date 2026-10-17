@@ -6,7 +6,7 @@ from openai import OpenAI
 from openai.types.responses import ResponseInputParam
 
 import main
-from conftest import TEXT
+from fake_api import TEXT
 
 
 def make_context(turns: int) -> ResponseInputParam:
@@ -102,9 +102,7 @@ class TestContext:
 
 @pytest.mark.parametrize("streaming", [True, False])
 class TestAgentRunTurn:
-    def test_completed_response_is_returned_and_committed(
-        self, make_agent, streaming
-    ):
+    def test_completed_response_is_returned_and_committed(self, make_agent, streaming):
         agent = make_agent(STREAMING=streaming)
 
         turn = agent.run_turn("hi")
@@ -230,12 +228,13 @@ class TestRepl:
     def test_strips_input_and_skips_blank_lines(self, repl):
         assert repl(["", "   ", "  hi  ", "/exit"]) == ["hi"]
 
-    def test_ctrl_c_cancels_only_the_current_turn(self, repl):
+    def test_ctrl_c_cancels_only_the_current_turn(self, repl, capsys):
         def turn(prompt: str, _context) -> None:
             if prompt == "slow":
                 raise KeyboardInterrupt
 
         assert repl(["slow", "next", "/exit"], turn) == ["slow", "next"]
+        assert "[Cancelled]" in capsys.readouterr().out
 
     def test_turn_errors_are_reported_and_loop_continues(self, repl, capsys):
         def turn(prompt: str, _context) -> None:
