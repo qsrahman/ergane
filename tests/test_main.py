@@ -291,14 +291,20 @@ class TestRepl:
         assert sizes == [0, 2, 0]
         assert "[History reset]" in capsys.readouterr().out
 
-    def test_clear_clears_screen_and_keeps_history(self, repl, capsys):
+    @pytest.mark.parametrize("is_terminal", [True, False])
+    def test_clear_clears_screen_only_on_a_terminal_and_keeps_history(
+        self, repl, capsys, monkeypatch, is_terminal
+    ):
+        # capsys replaces stdout with a capture object, which is never a terminal.
+        monkeypatch.setattr(main.sys.stdout, "isatty", lambda: is_terminal)
         sizes: list[int] = []
 
         prompts = repl(["a", "/clear", "b", "/exit"], self.committing_turn(sizes))
 
         assert prompts == ["a", "b"]
         assert sizes == [0, 2]
-        assert "\033[2J\033[3J\033[H" in capsys.readouterr().out
+        printed_codes = "\033[2J\033[3J\033[H" in capsys.readouterr().out
+        assert printed_codes is is_terminal
 
     def test_help_lists_every_command(self, repl, capsys):
         repl(["/help", "/exit"])

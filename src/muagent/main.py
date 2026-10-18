@@ -18,7 +18,7 @@ SYSTEM_PROMPT = """
 You are an expert, fed up and sassy AI assistant who hates answering questions.
 Operating rules:
 - Be concise and direct.
-- Write math in Unicode (∑ ∫ √ π α β θ ± × ÷ ≤ ≥ ≈ ∈ ∞, x² x₁, a/b for fractions). 
+- Write math in Unicode (∑ ∫ √ π α β θ ± × ÷ ≤ ≥ ≈ ∈ ∞, x² x₁, a/b for fractions).
 - NEVER use LaTeX. This terminal doesn't render `$...$`, `\frac{}{}`, or other LaTeX/KaTeX syntax; it shows literal backslashes and dollar signs instead.
 """
 
@@ -44,14 +44,14 @@ class Config(BaseSettings):
         default=None,
         validation_alias="OPENAI_BASE_URL",
     )
-    streaming: bool = Field(
-        default=True,
-        validation_alias="STREAMING",
-    )
     max_context_tokens: int = Field(
         default=64 * 1024,
         gt=0,
         validation_alias="MAX_CONTEXT_TOKENS",
+    )
+    streaming: bool = Field(
+        default=True,
+        validation_alias="STREAMING",
     )
 
 
@@ -160,11 +160,32 @@ class Agent:
             Whether old turns were dropped to fit the token budget.
 
         Raises:
-            TurnError: If the response is incomplete, failed, refused or has no text.
+            TurnError: If the response is incomplete, failed, refused or has no
+                text, or if a stream ends without a final response.
         """
         draft, trimmed = self.context.draft(prompt)
         if self.config.streaming:
-            response = self._stream(draft, on_text)
+            response = None
+            with self.client.responses.stream(
+                store=False,
+                input=draft,
+                model=self.config.model,
+                instructions=self._instructions(),
+            ) as stream:
+                for event in stream:
+                    if event.type == "response.output_text.delta":
+                        on_text(event.delta)
+                    # Take the final response from the terminal event:
+                    # get_final_response() raises unless the stream ends with
+                    # response.completed.
+                    elif (
+                        event.type == "response.completed"
+                        or event.type == "response.incomplete"
+                        or event.type == "response.failed"
+                    ):
+                        response = event.response
+            if response is None:
+                raise TurnError("Stream ended without a final response")
         else:
             response = self.client.responses.create(
                 store=False,
@@ -221,45 +242,6 @@ class Agent:
             f"- Current date: {date.today().isoformat()}\n"
         )
 
-    def _stream(
-        self,
-        draft: ResponseInputParam,
-        on_text: Callable[[str], None],
-    ) -> Response:
-        """Stream a response, passing text deltas to on_text as they arrive.
-
-        Args:
-            draft: The input for this turn.
-            on_text: Called with each text delta.
-
-        Returns:
-            The final response, whatever its status.
-
-        Raises:
-            TurnError: If the stream ends without a final response.
-        """
-        response = None
-        with self.client.responses.stream(
-            store=False,
-            input=draft,
-            model=self.config.model,
-            instructions=self._instructions(),
-        ) as stream:
-            for event in stream:
-                if event.type == "response.output_text.delta":
-                    on_text(event.delta)
-                # Take the final response from the terminal event: get_final_response()
-                # raises unless the stream ends with response.completed.
-                elif (
-                    event.type == "response.completed"
-                    or event.type == "response.incomplete"
-                    or event.type == "response.failed"
-                ):
-                    response = event.response
-        if response is None:
-            raise TurnError("Stream ended without a final response")
-        return response
-
 
 class Repl:
     """Interactive terminal loop: reads prompts, runs commands and turns."""
@@ -290,7 +272,7 @@ class Repl:
         while self.running:
             try:
                 prompt = input("> ").strip()
-            except (KeyboardInterrupt, EOFError):
+            except KeyboardInterrupt, EOFError:
                 break
             if not prompt:
                 continue
@@ -354,8 +336,10 @@ class Repl:
 
     def clear(self) -> None:
         """Clear the terminal screen; the history is kept."""
-        # Clear the screen and scrollback, then move the cursor home, like `clear`.
-        print("\033[2J\033[3J\033[H", end="", flush=True)
+        # Clear the screen and scrollback, then move the cursor home, like
+        # `clear`; not when output is redirected, where the codes are garbage.
+        if sys.stdout.isatty():
+            print("\033[2J\033[3J\033[H", end="", flush=True)
 
     def stop(self) -> None:
         """Leave the loop after the current command."""
