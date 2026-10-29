@@ -1,11 +1,16 @@
+from __future__ import annotations
+
 import json
 import platform
 import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date
+from typing import Any
 
 from openai import OpenAI
 from openai.types.responses import Response, ResponseInputParam
+from openai.types.shared import ReasoningEffort
 from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -15,11 +20,12 @@ except ImportError:  # not available on Windows
     pass
 
 SYSTEM_PROMPT = """
-You are an expert, fed up and sassy AI assistant who hates answering questions.
+You are an expert AI coding agent running in the user's terminal.
+You help with software engineering: writing, reading, debugging and explaining code.
 Operating rules:
 - Be concise and direct.
-- Write math in Unicode (∑ ∫ √ π α β θ ± × ÷ ≤ ≥ ≈ ∈ ∞, x² x₁, a/b for fractions).
-- NEVER use LaTeX. This terminal doesn't render `$...$`, `\frac{}{}`, or other LaTeX/KaTeX syntax; it shows literal backslashes and dollar signs instead.
+- You cannot read files or run commands yet; ask the user to paste what you need.
+- Write math in Unicode (∑ ∫ √ π α β θ ± × ÷ ≤ ≥ ≈ ∈ ∞, x² x₁, a/b for fractions), never LaTeX — this terminal doesn't render `$...$`, `\\frac{}{}`, or other LaTeX/KaTeX syntax; it shows literal backslashes and dollar signs instead.
 """
 
 
@@ -52,6 +58,12 @@ class Config(BaseSettings):
     streaming: bool = Field(
         default=True,
         validation_alias="STREAMING",
+    )
+    # None sends no reasoning setting, so the model's default applies.
+    # Non-reasoning models reject any effort with HTTP 400.
+    reasoning_effort: ReasoningEffort | None = Field(
+        default=None,
+        validation_alias="REASONING_EFFORT",
     )
 
 
@@ -121,7 +133,7 @@ class Context:
 
 
 class TurnError(Exception):
-    """A response that did not complete with text; the history is unchanged."""
+    """A turn that ended without a final answer; completed steps stay in the history."""
 
 
 class Agent:
@@ -145,33 +157,40 @@ class Agent:
         self,
         prompt: str,
         on_text: Callable[[str], None] = lambda text: None,
-    ) -> bool:
+        on_notice: Callable[[str], None] = lambda text: None,
+    ) -> None:
         """Send one user message, passing the reply text to on_text.
 
-        The turn is added to the conversation only if the response completes
-        with text.
+        The turn is added to the conversation if the response completes with
+        text, or ends incomplete after some text, which the user has seen.
 
         Args:
             prompt: The user's input prompt.
             on_text: Called with each piece of reply text as it arrives when
                 streaming, or once with the whole reply otherwise.
-
-        Returns:
-            Whether old turns were dropped to fit the token budget.
+            on_notice: Called with status messages, such as old turns being
+                dropped to fit the token budget.
 
         Raises:
             TurnError: If the response is incomplete, failed, refused or has no
                 text, or if a stream ends without a final response.
         """
         draft, trimmed = self.context.draft(prompt)
+        if trimmed:
+            on_notice("Context trimmed: oldest turns dropped")
+
+        request: dict[str, Any] = {
+            "store": False,
+            "input": draft,
+            "model": self.config.model,
+            "instructions": self._instructions(),
+        }
+        if self.config.reasoning_effort is not None:
+            request["reasoning"] = {"effort": self.config.reasoning_effort}
+
         if self.config.streaming:
             response = None
-            with self.client.responses.stream(
-                store=False,
-                input=draft,
-                model=self.config.model,
-                instructions=self._instructions(),
-            ) as stream:
+            with self.client.responses.stream(**request) as stream:
                 for event in stream:
                     if event.type == "response.output_text.delta":
                         on_text(event.delta)
@@ -187,18 +206,15 @@ class Agent:
             if response is None:
                 raise TurnError("Stream ended without a final response")
         else:
-            response = self.client.responses.create(
-                store=False,
-                input=draft,
-                model=self.config.model,
-                instructions=self._instructions(),
-            )
+            response = self.client.responses.create(**request)
+            # Show the text before the status check, as streaming does.
+            on_text(response.output_text)
 
+        if response.status == "incomplete" and response.output_text:
+            # Keep the partial reply the user has already seen.
+            self.context.commit(draft, response.output_text)
         self._check(response)
         self.context.commit(draft, response.output_text)
-        if not self.config.streaming:
-            on_text(response.output_text)
-        return trimmed
 
     @staticmethod
     def _check(response: Response) -> None:
@@ -218,7 +234,8 @@ class Agent:
             error = response.error
             message = f"{error.code}: {error.message}" if error else "unknown error"
             raise TurnError(f"Response failed: {message}")
-        if response.status != "completed":
+        # status is optional in the SDK; some compatible endpoints omit it.
+        if response.status not in (None, "completed"):
             raise TurnError(f"Response not completed: {response.status}")
         # Committing a turn without a reply would leave two user messages in a row.
         if not response.output_text:
@@ -243,6 +260,17 @@ class Agent:
         )
 
 
+@dataclass(frozen=True)
+class Command:
+    """A slash command: what it does and the description /help shows."""
+
+    handler: Handler
+    description: str
+
+
+COMMANDS: dict[str, Command] = {}
+
+
 class Repl:
     """Interactive terminal loop: reads prompts, runs commands and turns."""
 
@@ -254,14 +282,8 @@ class Repl:
         """
         self.agent = agent
         self.running = False
-        # Each command maps to its handler and the description shown by /help.
-        self.commands: dict[str, tuple[Callable[[], None], str]] = {
-            "/clear": (self.clear, "clear the screen"),
-            "/exit": (self.stop, "quit"),
-            "/help": (self.help, "list commands"),
-            "/quit": (self.stop, "quit"),
-            "/reset": (self.reset, "clear the conversation history"),
-        }
+        self.at_line_start = True  # whether the cursor is at the start of a line
+        self.commands = COMMANDS
 
     def run(self) -> None:
         """Read and handle prompts until the user quits."""
@@ -279,8 +301,7 @@ class Repl:
 
             command = self.commands.get(prompt.lower())
             if command:
-                handler, _ = command
-                handler()
+                command.handler(self)
             # A single word starting with "/" is a mistyped command, not a
             # prompt; longer input such as "/usr/bin is missing" still goes
             # to the model.
@@ -298,52 +319,96 @@ class Repl:
             prompt: The user's input prompt.
         """
         print()
-        wrote_text = False
-
-        def write(text: str) -> None:
-            nonlocal wrote_text
-            wrote_text = True
-            print(text, end="", flush=True)
-
-        notice = None
         try:
-            if self.agent.run_turn(prompt, on_text=write):
-                notice = "[Context trimmed: oldest turns dropped]"
+            self.agent.run_turn(prompt, on_text=self.write, on_notice=self.notice)
         except TurnError as exc:
-            notice = f"[{exc}]"
+            self.notice(str(exc))
         except KeyboardInterrupt:
-            notice = "[Cancelled]"
+            self.notice("Cancelled")
         except Exception as exc:  # noqa: BLE001
-            notice = f"Agent error: {type(exc).__name__}: {exc}"
+            self.notice(f"Agent error: {type(exc).__name__}: {exc}")
 
-        if wrote_text:
-            print()  # end the reply line
-        if notice:
-            print(notice)
+        if not self.at_line_start:
+            self.write("\n")  # end the reply line
         print()
 
-    def help(self) -> None:
-        """List the available commands."""
-        width = max(len(name) for name in self.commands)
-        for name, (_, description) in self.commands.items():
-            print(f"  {name:<{width}}  {description}")
-        print()
+    def write(self, text: str) -> None:
+        """Print reply text, tracking whether the cursor is at a line start.
 
-    def reset(self) -> None:
-        """Clear the conversation history."""
-        self.agent.context.reset()
-        print("[History reset]\n")
+        Args:
+            text: A piece of the reply.
+        """
+        print(text, end="", flush=True)
+        if text:
+            self.at_line_start = text.endswith("\n")
 
-    def clear(self) -> None:
-        """Clear the terminal screen; the history is kept."""
-        # Clear the screen and scrollback, then move the cursor home, like
-        # `clear`; not when output is redirected, where the codes are garbage.
-        if sys.stdout.isatty():
-            print("\033[2J\033[3J\033[H", end="", flush=True)
+    def notice(self, text: str) -> None:
+        """Print a bracketed status line, starting a new line if needed.
 
-    def stop(self) -> None:
-        """Leave the loop after the current command."""
-        self.running = False
+        Args:
+            text: The status message.
+        """
+        if not self.at_line_start:
+            self.write("\n")
+        print(f"[{text}]")
+
+
+Handler = Callable[[Repl], None]
+
+
+def command(name: str, description: str) -> Callable[[Handler], Handler]:
+    """Register a handler as a slash command. Stack it to give a command aliases.
+
+    Args:
+        name: The command as typed, lowercase, including the slash.
+        description: The one-line description shown by /help.
+
+    Returns:
+        A decorator that registers the handler and returns it unchanged.
+
+    Raises:
+        ValueError: If the name is already registered.
+    """
+
+    def register(handler: Handler) -> Handler:
+        if name in COMMANDS:
+            raise ValueError(f"Command already registered: {name}")
+        COMMANDS[name] = Command(handler, description)
+        return handler
+
+    return register
+
+
+@command("/help", "list commands")
+def help_(repl: Repl) -> None:
+    """List the available commands."""
+    width = max(len(name) for name in repl.commands)
+    for name, cmd in sorted(repl.commands.items()):
+        print(f"  {name:<{width}}  {cmd.description}")
+    print()
+
+
+@command("/reset", "clear the conversation history")
+def reset(repl: Repl) -> None:
+    """Clear the conversation history."""
+    repl.agent.context.reset()
+    print("[History reset]\n")
+
+
+@command("/clear", "clear the screen")
+def clear(repl: Repl) -> None:
+    """Clear the terminal screen; the history is kept."""
+    # Clear the screen and scrollback, then move the cursor home, like
+    # `clear`; not when output is redirected, where the codes are garbage.
+    if sys.stdout.isatty():
+        print("\033[2J\033[3J\033[H", end="", flush=True)
+
+
+@command("/exit", "quit")
+@command("/quit", "quit")
+def stop(repl: Repl) -> None:
+    """Leave the loop after the current command."""
+    repl.running = False
 
 
 def main() -> None:

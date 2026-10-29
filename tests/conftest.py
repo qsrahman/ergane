@@ -18,6 +18,7 @@ def isolate_config(monkeypatch: pytest.MonkeyPatch) -> None:
         "OPENAI_MODEL",
         "STREAMING",
         "MAX_CONTEXT_TOKENS",
+        "REASONING_EFFORT",
     ):
         monkeypatch.delenv(name, raising=False)
 

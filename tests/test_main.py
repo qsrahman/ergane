@@ -4,6 +4,7 @@ from http.server import ThreadingHTTPServer
 import pytest
 from openai import OpenAI
 from openai.types.responses import ResponseInputParam
+from pydantic import ValidationError
 
 from muagent import main
 from fake_api import REFUSAL, TEXT
@@ -120,9 +121,10 @@ class TestAgentRunTurn:
     def test_completed_response_is_committed(self, make_agent, streaming):
         agent = make_agent(STREAMING=streaming)
 
-        trimmed = agent.run_turn("hi")
+        notices: list[str] = []
+        agent.run_turn("hi", on_notice=notices.append)
 
-        assert trimmed is False
+        assert notices == []
         assert agent.context.items == [
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": TEXT},
@@ -149,7 +151,6 @@ class TestAgentRunTurn:
     @pytest.mark.parametrize(
         ("prompt", "message"),
         [
-            ("incomplete", "Response incomplete: max_output_tokens"),
             ("failed", "Response failed: server_error: boom"),
             ("empty", "No text in response"),
             ("refusal", f"Refused: {REFUSAL}"),
@@ -166,6 +167,38 @@ class TestAgentRunTurn:
             agent.run_turn(prompt)
 
         assert agent.context.items == original
+
+    def test_incomplete_response_raises_but_keeps_the_partial_reply(
+        self, make_agent, streaming
+    ):
+        agent = make_agent(STREAMING=streaming)
+        pieces: list[str] = []
+
+        with pytest.raises(main.TurnError, match="^Response incomplete: "):
+            agent.run_turn("incomplete", on_text=pieces.append)
+
+        assert "".join(pieces) == TEXT  # shown to the user, streaming or not
+        assert agent.context.items == [
+            {"role": "user", "content": "incomplete"},
+            {"role": "assistant", "content": TEXT},
+        ]
+
+    def test_response_without_a_status_counts_as_completed(self, make_agent, streaming):
+        agent = make_agent(STREAMING=streaming)
+
+        agent.run_turn("nostatus")
+
+        assert agent.context.items[-1] == {"role": "assistant", "content": TEXT}
+
+    def test_reasoning_effort_is_sent_only_when_configured(
+        self, make_agent, fake_server, streaming
+    ):
+        make_agent(STREAMING=streaming).run_turn("hi")
+        make_agent(STREAMING=streaming, REASONING_EFFORT="low").run_turn("hi")
+
+        unset, low = fake_server.requests[-2:]
+        assert "reasoning" not in unset
+        assert low["reasoning"] == {"effort": "low"}
 
     def test_sends_full_history_statelessly(self, make_agent, fake_server, streaming):
         agent = make_agent(STREAMING=streaming)
@@ -186,9 +219,10 @@ class TestAgentRunTurn:
         agent = make_agent(STREAMING=streaming, MAX_CONTEXT_TOKENS=1)
         agent.context.items = make_context(2)
 
-        trimmed = agent.run_turn("hi")
+        notices: list[str] = []
+        agent.run_turn("hi", on_notice=notices.append)
 
-        assert trimmed is True
+        assert notices == ["Context trimmed: oldest turns dropped"]
         assert fake_server.requests[-1]["input"] == [{"role": "user", "content": "hi"}]
 
 
@@ -231,11 +265,10 @@ class TestRepl:
             agent = main.Agent(make_config())
             prompts: list[str] = []
 
-            def fake_run_turn(prompt: str, on_text=None) -> bool:
+            def fake_run_turn(prompt: str, on_text=None, on_notice=None) -> None:
                 prompts.append(prompt)
                 if turn:
                     turn(prompt, agent.context)
-                return False
 
             monkeypatch.setattr(agent, "run_turn", fake_run_turn)
             run_repl(monkeypatch, agent, inputs)
@@ -260,6 +293,33 @@ class TestRepl:
 
         assert repl(["slow", "next", "/exit"], turn) == ["slow", "next"]
         assert "[Cancelled]" in capsys.readouterr().out
+
+    def test_reply_ending_in_a_newline_gets_no_extra_blank_line(
+        self, monkeypatch, capsys
+    ):
+        agent = main.Agent(make_config())
+
+        def turn(prompt: str, on_text, on_notice) -> None:
+            on_text("line\n")
+
+        monkeypatch.setattr(agent, "run_turn", turn)
+        run_repl(monkeypatch, agent, ["hi", "/exit"])
+
+        assert "\nline\n\nBye." in capsys.readouterr().out
+
+    def test_ctrl_c_mid_reply_puts_the_notice_on_its_own_line(
+        self, monkeypatch, capsys
+    ):
+        agent = main.Agent(make_config())
+
+        def turn(prompt: str, on_text, on_notice) -> None:
+            on_text("partial")
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(agent, "run_turn", turn)
+        run_repl(monkeypatch, agent, ["hi", "/exit"])
+
+        assert "partial\n[Cancelled]\n" in capsys.readouterr().out
 
     def test_turn_errors_are_reported_and_loop_continues(self, repl, capsys):
         def turn(prompt: str, _context) -> None:
@@ -355,7 +415,7 @@ class TestReplRendering:
         run_repl(monkeypatch, agent, ["hi", "/exit"])
 
         out = capsys.readouterr().out
-        assert f"{TEXT}\n[Context trimmed: oldest turns dropped]\n" in out
+        assert f"[Context trimmed: oldest turns dropped]\n{TEXT}\n" in out
 
 
 def test_main_wires_config_agent_and_repl(monkeypatch: pytest.MonkeyPatch, capsys):
@@ -376,3 +436,8 @@ def test_main_exits_on_invalid_config(capsys: pytest.CaptureFixture[str]):
 
     assert exc.value.code == 1
     assert "OPENAI_API_KEY" in capsys.readouterr().err
+
+
+def test_invalid_reasoning_effort_is_a_config_error():
+    with pytest.raises(ValidationError, match="REASONING_EFFORT"):
+        make_config(REASONING_EFFORT="extreme")

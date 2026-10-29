@@ -29,17 +29,19 @@ OPENAI_API_KEY=sk-...
 # OPENAI_MODEL=gpt-5.4-mini
 # STREAMING=true
 # MAX_CONTEXT_TOKENS=65536
+# REASONING_EFFORT=low
 ```
 
 Environment variables take precedence over `.env`.
 
-| Variable | Default | Description |
-|---|---|---|
-| `OPENAI_API_KEY` | — | API key (required) |
-| `OPENAI_BASE_URL` | OpenAI default | Base URL for an OpenAI-compatible API |
-| `OPENAI_MODEL` | `gpt-5.4-mini` | Model name |
-| `STREAMING` | `true` | Stream tokens as they arrive |
-| `MAX_CONTEXT_TOKENS` | `65536` | Token budget for the conversation history sent each turn. It excludes the system instructions and the reply, so keep it well below the model's context window. |
+| Variable             | Default               | Description                                                                                                                                                    |
+| -------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENAI_API_KEY`     | —                     | API key (required)                                                                                                                                             |
+| `OPENAI_BASE_URL`    | OpenAI default        | Base URL for an OpenAI-compatible API                                                                                                                          |
+| `OPENAI_MODEL`       | `gpt-5.4-mini`        | Model name                                                                                                                                                     |
+| `STREAMING`          | `true`                | Stream tokens as they arrive                                                                                                                                   |
+| `MAX_CONTEXT_TOKENS` | `65536`               | Token budget for the conversation history sent each turn. It excludes the system instructions and the reply, so keep it well below the model's context window. |
+| `REASONING_EFFORT`   | unset (model default) | `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. Leave unset for non-reasoning models, which reject it.                                           |
 
 ## Usage
 
@@ -51,12 +53,12 @@ uv run muagent
 
 Type a prompt at `>` and press Enter. To quit, use `/exit`, `/quit`, Ctrl-D, or Ctrl-C at the prompt.
 
-| Command | Effect |
-|---|---|
-| `/help` | List the commands |
-| `/reset` | Clear the conversation history and start fresh |
-| `/clear` | Clear the terminal screen; the history is kept |
-| `/exit`, `/quit` | Quit |
+| Command          | Effect                                         |
+| ---------------- | ---------------------------------------------- |
+| `/help`          | List the commands                              |
+| `/reset`         | Clear the conversation history and start fresh |
+| `/clear`         | Clear the terminal screen; the history is kept |
+| `/exit`, `/quit` | Quit                                           |
 
 Commands are case-insensitive. A mistyped command such as `/rest` is reported instead of being sent to the model. Pressing Ctrl-C while a response is generating cancels only that turn.
 
@@ -71,5 +73,5 @@ The tests run against a local fake of the Responses API. They ignore your `.env`
 ## How it works
 
 - Requests are sent with `store=False`, so the server keeps no conversation state. The full history is resent on each turn.
-- A turn is added to the history only after the response completes with text. Failed, incomplete or empty responses leave the history unchanged.
+- A turn is added to the history once the response completes with text. An incomplete response keeps the partial reply you already saw; failed or empty responses leave the history unchanged.
 - When the history exceeds `MAX_CONTEXT_TOKENS`, the oldest turns are dropped first. Tokens are estimated at about 4 bytes of UTF-8 per token, which works with any backend's tokenizer.
