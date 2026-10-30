@@ -30,3 +30,7 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.ruff]
+# src/ and tests/ hold first-party modules (muagent, fake_api) for import sorting.
+src = ["src", "tests"]

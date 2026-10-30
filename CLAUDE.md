@@ -56,7 +56,7 @@ The package is built with `uv_build`, which expects `src/muagent/__init__.py`. T
 
 ## Conventions
 
-- The code uses Python 3.14 syntax, such as the unparenthesized `except KeyboardInterrupt, EOFError:` (PEP 758). There is no `[tool.ruff]` section, so ruff takes its target from `requires-python`.
+- The code uses Python 3.14 syntax, such as the unparenthesized `except KeyboardInterrupt, EOFError:` (PEP 758). ruff takes its target from `requires-python`; `[tool.ruff]` only sets `src = ["src", "tests"]` so `muagent` and `fake_api` sort as first-party imports.
 
 - Google-style docstrings (`Args:` / `Returns:` / `Raises:`) on functions.
 - Output is a plain terminal: the system prompt forbids LaTeX in favor of Unicode math. Keep that constraint if editing the prompt.

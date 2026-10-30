@@ -7,8 +7,8 @@ from openai import OpenAI
 from openai.types.responses import ResponseInputParam
 from pydantic import ValidationError
 
-from muagent import main
 from fake_api import REFUSAL, TEXT
+from muagent import main
 
 
 def make_context(turns: int) -> ResponseInputParam:
