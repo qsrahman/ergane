@@ -7,12 +7,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import get_args
 
 from openai import Omit, OpenAI, omit
 from openai.types.responses import Response, ResponseInputParam
 from openai.types.shared import ReasoningEffort
 from openai.types.shared_params import Reasoning
-from pydantic import Field, ValidationError
+from pydantic import Field, TypeAdapter, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 try:
@@ -152,6 +153,19 @@ class Context:
     def reset(self) -> None:
         """Forget the whole history."""
         self.items = []
+
+    def undo(self) -> bool:
+        """Drop the last turn: the last user message and everything after it.
+
+        Returns:
+            Whether there was a turn to drop.
+        """
+        for i in range(len(self.items) - 1, -1, -1):
+            item = self.items[i]
+            if isinstance(item, dict) and item.get("role") == "user":
+                self.items = self.items[:i]
+                return True
+        return False
 
 
 class TurnError(Exception):
@@ -334,6 +348,8 @@ class Repl:
         self.running = False
         self.at_line_start = True  # whether the cursor is at the start of a line
         self.commands = COMMANDS
+        self.last_prompt: str | None = None  # the prompt /retry resends
+        self.last_saved = False  # whether that prompt's turn is in the history
 
     def run(self) -> None:
         """Read and handle prompts until the user quits."""
@@ -349,9 +365,11 @@ class Repl:
             if not prompt:
                 continue
 
-            command = self.commands.get(prompt.lower())
+            # The first word picks the command; the rest is its argument.
+            name, _, args = prompt.partition(" ")
+            command = self.commands.get(name.lower())
             if command:
-                command.handler(self)
+                command.handler(self, args.strip())
             # A single word starting with "/" is a mistyped command, not a
             # prompt; longer input such as "/usr/bin is missing" still goes
             # to the model.
@@ -369,6 +387,8 @@ class Repl:
             prompt: The user's input prompt.
         """
         print()
+        self.last_prompt = prompt
+        history = self.agent.context.items
         try:
             self.agent.run_turn(prompt, on_text=self.write, on_notice=self.notice)
         except TurnError as exc:
@@ -377,6 +397,10 @@ class Repl:
             self.notice("Cancelled")
         except Exception as exc:  # noqa: BLE001
             self.notice(f"Agent error: {type(exc).__name__}: {exc}")
+        finally:
+            # commit() replaces the list, so a new list means the turn was saved,
+            # even when it then raised (an incomplete reply is kept).
+            self.last_saved = self.agent.context.items is not history
 
         if not self.at_line_start:
             self.write("\n")  # end the reply line
@@ -404,7 +428,8 @@ class Repl:
         self.write(f"[{text}]\n")
 
 
-Handler = Callable[[Repl], None]
+# A command handler gets the REPL and the text after the command name (or "").
+Handler = Callable[[Repl, str], None]
 
 
 def command(name: str, description: str) -> Callable[[Handler], Handler]:
@@ -431,7 +456,7 @@ def command(name: str, description: str) -> Callable[[Handler], Handler]:
 
 
 @command("/help", "list commands")
-def help_(repl: Repl) -> None:
+def help_(repl: Repl, args: str) -> None:
     """List the available commands."""
     width = max(len(name) for name in repl.commands)
     for name, cmd in sorted(repl.commands.items()):
@@ -440,14 +465,14 @@ def help_(repl: Repl) -> None:
 
 
 @command("/reset", "clear the conversation history")
-def reset(repl: Repl) -> None:
+def reset(repl: Repl, args: str) -> None:
     """Clear the conversation history."""
     repl.agent.context.reset()
     print("[History reset]\n")
 
 
 @command("/clear", "clear the screen")
-def clear(repl: Repl) -> None:
+def clear(repl: Repl, args: str) -> None:
     """Clear the terminal screen; the history is kept."""
     # Clear the screen and scrollback, then move the cursor home, like
     # `clear`; not when output is redirected, where the codes are garbage.
@@ -457,9 +482,59 @@ def clear(repl: Repl) -> None:
 
 @command("/exit", "quit")
 @command("/quit", "quit")
-def stop(repl: Repl) -> None:
+def stop(repl: Repl, args: str) -> None:
     """Leave the loop after the current command."""
     repl.running = False
+
+
+@command("/undo", "remove the last exchange from the history")
+def undo(repl: Repl, args: str) -> None:
+    """Remove the last user message and its reply from the history."""
+    if repl.agent.context.undo():
+        repl.last_saved = False
+        print("[Last exchange removed]\n")
+    else:
+        print("[Nothing to undo]\n")
+
+
+@command("/retry", "resend the last prompt, replacing its reply")
+def retry(repl: Repl, args: str) -> None:
+    """Resend the last prompt, first removing its exchange if it was saved."""
+    if repl.last_prompt is None:
+        print("[Nothing to retry]\n")
+        return
+    if repl.last_saved:
+        repl.agent.context.undo()
+    repl.ask(repl.last_prompt)
+
+
+@command("/model", "show the model, or switch with /model NAME")
+def model(repl: Repl, args: str) -> None:
+    """Show the model, or switch to the one named in args."""
+    if args:
+        repl.agent.config.model = args
+    print(f"[Model: {repl.agent.config.model}]\n")
+
+
+# ReasoningEffort is Optional[Literal[...]]; these are the Literal's values.
+EFFORTS: tuple[str, ...] = get_args(get_args(ReasoningEffort)[0])
+
+
+@command("/effort", "show the reasoning effort, or set it with /effort LEVEL")
+def effort(repl: Repl, args: str) -> None:
+    """Show the reasoning effort, or set it; "default" sends none at all."""
+    config = repl.agent.config
+    if args.lower() == "default":
+        config.reasoning_effort = None
+    elif args:
+        try:
+            config.reasoning_effort = TypeAdapter(ReasoningEffort).validate_python(
+                args.lower()
+            )
+        except ValidationError:
+            print(f"[Unknown effort: {args}. Use {', '.join(EFFORTS)} or default.]\n")
+            return
+    print(f"[Reasoning effort: {config.reasoning_effort or 'model default'}]\n")
 
 
 def main() -> None:

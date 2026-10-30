@@ -54,14 +54,18 @@ uv run muagent
 
 Type a prompt at `>` and press Enter. To quit, use `/exit`, `/quit`, Ctrl-D, or Ctrl-C at the prompt.
 
-| Command          | Effect                                         |
-| ---------------- | ---------------------------------------------- |
-| `/help`          | List the commands                              |
-| `/reset`         | Clear the conversation history and start fresh |
-| `/clear`         | Clear the terminal screen; the history is kept |
-| `/exit`, `/quit` | Quit                                           |
+| Command           | Effect                                                                           |
+| ----------------- | -------------------------------------------------------------------------------- |
+| `/help`           | List the commands                                                                |
+| `/retry`          | Resend the last prompt; if its reply was saved, it is replaced                   |
+| `/undo`           | Remove the last exchange from the history                                        |
+| `/model [NAME]`   | Show the model, or switch to `NAME` for the rest of the session                  |
+| `/effort [LEVEL]` | Show the reasoning effort, or set it (`none` … `max`, or `default` to send none) |
+| `/reset`          | Clear the conversation history and start fresh                                   |
+| `/clear`          | Clear the terminal screen; the history is kept                                   |
+| `/exit`, `/quit`  | Quit                                                                             |
 
-Commands are case-insensitive. A mistyped command such as `/rest` is reported instead of being sent to the model. Pressing Ctrl-C while a response is generating cancels only that turn.
+Command names are case-insensitive. A mistyped command such as `/rest` is reported instead of being sent to the model. Pressing Ctrl-C while a response is generating cancels only that turn.
 
 ## Tests
 
