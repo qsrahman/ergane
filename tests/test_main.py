@@ -1,5 +1,6 @@
 import re
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 from openai import OpenAI
@@ -441,3 +442,70 @@ def test_main_exits_on_invalid_config(capsys: pytest.CaptureFixture[str]):
 def test_invalid_reasoning_effort_is_a_config_error():
     with pytest.raises(ValidationError, match="REASONING_EFFORT"):
         make_config(REASONING_EFFORT="extreme")
+
+
+class TestLoadConfig:
+    """isolate_config makes tmp_path both the working directory and XDG_CONFIG_HOME."""
+
+    @staticmethod
+    def write(path: Path, text: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def test_reads_the_user_config_file(self, tmp_path: Path):
+        self.write(
+            tmp_path / "muagent" / ".env",
+            "OPENAI_API_KEY=user\nOPENAI_MODEL=user-model\n",
+        )
+
+        assert main.load_config().model == "user-model"
+
+    def test_project_env_overrides_the_user_file(self, tmp_path: Path):
+        self.write(
+            tmp_path / "muagent" / ".env",
+            "OPENAI_API_KEY=user\nOPENAI_MODEL=user-model\n",
+        )
+        self.write(tmp_path / ".env", "OPENAI_MODEL=project-model\n")
+
+        config = main.load_config()
+
+        assert config.model == "project-model"
+        assert config.api_key == "user"
+
+    def test_environment_overrides_both_files(self, tmp_path: Path, monkeypatch):
+        self.write(tmp_path / "muagent" / ".env", "OPENAI_API_KEY=user\n")
+        self.write(tmp_path / ".env", "OPENAI_MODEL=project-model\n")
+        monkeypatch.setenv("OPENAI_MODEL", "env-model")
+
+        assert main.load_config().model == "env-model"
+
+    def test_ignores_keys_that_are_not_settings(self, tmp_path: Path):
+        self.write(tmp_path / ".env", "OPENAI_API_KEY=x\nSOME_OTHER_TOOL=1\n")
+
+        assert main.load_config().api_key == "x"
+
+
+class TestSanitize:
+    def test_removes_escape_sequences_and_bidi_controls(self):
+        # An OSC 52 clipboard write, a carriage return and a right-to-left override.
+        text = "a\x1b]52;c;ZXZpbA==\x07b\rc\u202ed"
+
+        assert main.sanitize(text) == "a]52;c;ZXZpbA==bcd"
+
+    def test_keeps_newlines_tabs_and_ordinary_unicode(self):
+        text = "line 1\n\tπ ≈ 3.14 字\n"
+
+        assert main.sanitize(text) == text
+
+    def test_notices_are_sanitized(self, monkeypatch, capsys):
+        agent = main.Agent(make_config())
+
+        def fail(prompt: str, on_text=None, on_notice=None) -> None:
+            raise main.TurnError("Response failed: \x1b[2Jboom")
+
+        monkeypatch.setattr(agent, "run_turn", fail)
+        run_repl(monkeypatch, agent, ["hi", "/exit"])
+
+        out = capsys.readouterr().out
+        assert "[Response failed: [2Jboom]" in out
+        assert "\x1b" not in out

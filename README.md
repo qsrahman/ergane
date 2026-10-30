@@ -20,7 +20,7 @@ A minimal terminal chat agent built on the OpenAI [Responses API](https://platfo
 uv sync
 ```
 
-Create a `.env` file in the directory you run `muagent` from, usually the project root. It is git-ignored.
+Put your settings in `~/.config/muagent/.env` (or `$XDG_CONFIG_HOME/muagent/.env`), or in a `.env` in the directory you run `muagent` from, which overrides the user file. The project's `.env` is git-ignored.
 
 ```dotenv
 OPENAI_API_KEY=sk-...
@@ -32,7 +32,7 @@ OPENAI_API_KEY=sk-...
 # REASONING_EFFORT=low
 ```
 
-Environment variables take precedence over `.env`.
+Environment variables take precedence over both files. Keys that aren't settings are ignored.
 
 | Variable             | Default               | Description                                                                                                                                                    |
 | -------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -42,6 +42,7 @@ Environment variables take precedence over `.env`.
 | `STREAMING`          | `true`                | Stream tokens as they arrive                                                                                                                                   |
 | `MAX_CONTEXT_TOKENS` | `65536`               | Token budget for the conversation history sent each turn. It excludes the system instructions and the reply, so keep it well below the model's context window. |
 | `REASONING_EFFORT`   | unset (model default) | `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. Leave unset for non-reasoning models, which reject it.                                           |
+| `MAX_TURNS`          | `25`                  | Reserved: will cap model calls per prompt once tool calling is added. Not used yet.                                                                        |
 
 ## Usage
 
@@ -68,7 +69,7 @@ Commands are case-insensitive. A mistyped command such as `/rest` is reported in
 uv run pytest
 ```
 
-The tests run against a local fake of the Responses API. They ignore your `.env` and make no external network calls.
+The tests run against a local fake of the Responses API. They ignore your `.env` and user config file, and make no external network calls.
 
 ## How it works
 

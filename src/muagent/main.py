@@ -1,11 +1,12 @@
-from __future__ import annotations
-
 import json
+import os
 import platform
+import re
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 from openai import OpenAI
@@ -32,11 +33,8 @@ Operating rules:
 class Config(BaseSettings):
     """Configuration for the AI agent."""
 
-    model_config = SettingsConfigDict(
-        extra="ignore",
-        # Relative to the current directory, so it works for installed packages too.
-        env_file=".env",
-    )
+    # Config files may hold keys that aren't settings; ignore them, don't fail.
+    model_config = SettingsConfigDict(extra="ignore")
     model: str = Field(
         min_length=1,
         default="gpt-5.4-mini",
@@ -59,12 +57,36 @@ class Config(BaseSettings):
         default=True,
         validation_alias="STREAMING",
     )
+    max_turns: int = Field(
+        default=25,
+        gt=0,
+        validation_alias="MAX_TURNS",
+    )
     # None sends no reasoning setting, so the model's default applies.
     # Non-reasoning models reject any effort with HTTP 400.
     reasoning_effort: ReasoningEffort | None = Field(
         default=None,
         validation_alias="REASONING_EFFORT",
     )
+
+
+def load_config() -> Config:
+    """Load the settings.
+
+    Environment variables take precedence, then a `.env` in the current
+    directory, then the user-level `$XDG_CONFIG_HOME/muagent/.env` (by default
+    `~/.config/muagent/.env`). Missing files are skipped.
+
+    Raises:
+        ValidationError: If a setting is missing or invalid.
+    """
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME", ""))
+    if not config_home.is_absolute():
+        config_home = Path.home() / ".config"
+    user_file = config_home / "muagent" / ".env"
+
+    # Later files override earlier ones.
+    return Config(_env_file=(user_file, ".env"))  # pyright: ignore[reportCallIssue]
 
 
 class Context:
@@ -176,6 +198,7 @@ class Agent:
                 text, or if a stream ends without a final response.
         """
         draft, trimmed = self.context.draft(prompt)
+
         if trimmed:
             on_notice("Context trimmed: oldest turns dropped")
 
@@ -246,9 +269,7 @@ class Agent:
                 for part in item.content
                 if part.type == "refusal"
             )
-            if refusal:
-                raise TurnError(f"Refused: {refusal}")
-            raise TurnError("No text in response")
+            raise TurnError(f"Refused: {refusal}" if refusal else "No text in response")
 
     def _instructions(self) -> str:
         """Build the system instructions, including details of the environment."""
@@ -258,6 +279,27 @@ class Agent:
             f"- Operating system: {platform.platform()}\n"
             f"- Current date: {date.today().isoformat()}\n"
         )
+
+
+# Control characters that could manipulate the terminal (escape sequences such as
+# OSC 52 clipboard writes, cursor movement, BEL, carriage return) and Unicode bidi
+# overrides and isolates that can make text display misleadingly. Newline and tab
+# are kept. Removing ESC alone defuses an escape sequence, so this works on any
+# chunk of a stream, even one that splits a sequence in two.
+_UNSAFE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
+
+
+def sanitize(text: str) -> str:
+    """Remove characters that could manipulate the terminal or spoof its text.
+
+    Args:
+        text: Text from the model or the server.
+
+    Returns:
+        The text without control characters (except newline and tab) and without
+        bidi overrides and isolates.
+    """
+    return _UNSAFE.sub("", text)
 
 
 @dataclass(frozen=True)
@@ -338,6 +380,7 @@ class Repl:
         Args:
             text: A piece of the reply.
         """
+        text = sanitize(text)
         print(text, end="", flush=True)
         if text:
             self.at_line_start = text.endswith("\n")
@@ -350,7 +393,8 @@ class Repl:
         """
         if not self.at_line_start:
             self.write("\n")
-        print(f"[{text}]")
+        # Notices can carry server text, such as error messages and refusals.
+        print(f"[{sanitize(text)}]")
 
 
 Handler = Callable[[Repl], None]
@@ -418,7 +462,7 @@ def main() -> None:
         SystemExit: If the configuration is invalid.
     """
     try:
-        config = Config()  # pyright: ignore[reportCallIssue]
+        config = load_config()
     except ValidationError as exc:
         print("Configuration error:", file=sys.stderr)
         for error in exc.errors():
