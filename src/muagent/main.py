@@ -7,11 +7,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any
 
-from openai import OpenAI
+from openai import Omit, OpenAI, omit
 from openai.types.responses import Response, ResponseInputParam
 from openai.types.shared import ReasoningEffort
+from openai.types.shared_params import Reasoning
 from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -202,18 +202,20 @@ class Agent:
         if trimmed:
             on_notice("Context trimmed: oldest turns dropped")
 
-        request: dict[str, Any] = {
-            "store": False,
-            "input": draft,
-            "model": self.config.model,
-            "instructions": self._instructions(),
-        }
-        if self.config.reasoning_effort is not None:
-            request["reasoning"] = {"effort": self.config.reasoning_effort}
+        instructions = self._instructions()
+        # omit leaves reasoning out of the request; non-reasoning models reject it.
+        effort = self.config.reasoning_effort
+        reasoning: Reasoning | Omit = omit if effort is None else {"effort": effort}
 
         if self.config.streaming:
             response = None
-            with self.client.responses.stream(**request) as stream:
+            with self.client.responses.stream(
+                store=False,
+                input=draft,
+                model=self.config.model,
+                instructions=instructions,
+                reasoning=reasoning,
+            ) as stream:
                 for event in stream:
                     if event.type == "response.output_text.delta":
                         on_text(event.delta)
@@ -229,7 +231,13 @@ class Agent:
             if response is None:
                 raise TurnError("Stream ended without a final response")
         else:
-            response = self.client.responses.create(**request)
+            response = self.client.responses.create(
+                store=False,
+                input=draft,
+                model=self.config.model,
+                instructions=instructions,
+                reasoning=reasoning,
+            )
             # Show the text before the status check, as streaming does.
             on_text(response.output_text)
 
@@ -393,8 +401,7 @@ class Repl:
         """
         if not self.at_line_start:
             self.write("\n")
-        # Notices can carry server text, such as error messages and refusals.
-        print(f"[{sanitize(text)}]")
+        self.write(f"[{text}]\n")
 
 
 Handler = Callable[[Repl], None]
