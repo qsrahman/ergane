@@ -4,9 +4,9 @@ import platform
 from collections.abc import Callable
 from datetime import date
 
-from openai import Omit, OpenAI, omit
+from openai import OpenAI
 from openai.types.responses import Response, ResponseInputParam
-from openai.types.shared_params import Reasoning
+from openai.types.responses.response_create_params import ResponseCreateParamsBase
 
 from muagent.config import Config
 from muagent.context import Context
@@ -73,14 +73,16 @@ class Agent:
             on_notice("Context trimmed: oldest turns dropped")
 
         response = self._respond(draft, on_text)
-        problem = self._problem(response)
+        problem = self._status_problem(response) or self._text_problem(response)
 
         # Keep the reply if the turn worked, or was cut off after text the user has
         # already seen. Any other turn is dropped: saving a prompt with no reply
         # would leave two user messages in a row.
         cut_off = response.status == "incomplete"
         if response.output_text and (problem is None or cut_off):
-            self.context.commit(draft, response.output_text)
+            self.context.commit(
+                [*draft, {"role": "assistant", "content": response.output_text}]
+            )
         if problem:
             raise TurnError(problem)
 
@@ -102,31 +104,26 @@ class Agent:
             TurnError: If a stream ends without a final response; the message is the
                 reason the server gave in an `error` event, if it sent one.
         """
-        instructions = self._instructions()
-        # omit leaves reasoning out of the request; non-reasoning models reject it.
-        effort = self.config.reasoning_effort
-        reasoning: Reasoning | Omit = omit if effort is None else {"effort": effort}
+        # One typed dict for both calls, so pyright checks the keys and they are
+        # written once.
+        params: ResponseCreateParamsBase = {
+            "store": False,
+            "input": draft,
+            "model": self.config.model,
+            "instructions": self._instructions(),
+        }
+        # Non-reasoning models reject a reasoning setting, so leave it out if unset.
+        if self.config.reasoning_effort is not None:
+            params["reasoning"] = {"effort": self.config.reasoning_effort}
 
         if not self.config.streaming:
-            response = self.client.responses.create(
-                store=False,
-                input=draft,
-                model=self.config.model,
-                instructions=instructions,
-                reasoning=reasoning,
-            )
+            response = self.client.responses.create(**params)
             on_text(response.output_text)
             return response
 
         final = None
         reason = "Stream ended without a final response"
-        with self.client.responses.stream(
-            store=False,
-            input=draft,
-            model=self.config.model,
-            instructions=instructions,
-            reasoning=reasoning,
-        ) as stream:
+        with self.client.responses.stream(**params) as stream:
             for event in stream:
                 if event.type == "response.output_text.delta":
                     on_text(event.delta)
@@ -153,14 +150,14 @@ class Agent:
         return final
 
     @staticmethod
-    def _problem(response: Response) -> str | None:
-        """Describe what is wrong with a response, if anything.
+    def _status_problem(response: Response) -> str | None:
+        """Describe what is wrong with a response's status, if anything.
 
         Args:
-            response: The final response of a turn.
+            response: A response from the model.
 
         Returns:
-            A message for the user, or None if it is a normal completed reply.
+            A message for the user, or None if the status is fine.
         """
         if response.status == "incomplete":
             details = response.incomplete_details
@@ -173,16 +170,30 @@ class Agent:
         # status is optional in the SDK; some compatible endpoints omit it.
         if response.status not in (None, "completed"):
             return f"Response not completed: {response.status}"
-        if not response.output_text:
-            refusal = "".join(
-                part.refusal
-                for item in response.output
-                if item.type == "message"
-                for part in item.content
-                if part.type == "refusal"
-            )
-            return f"Refused: {refusal}" if refusal else "No text in response"
         return None
+
+    @staticmethod
+    def _text_problem(response: Response) -> str | None:
+        """Describe why a response has no text to show, if it has none.
+
+        Only for a final response: one that calls tools has no text, and that is fine.
+
+        Args:
+            response: The final response of a turn.
+
+        Returns:
+            A message for the user, or None if the response has text.
+        """
+        if response.output_text:
+            return None
+        refusal = "".join(
+            part.refusal
+            for item in response.output
+            if item.type == "message"
+            for part in item.content
+            if part.type == "refusal"
+        )
+        return f"Refused: {refusal}" if refusal else "No text in response"
 
     def _instructions(self) -> str:
         """Build the system instructions, including details of the environment."""

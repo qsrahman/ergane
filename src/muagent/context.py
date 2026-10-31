@@ -58,14 +58,15 @@ class Context:
             start = turn_start
         return items[start:], start > 0
 
-    def commit(self, draft: ResponseInputParam, reply: str) -> None:
-        """Make a drafted turn and its reply the new history.
+    def commit(self, items: ResponseInputParam) -> None:
+        """Make a finished turn the new history.
 
         Args:
-            draft: The input returned by draft() for this turn.
-            reply: The assistant's reply text.
+            items: The whole history after the turn: the input returned by
+                draft(), followed by everything the model produced, such as its
+                reply.
         """
-        self.items = [*draft, {"role": "assistant", "content": reply}]
+        self.items = list(items)
         self.last_saved = True
 
     def reset(self) -> None:

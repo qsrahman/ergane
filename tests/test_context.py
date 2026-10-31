@@ -7,6 +7,10 @@ from muagent.context import Context
 ROOMY = 10_000  # a token budget that the tests which don't trim never reach
 
 
+def commit_reply(context: Context, draft: ResponseInputParam, reply: str) -> None:
+    context.commit([*draft, {"role": "assistant", "content": reply}])
+
+
 class TestContext:
     def test_draft_appends_prompt_without_changing_history(self):
         context = Context()
@@ -52,7 +56,7 @@ class TestContext:
         context = Context()
         draft, _ = context.draft("hi", ROOMY)
 
-        context.commit(draft, "hello")
+        commit_reply(context, draft, "hello")
 
         assert context.items == [
             {"role": "user", "content": "hi"},
@@ -113,7 +117,7 @@ class TestContextRewind:
         context = Context()
         context.items = make_context(1)
         draft, _ = context.draft("hi", ROOMY)
-        context.commit(draft, "hello")
+        commit_reply(context, draft, "hello")
 
         assert context.last_saved
         assert context.rewind() == "hi"
@@ -131,7 +135,7 @@ class TestContextRewind:
         context = Context()
         for prompt in ("first", "second"):
             draft, _ = context.draft(prompt, ROOMY)
-            context.commit(draft, "reply")
+            commit_reply(context, draft, "reply")
         context.undo()
 
         assert context.rewind() == "second"
@@ -143,7 +147,7 @@ class TestContextRewind:
     def test_rewind_after_reset_returns_the_prompt_and_leaves_history_empty(self):
         context = Context()
         draft, _ = context.draft("hi", ROOMY)
-        context.commit(draft, "hello")
+        commit_reply(context, draft, "hello")
         context.reset()
 
         assert context.rewind() == "hi"
@@ -151,3 +155,59 @@ class TestContextRewind:
 
     def test_rewind_with_no_prompt_returns_none(self):
         assert Context().rewind() is None
+
+
+TOOL_TURN: ResponseInputParam = [
+    {"role": "user", "content": "read notes.txt"},
+    {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "ENC"},
+    {"type": "function_call", "call_id": "c1", "name": "read_file", "arguments": "{}"},
+    {"type": "function_call_output", "call_id": "c1", "output": "file contents"},
+    {"role": "assistant", "content": "It says hello."},
+]
+
+
+class TestContextToolTurns:
+    """A turn that used tools is more than a prompt and a reply."""
+
+    def test_commit_keeps_the_whole_turn(self):
+        context = Context()
+        draft, _ = context.draft("read notes.txt", ROOMY)
+
+        context.commit([*draft, *TOOL_TURN[1:]])
+
+        assert context.items == TOOL_TURN
+
+    def test_undo_removes_all_of_a_tool_turn(self):
+        context = Context()
+        context.items = make_context(1)
+        draft, _ = context.draft("read notes.txt", ROOMY)
+        context.commit([*draft, *TOOL_TURN[1:]])
+
+        context.undo()
+
+        assert context.items == make_context(1)
+
+    def test_rewind_removes_all_of_a_tool_turn_and_returns_its_prompt(self):
+        context = Context()
+        draft, _ = context.draft("read notes.txt", ROOMY)
+        context.commit([*draft, *TOOL_TURN[1:]])
+
+        assert context.rewind() == "read notes.txt"
+        assert context.items == []
+
+    # Budgets that drop every old turn, only the tool turn, or nothing.
+    @pytest.mark.parametrize("budget", [1, 90, ROOMY])
+    def test_trimming_never_leaves_part_of_a_tool_turn(self, budget):
+        context = Context()
+        context.items = [
+            *TOOL_TURN,
+            {"role": "user", "content": "thanks"},
+            {"role": "assistant", "content": "welcome"},
+        ]
+
+        draft, _ = context.draft("next", budget)
+
+        kinds = [dict(item).get("type") for item in draft]
+        assert dict(draft[0]).get("role") == "user"  # never starts mid-turn
+        assert ("function_call_output" in kinds) == ("function_call" in kinds)
+        assert ("reasoning" in kinds) == ("function_call" in kinds)

@@ -1,10 +1,11 @@
 import re
 
 import pytest
+from openai.types.responses import Response
 
-from fake_api import REFUSAL, STREAM_ERROR, TEXT
+from fake_api import FUNCTION_CALL, REFUSAL, STREAM_ERROR, TEXT, make_response
 from helpers import make_context
-from muagent.agent import TurnError
+from muagent.agent import Agent, TurnError
 
 
 @pytest.mark.parametrize("streaming", [True, False])
@@ -167,3 +168,12 @@ def test_stream_error_event_reports_the_servers_reason(make_agent, prompt, messa
 
     assert pieces == ["Hello"]  # the partial reply was shown...
     assert agent.context.items == []  # ...but a broken stream is not saved
+
+
+def test_a_response_that_only_calls_a_tool_has_no_status_problem():
+    # The two checks are separate so a tool loop can tell an error from a tool call:
+    # having no text is a problem only for the response that ends the turn.
+    response = Response.model_validate(make_response("completed", [FUNCTION_CALL]))
+
+    assert Agent._status_problem(response) is None
+    assert Agent._text_problem(response) == "No text in response"
