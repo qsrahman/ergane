@@ -2,7 +2,7 @@ import re
 
 import pytest
 
-from fake_api import REFUSAL, TEXT
+from fake_api import REFUSAL, STREAM_ERROR, TEXT
 from helpers import make_context
 from muagent.agent import TurnError
 
@@ -116,6 +116,20 @@ class TestAgentRunTurn:
         assert notices == ["Context trimmed: oldest turns dropped"]
         assert fake_server.requests[-1]["input"] == [{"role": "user", "content": "hi"}]
 
+    def test_a_budget_changed_after_startup_takes_effect(self, make_agent, streaming):
+        # A setting changed at runtime (as a command would) must be used right away.
+        agent = make_agent(STREAMING=streaming)
+        agent.context.items = make_context(2)
+        notices: list[str] = []
+
+        agent.run_turn("one", on_notice=notices.append)
+        assert notices == []  # the default budget leaves plenty of room
+
+        agent.config.max_context_tokens = 1
+        agent.run_turn("two", on_notice=notices.append)
+
+        assert notices == ["Context trimmed: oldest turns dropped"]
+
 
 def test_stream_without_final_response_raises(make_agent):
     agent = make_agent(STREAMING=True)
@@ -124,3 +138,21 @@ def test_stream_without_final_response_raises(make_agent):
         agent.run_turn("truncated")
 
     assert agent.context.items == []
+
+
+@pytest.mark.parametrize(
+    ("prompt", "message"),
+    [
+        ("error_event", f"Stream error: server_error: {STREAM_ERROR}"),
+        ("error_event_nocode", f"Stream error: {STREAM_ERROR}"),
+    ],
+)
+def test_stream_error_event_reports_the_servers_reason(make_agent, prompt, message):
+    agent = make_agent(STREAMING=True)
+    pieces: list[str] = []
+
+    with pytest.raises(TurnError, match=f"^{re.escape(message)}$"):
+        agent.run_turn(prompt, on_text=pieces.append)
+
+    assert pieces == ["Hello"]  # the partial reply was shown...
+    assert agent.context.items == []  # ...but a broken stream is not saved

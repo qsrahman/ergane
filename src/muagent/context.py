@@ -1,4 +1,4 @@
-"""The conversation history and the token budget that trims it."""
+"""The conversation history, and how it is trimmed to fit a token budget."""
 
 import json
 
@@ -12,31 +12,27 @@ class Context:
     failed requests never leave a user message without a reply.
     """
 
-    def __init__(self, max_tokens: int) -> None:
-        """Create an empty conversation.
-
-        Args:
-            max_tokens: Token budget for the input sent each turn.
-        """
-        self.max_tokens = max_tokens
+    def __init__(self) -> None:
+        """Create an empty conversation."""
         self.items: ResponseInputParam = []
         self.last_prompt: str | None = None  # the prompt most recently drafted
         self.last_saved = False  # whether that prompt's turn is in items
 
-    def draft(self, prompt: str) -> tuple[ResponseInputParam, bool]:
-        """Build the next request's input without changing the history.
+    def draft(self, prompt: str, max_tokens: int) -> tuple[ResponseInputParam, bool]:
+        """Start a turn: build the next request's input within a token budget.
 
-        It only remembers the prompt (and that it is not saved yet) for rewind().
-
-        Old turns are dropped from the front, a whole turn at a time, until the
-        input fits the token budget. The new user message is always kept.
+        The history is not changed; only the prompt is remembered (as not saved
+        yet) for rewind(). Old turns are dropped from the front, a whole turn at a
+        time, until the input fits the budget. The new user message is always kept.
 
         Args:
             prompt: The user's new message.
+            max_tokens: The most tokens the input should have (an estimate). Passed
+                on every call, so a changed setting takes effect at once.
 
         Returns:
-            The history plus the new message, trimmed to the token budget, and
-            whether any old turns were dropped.
+            The history plus the new message, trimmed to the budget, and whether
+            any old turns were dropped.
         """
         self.last_prompt = prompt
         self.last_saved = False
@@ -56,7 +52,7 @@ class Context:
 
         start = 0
         for turn_start in user_turn_starts[1:]:
-            if total <= self.max_tokens:
+            if total <= max_tokens:
                 break
             total -= sum(counts[start:turn_start])
             start = turn_start

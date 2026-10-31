@@ -22,7 +22,11 @@ Operating rules:
 
 
 class TurnError(Exception):
-    """A turn that ended without a final answer; completed steps stay in the history."""
+    """A turn that ended without a normal reply.
+
+    Nothing is saved to the history, except that a partial reply is kept when the
+    response ended incomplete after some text, which the user has already seen.
+    """
 
 
 class Agent:
@@ -40,7 +44,7 @@ class Agent:
             api_key=config.api_key,
             base_url=config.base_url,
         )
-        self.context = Context(config.max_context_tokens)
+        self.context = Context()
 
     def run_turn(
         self,
@@ -64,7 +68,7 @@ class Agent:
             TurnError: If the response is incomplete, failed, refused or has no
                 text, or if a stream ends without a final response.
         """
-        draft, trimmed = self.context.draft(prompt)
+        draft, trimmed = self.context.draft(prompt, self.config.max_context_tokens)
         if trimmed:
             on_notice("Context trimmed: oldest turns dropped")
 
@@ -95,7 +99,8 @@ class Agent:
             The final response, whatever its status.
 
         Raises:
-            TurnError: If a stream ends without a final response.
+            TurnError: If a stream ends without a final response; the message is the
+                reason the server gave in an `error` event, if it sent one.
         """
         instructions = self._instructions()
         # omit leaves reasoning out of the request; non-reasoning models reject it.
@@ -114,6 +119,7 @@ class Agent:
             return response
 
         final = None
+        reason = "Stream ended without a final response"
         with self.client.responses.stream(
             store=False,
             input=draft,
@@ -124,6 +130,14 @@ class Agent:
             for event in stream:
                 if event.type == "response.output_text.delta":
                     on_text(event.delta)
+                elif event.type == "error":
+                    # Keep the server's reason in case no final response follows.
+                    detail = (
+                        f"{event.code}: {event.message}"
+                        if event.code
+                        else event.message
+                    )
+                    reason = f"Stream error: {detail}"
                 # Take the final response from the terminal event:
                 # get_final_response() raises unless the stream ends with
                 # response.completed.
@@ -134,7 +148,7 @@ class Agent:
                 ):
                     final = event.response
         if final is None:
-            raise TurnError("Stream ended without a final response")
+            raise TurnError(reason)
         return final
 
     @staticmethod

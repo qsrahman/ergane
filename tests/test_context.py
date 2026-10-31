@@ -4,14 +4,16 @@ from openai.types.responses import ResponseInputParam
 from helpers import make_context
 from muagent.context import Context
 
+ROOMY = 10_000  # a token budget that the tests which don't trim never reach
+
 
 class TestContext:
     def test_draft_appends_prompt_without_changing_history(self):
-        context = Context(max_tokens=10_000)
+        context = Context()
         context.items = make_context(2)
         original = list(context.items)
 
-        draft, trimmed = context.draft("new")
+        draft, trimmed = context.draft("new", ROOMY)
 
         assert not trimmed
         assert draft == [*original, {"role": "user", "content": "new"}]
@@ -26,10 +28,10 @@ class TestContext:
         for i in range(3):
             history.append({"role": "user", "content": f"{i}{big}"})
             history.append({"role": "assistant", "content": big})
-        context = Context(max_tokens=kept_turns * 2000 + 1000)
+        context = Context()
         context.items = history
 
-        draft, trimmed = context.draft("new")
+        draft, trimmed = context.draft("new", kept_turns * 2000 + 1000)
 
         assert trimmed
         assert draft == [
@@ -38,17 +40,17 @@ class TestContext:
         ]
 
     def test_draft_keeps_last_user_turn_even_if_over_budget(self):
-        context = Context(max_tokens=1)
+        context = Context()
         prompt = "word " * 100
 
-        draft, trimmed = context.draft(prompt)
+        draft, trimmed = context.draft(prompt, 1)
 
         assert not trimmed
         assert draft == [{"role": "user", "content": prompt}]
 
     def test_commit_appends_reply_to_draft(self):
-        context = Context(max_tokens=10_000)
-        draft, _ = context.draft("hi")
+        context = Context()
+        draft, _ = context.draft("hi", ROOMY)
 
         context.commit(draft, "hello")
 
@@ -58,7 +60,7 @@ class TestContext:
         ]
 
     def test_reset_forgets_history(self):
-        context = Context(max_tokens=10_000)
+        context = Context()
         context.items = make_context(2)
 
         context.reset()
@@ -69,12 +71,12 @@ class TestContext:
         # The same number of characters is about 3x the bytes in CJK as in ASCII,
         # so only the CJK history goes over the budget.
         def draft_trimmed(text: str) -> bool:
-            context = Context(max_tokens=200)
+            context = Context()
             context.items = [
                 {"role": "user", "content": text},
                 {"role": "assistant", "content": "ok"},
             ]
-            _, trimmed = context.draft("new")
+            _, trimmed = context.draft("new", 200)
             return trimmed
 
         assert not draft_trimmed("a" * 400)
@@ -83,7 +85,7 @@ class TestContext:
 
 class TestContextUndo:
     def test_drops_the_last_turn(self):
-        context = Context(max_tokens=10_000)
+        context = Context()
         context.items = make_context(2)
         first_turn = context.items[:2]
 
@@ -91,7 +93,7 @@ class TestContextUndo:
         assert context.items == first_turn
 
     def test_reports_when_there_is_nothing_to_undo(self):
-        context = Context(max_tokens=10_000)
+        context = Context()
 
         assert not context.undo()
         assert context.items == []
@@ -99,18 +101,18 @@ class TestContextUndo:
 
 class TestContextRewind:
     def test_draft_remembers_the_prompt_without_saving_it(self):
-        context = Context(max_tokens=10_000)
+        context = Context()
 
-        context.draft("hi")
+        context.draft("hi", ROOMY)
 
         assert context.last_prompt == "hi"
         assert not context.last_saved
         assert context.items == []
 
     def test_rewind_drops_a_saved_turn_and_returns_its_prompt(self):
-        context = Context(max_tokens=10_000)
+        context = Context()
         context.items = make_context(1)
-        draft, _ = context.draft("hi")
+        draft, _ = context.draft("hi", ROOMY)
         context.commit(draft, "hello")
 
         assert context.last_saved
@@ -118,17 +120,17 @@ class TestContextRewind:
         assert context.items == make_context(1)
 
     def test_rewind_keeps_the_history_when_the_turn_was_not_saved(self):
-        context = Context(max_tokens=10_000)
+        context = Context()
         context.items = make_context(1)
-        context.draft("failed")  # no commit: the turn failed
+        context.draft("failed", ROOMY)  # no commit: the turn failed
 
         assert context.rewind() == "failed"
         assert context.items == make_context(1)
 
     def test_rewind_after_undo_does_not_drop_an_older_turn(self):
-        context = Context(max_tokens=10_000)
+        context = Context()
         for prompt in ("first", "second"):
-            draft, _ = context.draft(prompt)
+            draft, _ = context.draft(prompt, ROOMY)
             context.commit(draft, "reply")
         context.undo()
 
@@ -139,8 +141,8 @@ class TestContextRewind:
         ]
 
     def test_rewind_after_reset_returns_the_prompt_and_leaves_history_empty(self):
-        context = Context(max_tokens=10_000)
-        draft, _ = context.draft("hi")
+        context = Context()
+        draft, _ = context.draft("hi", ROOMY)
         context.commit(draft, "hello")
         context.reset()
 
@@ -148,4 +150,4 @@ class TestContextRewind:
         assert context.items == []
 
     def test_rewind_with_no_prompt_returns_none(self):
-        assert Context(max_tokens=10_000).rewind() is None
+        assert Context().rewind() is None

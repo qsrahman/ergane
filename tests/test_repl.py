@@ -2,7 +2,7 @@ import sys
 
 import pytest
 
-from fake_api import REFUSAL, TEXT
+from fake_api import REFUSAL, STREAM_ERROR, TEXT
 from helpers import make_config, make_context, run_repl
 from muagent.agent import Agent
 from muagent.context import Context
@@ -91,7 +91,7 @@ class TestRepl:
 
         def turn(prompt: str, context: Context) -> None:
             history_sizes.append(len(context.items))
-            draft, _ = context.draft(prompt)
+            draft, _ = context.draft(prompt, 10_000)
             context.commit(draft, "reply")
 
         return turn
@@ -172,3 +172,10 @@ class TestReplRendering:
 
         out = capsys.readouterr().out
         assert f"[Context trimmed: oldest turns dropped]\n{TEXT}\n" in out
+
+
+def test_stream_error_notice_follows_the_partial_reply(monkeypatch, make_agent, capsys):
+    run_repl(monkeypatch, make_agent(STREAMING=True), ["error_event", "/exit"])
+
+    out = capsys.readouterr().out
+    assert f"Hello\n[Stream error: server_error: {STREAM_ERROR}]\n" in out

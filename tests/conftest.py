@@ -9,6 +9,7 @@ from openai import OpenAI
 from fake_api import FakeResponsesHandler
 from helpers import make_config
 from muagent.agent import Agent
+from muagent.config import Config
 
 
 @pytest.fixture(autouse=True)
@@ -20,16 +21,9 @@ def isolate_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    for name in (
-        "OPENAI_API_KEY",
-        "OPENAI_BASE_URL",
-        "OPENAI_MODEL",
-        "STREAMING",
-        "MAX_CONTEXT_TOKENS",
-        "MAX_TURNS",
-        "REASONING_EFFORT",
-    ):
-        monkeypatch.delenv(name, raising=False)
+    # Taken from Config itself, so a new setting needs no change here.
+    for field in Config.model_fields.values():
+        monkeypatch.delenv(str(field.validation_alias), raising=False)
 
 
 @pytest.fixture

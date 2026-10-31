@@ -12,6 +12,7 @@ MESSAGE = {
     "content": [{"type": "output_text", "text": TEXT, "annotations": []}],
 }
 REFUSAL = "I can't help with that."
+STREAM_ERROR = "the model crashed"
 REFUSAL_MESSAGE = {
     **MESSAGE,
     "content": [{"type": "refusal", "refusal": REFUSAL}],
@@ -63,8 +64,10 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     The last input item's content selects the scenario: "incomplete",
     "failed", "empty" (completed with no output), "refusal", "nostatus" (a
     reply without a status, as some compatible servers send), "truncated" (a
-    stream that ends without a terminal event), or anything else for a
-    completed response.
+    stream that ends without a terminal event), "error_event" or
+    "error_event_nocode" (a stream `error` event, with or without a code, after
+    the first delta, then the stream ends), or anything else for a completed
+    response.
     """
 
     def log_message(self, format, *args):
@@ -73,7 +76,8 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         self.server.requests.append(body)  # pyright: ignore[reportAttributeAccessIssue]
-        event_type, response = final_event(body["input"][-1]["content"])
+        scenario = body["input"][-1]["content"]
+        event_type, response = final_event(scenario)
 
         if not body.get("stream"):
             data = json.dumps(response).encode()
@@ -96,7 +100,7 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
             self.wfile.write(f"event: {type_}\ndata: {json.dumps(event)}\n\n".encode())
 
         send("response.created", response=make_response("in_progress"))
-        if body["input"][-1]["content"] == "truncated":
+        if scenario == "truncated":
             return
         if response["output"]:
             message = response["output"][0]
@@ -115,6 +119,12 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
                 send("response.content_part.added", **ids, part={**part, "text": ""})
                 for delta in ("Hello", " world"):
                     send("response.output_text.delta", **ids, delta=delta, logprobs=[])
+                    if scenario.startswith("error_event"):
+                        code = (
+                            None if scenario == "error_event_nocode" else "server_error"
+                        )
+                        send("error", code=code, message=STREAM_ERROR)
+                        return
                 send("response.output_text.done", **ids, text=TEXT, logprobs=[])
             send("response.content_part.done", **ids, part=part)
             send("response.output_item.done", output_index=0, item=message)
