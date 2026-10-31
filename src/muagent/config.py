@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import get_args
 
 from openai.types.shared import ReasoningEffort
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,7 +19,7 @@ class Config(BaseSettings):
         default="gpt-5.4-mini",
         validation_alias="OPENAI_MODEL",
     )
-    api_key: str = Field(
+    api_key: SecretStr = Field(  # a SecretStr stays hidden if the config is printed
         min_length=1,
         validation_alias="OPENAI_API_KEY",
     )

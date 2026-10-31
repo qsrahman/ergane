@@ -1,11 +1,8 @@
-import sys
-
 import pytest
 
 from fake_api import REFUSAL, STREAM_ERROR, TEXT
 from helpers import make_config, make_context, run_repl
 from muagent.agent import Agent
-from muagent.context import Context
 
 
 class TestRepl:
@@ -84,50 +81,6 @@ class TestRepl:
 
         assert repl(["bad", "next", "/exit"], turn) == ["bad", "next"]
         assert "Agent error: ValueError: boom" in capsys.readouterr().out
-
-    @staticmethod
-    def committing_turn(history_sizes: list[int]):
-        """A fake turn that records the history size, then commits the prompt."""
-
-        def turn(prompt: str, context: Context) -> None:
-            history_sizes.append(len(context.items))
-            draft, _ = context.draft(prompt, 10_000)
-            context.commit(draft, "reply")
-
-        return turn
-
-    def test_reset_clears_history(self, repl, capsys):
-        sizes: list[int] = []
-
-        prompts = repl(
-            ["a", "b", " /Reset ", "c", "/exit"], self.committing_turn(sizes)
-        )
-
-        assert prompts == ["a", "b", "c"]
-        assert sizes == [0, 2, 0]
-        assert "[History reset]" in capsys.readouterr().out
-
-    @pytest.mark.parametrize("is_terminal", [True, False])
-    def test_clear_clears_screen_only_on_a_terminal_and_keeps_history(
-        self, repl, capsys, monkeypatch, is_terminal
-    ):
-        # capsys replaces stdout with a capture object, which is never a terminal.
-        monkeypatch.setattr(sys.stdout, "isatty", lambda: is_terminal)
-        sizes: list[int] = []
-
-        prompts = repl(["a", "/clear", "b", "/exit"], self.committing_turn(sizes))
-
-        assert prompts == ["a", "b"]
-        assert sizes == [0, 2]
-        printed_codes = "\033[2J\033[3J\033[H" in capsys.readouterr().out
-        assert printed_codes is is_terminal
-
-    def test_help_lists_every_command(self, repl, capsys):
-        repl(["/help", "/exit"])
-
-        out = capsys.readouterr().out
-        for name in ("/help", "/reset", "/clear", "/exit", "/quit"):
-            assert name in out
 
     def test_unknown_command_is_not_sent_to_the_agent(self, repl, capsys):
         assert repl(["/rest", "/exit"]) == []

@@ -49,7 +49,12 @@ class Repl:
         name, _, args = prompt.partition(" ")
         command = self.commands.get(name.lower())
         if command:
-            message = command.handler(self, args.strip())
+            try:
+                message = command.handler(self, args.strip())
+            except KeyboardInterrupt:
+                message = "Cancelled"
+            except Exception as exc:  # noqa: BLE001
+                message = f"Command error: {type(exc).__name__}: {exc}"
         # A single word starting with "/" is a mistyped command, not a prompt;
         # longer input such as "/usr/bin is missing" still goes to the model.
         elif prompt.startswith("/") and " " not in prompt:

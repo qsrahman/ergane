@@ -46,6 +46,8 @@ def final_event(scenario: str) -> tuple[str, dict]:
         )
     if scenario == "refusal":
         return "response.completed", make_response("completed", [REFUSAL_MESSAGE])
+    if scenario == "cancelled":
+        return "response.completed", make_response("cancelled", [MESSAGE])
     if scenario == "nostatus":
         return "response.completed", make_response(None, [MESSAGE])
     if scenario == "empty":
@@ -62,7 +64,8 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     """Minimal fake of POST /v1/responses.
 
     The last input item's content selects the scenario: "incomplete",
-    "failed", "empty" (completed with no output), "refusal", "nostatus" (a
+    "failed", "empty" (completed with no output), "refusal", "cancelled" (a
+    response with text but a status other than completed or incomplete), "nostatus" (a
     reply without a status, as some compatible servers send), "truncated" (a
     stream that ends without a terminal event), "error_event" or
     "error_event_nocode" (a stream `error` event, with or without a code, after

@@ -38,7 +38,7 @@ class TestLoadConfig:
         config = load_config()
 
         assert config.model == "project-model"
-        assert config.api_key == "user"
+        assert config.api_key.get_secret_value() == "user"
 
     def test_environment_overrides_both_files(self, tmp_path: Path, monkeypatch):
         self.write(tmp_path / "muagent" / ".env", "OPENAI_API_KEY=user\n")
@@ -50,4 +50,48 @@ class TestLoadConfig:
     def test_ignores_keys_that_are_not_settings(self, tmp_path: Path):
         self.write(tmp_path / ".env", "OPENAI_API_KEY=x\nSOME_OTHER_TOOL=1\n")
 
-        assert load_config().api_key == "x"
+        assert load_config().api_key.get_secret_value() == "x"
+
+    def test_reads_the_default_location_when_xdg_config_home_is_unset(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        home = tmp_path / "home"
+        self.write(
+            home / ".config" / "muagent" / ".env",
+            "OPENAI_API_KEY=user\nOPENAI_MODEL=default-location\n",
+        )
+        monkeypatch.delenv("XDG_CONFIG_HOME")
+        monkeypatch.setenv("HOME", str(home))
+
+        assert load_config().model == "default-location"
+
+    def test_a_relative_xdg_config_home_is_ignored(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # The XDG spec says relative paths are invalid, so ~/.config is used instead.
+        home = tmp_path / "home"
+        self.write(
+            home / ".config" / "muagent" / ".env",
+            "OPENAI_API_KEY=user\nOPENAI_MODEL=from-home\n",
+        )
+        self.write(  # what honoring the relative path would have read
+            tmp_path / "relative" / "muagent" / ".env",
+            "OPENAI_API_KEY=wrong\nOPENAI_MODEL=from-relative\n",
+        )
+        monkeypatch.setenv("XDG_CONFIG_HOME", "relative")
+        monkeypatch.setenv("HOME", str(home))
+
+        assert load_config().model == "from-home"
+
+
+def test_the_api_key_is_not_revealed_when_the_config_is_printed():
+    config = make_config(OPENAI_API_KEY="sk-secret-123")
+
+    for text in (repr(config), str(config), str(config.model_dump())):
+        assert "sk-secret-123" not in text
+    assert config.api_key.get_secret_value() == "sk-secret-123"
+
+
+def test_an_empty_api_key_is_a_config_error():
+    with pytest.raises(ValidationError, match="OPENAI_API_KEY"):
+        make_config(OPENAI_API_KEY="")

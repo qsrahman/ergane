@@ -41,7 +41,7 @@ class Agent:
         """
         self.config = config
         self.client = client or OpenAI(
-            api_key=config.api_key,
+            api_key=config.api_key.get_secret_value(),
             base_url=config.base_url,
         )
         self.context = Context()
@@ -140,7 +140,8 @@ class Agent:
                     reason = f"Stream error: {detail}"
                 # Take the final response from the terminal event:
                 # get_final_response() raises unless the stream ends with
-                # response.completed.
+                # response.completed. Keep the == chain: pyright narrows the event
+                # type through it but not through `in (...)`.
                 elif (
                     event.type == "response.completed"
                     or event.type == "response.incomplete"

@@ -74,6 +74,17 @@ class TestAgentRunTurn:
             {"role": "assistant", "content": TEXT},
         ]
 
+    def test_a_response_that_is_not_completed_is_not_saved_even_with_text(
+        self, make_agent, streaming
+    ):
+        # Only "incomplete" keeps its partial text; any other status saves nothing.
+        agent = make_agent(STREAMING=streaming)
+
+        with pytest.raises(TurnError, match="^Response not completed: cancelled$"):
+            agent.run_turn("cancelled")
+
+        assert agent.context.items == []
+
     def test_response_without_a_status_counts_as_completed(self, make_agent, streaming):
         agent = make_agent(STREAMING=streaming)
 

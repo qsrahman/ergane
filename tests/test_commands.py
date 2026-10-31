@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 
 from fake_api import TEXT
@@ -128,12 +130,42 @@ class TestCommandsWithAgent:
         )
         assert agent.config.reasoning_effort == "high"
 
-    def test_help_lists_the_new_commands(self, monkeypatch, make_agent, capsys):
+    def test_reset_clears_the_history(
+        self, monkeypatch, make_agent, fake_server, capsys
+    ):
+        agent = make_agent()
+
+        run_repl(monkeypatch, agent, self.inputs("a", "b", " /Reset ", "c"))
+
+        # "c" was sent with an empty history, so only "c" and its reply remain.
+        assert fake_server.requests[-1]["input"] == [{"role": "user", "content": "c"}]
+        assert agent.context.items == [
+            {"role": "user", "content": "c"},
+            {"role": "assistant", "content": TEXT},
+        ]
+        assert "[History reset]" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("is_terminal", [True, False])
+    def test_clear_clears_the_screen_only_on_a_terminal_and_keeps_the_history(
+        self, monkeypatch, make_agent, capsys, is_terminal
+    ):
+        # capsys replaces stdout with a capture object, which is never a terminal.
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: is_terminal)
+        agent = make_agent()
+
+        run_repl(monkeypatch, agent, self.inputs("a", "/clear", "b"))
+
+        assert len(agent.context.items) == 4  # "b" was sent after "a" and its reply
+        printed_codes = "\033[2J\033[3J\033[H" in capsys.readouterr().out
+        assert printed_codes is is_terminal
+
+    def test_help_lists_every_registered_command(self, monkeypatch, make_agent, capsys):
         run_repl(monkeypatch, make_agent(), self.inputs("/help"))
 
         out = capsys.readouterr().out
-        for name in ("/retry", "/undo", "/model", "/effort"):
+        for name, cmd in COMMANDS.items():
             assert name in out
+            assert cmd.description in out
 
 
 class TestCommandRegistry:
@@ -155,6 +187,36 @@ class TestCommandRegistry:
         run_repl(monkeypatch, make_agent(), ["/quiet", "/exit"])
 
         assert "[" not in capsys.readouterr().out
+
+    def test_a_failing_command_is_reported_and_the_session_survives(
+        self, monkeypatch, make_agent, capsys
+    ):
+        def save(repl, args):
+            raise OSError("disk full")
+
+        monkeypatch.setitem(COMMANDS, "/save", Command(save, "test"))
+        agent = make_agent()
+
+        run_repl(monkeypatch, agent, ["hi", "/save x.md", "/exit"])
+
+        out = capsys.readouterr().out
+        assert "[Command error: OSError: disk full]" in out
+        assert len(agent.context.items) == 2  # the conversation is still there
+        assert out.endswith("Bye.\n")
+
+    def test_ctrl_c_in_a_command_cancels_only_that_command(
+        self, monkeypatch, make_agent, capsys
+    ):
+        def slow(repl, args):
+            raise KeyboardInterrupt
+
+        monkeypatch.setitem(COMMANDS, "/slow", Command(slow, "test"))
+
+        run_repl(monkeypatch, make_agent(), ["/slow", "/exit"])
+
+        out = capsys.readouterr().out
+        assert "[Cancelled]" in out
+        assert out.endswith("Bye.\n")
 
     def test_registering_a_name_twice_is_an_error(self):
         with pytest.raises(ValueError, match="already registered: /help"):
