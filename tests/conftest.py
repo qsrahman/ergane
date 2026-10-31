@@ -4,8 +4,11 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+from openai import OpenAI
 
 from fake_api import FakeResponsesHandler
+from helpers import make_config
+from muagent.agent import Agent
 
 
 @pytest.fixture(autouse=True)
@@ -42,3 +45,19 @@ def fake_server() -> Iterator[ThreadingHTTPServer]:
     yield server
     server.shutdown()
     server.server_close()
+
+
+@pytest.fixture
+def client(fake_server: ThreadingHTTPServer) -> OpenAI:
+    host, port = fake_server.server_address[:2]
+    return OpenAI(api_key="test", base_url=f"http://{host}:{port}/v1", max_retries=0)
+
+
+@pytest.fixture
+def make_agent(client: OpenAI):
+    """Build an Agent wired to the fake server, with config from the given values."""
+
+    def make(**values) -> Agent:
+        return Agent(make_config(**values), client)
+
+    return make

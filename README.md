@@ -50,7 +50,7 @@ Environment variables take precedence over both files. Keys that aren't settings
 uv run muagent
 ```
 
-`uv run python -m muagent.main` also works.
+`uv run python -m muagent` also works.
 
 Type a prompt at `>` and press Enter. To quit, use `/exit`, `/quit`, Ctrl-D, or Ctrl-C at the prompt.
 
@@ -60,7 +60,7 @@ Type a prompt at `>` and press Enter. To quit, use `/exit`, `/quit`, Ctrl-D, or 
 | `/retry`          | Resend the last prompt; if its reply was saved, it is replaced                   |
 | `/undo`           | Remove the last exchange from the history                                        |
 | `/model [NAME]`   | Show the model, or switch to `NAME` for the rest of the session                  |
-| `/effort [LEVEL]` | Show the reasoning effort, or set it (`none` … `max`, or `default` to send none) |
+| `/effort [LEVEL]` | Show the reasoning effort, or set it (`none` … `max`, or `default` to leave it out) |
 | `/reset`          | Clear the conversation history and start fresh                                   |
 | `/clear`          | Clear the terminal screen; the history is kept                                   |
 | `/exit`, `/quit`  | Quit                                                                             |
