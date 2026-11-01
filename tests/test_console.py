@@ -22,7 +22,7 @@ class TestSanitize:
     def test_notices_are_sanitized(self, monkeypatch, capsys):
         agent = Agent(make_config())
 
-        def fail(prompt: str, on_text=None, on_notice=None) -> None:
+        def fail(prompt: str, on_text=None, on_notice=None, confirm=None) -> None:
             raise TurnError("Response failed: \x1b[2Jboom")
 
         monkeypatch.setattr(agent, "run_turn", fail)

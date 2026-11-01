@@ -441,6 +441,75 @@ class TestAgentToolLoop:
         assert "\n" not in result
         assert len(result) == len("→ ") + NOTICE_CHARS
 
+    def test_a_tool_that_is_not_read_only_is_denied_unless_confirmed(
+        self, make_agent, fake_server, streaming
+    ):
+        ran: list[str] = []
+
+        def read_file(path: str) -> str:
+            """Read a text file."""
+            ran.append(path)
+            return "contents"
+
+        agent = make_agent(
+            tools=[Tool.from_function(read_file, read_only=False)], STREAMING=streaming
+        )
+        notices: list[str] = []
+
+        agent.run_turn("tool_call", on_notice=notices.append)
+
+        # Nothing ran; the model was told, and the turn went on to its reply.
+        assert ran == []
+        assert fake_server.requests[1]["input"][-1]["output"] == (
+            "The user denied this call."
+        )
+        assert notices[-1] == "→ The user denied this call."
+        assert agent.context.items[-1] == {"role": "assistant", "content": TEXT}
+
+    def test_confirm_is_given_the_tool_and_the_full_arguments(
+        self, make_agent, streaming
+    ):
+        agent = make_agent(
+            tools=[Tool.from_function(read_file, read_only=False)], STREAMING=streaming
+        )
+        asked: list[tuple[str, str]] = []
+
+        def confirm(tool: Tool, arguments: str) -> bool:
+            asked.append((tool.name, arguments))
+            return True
+
+        agent.run_turn("tool_call", confirm=confirm)
+
+        assert asked == [("read_file", FUNCTION_CALL["arguments"])]
+        assert agent.context.items[2] == FIRST_OUTPUT
+
+    def test_each_call_is_confirmed_on_its_own(self, make_agent, streaming):
+        agent = make_agent(
+            tools=[Tool.from_function(read_file, read_only=False)], STREAMING=streaming
+        )
+        answers = iter([True, False])
+
+        agent.run_turn(
+            "tool_call_parallel", confirm=lambda tool, arguments: next(answers)
+        )
+
+        outputs = [
+            item["output"]
+            for item in agent.context.items
+            if item.get("type") == "function_call_output"
+        ]
+        assert outputs == ["contents of notes.txt", "The user denied this call."]
+
+    def test_a_read_only_tool_is_never_confirmed(self, make_agent, streaming):
+        agent = make_agent(tools=[READ_FILE], STREAMING=streaming)
+
+        def confirm(tool: Tool, arguments: str) -> bool:
+            raise AssertionError("asked about a read-only tool")
+
+        agent.run_turn("tool_call", confirm=confirm)
+
+        assert agent.context.items[2] == FIRST_OUTPUT
+
     def test_a_turn_that_outgrows_the_context_budget_is_stopped_and_not_saved(
         self, make_agent, fake_server, streaming
     ):

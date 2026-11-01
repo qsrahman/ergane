@@ -142,6 +142,7 @@ class Agent:
         prompt: str,
         on_text: Callable[[str], None] = lambda text: None,
         on_notice: Callable[[str], None] = lambda text: None,
+        confirm: Callable[[Tool, str], bool] = lambda tool, arguments: False,
     ) -> None:
         """Send one user message, passing the reply text to on_text.
 
@@ -158,6 +159,9 @@ class Agent:
                 streaming, or once with the whole reply otherwise.
             on_notice: Called with status messages, such as old turns being
                 dropped to fit the token budget, and each tool call as it is run.
+            confirm: Called with a tool that is not read-only and the model's
+                arguments for it, before it runs; it returns whether to allow
+                the call. The default denies every such call.
 
         Raises:
             TurnError: If the response is incomplete, failed, refused or has no
@@ -180,7 +184,7 @@ class Agent:
                 ResponseInputParam,
                 [item.model_dump(exclude_none=True) for item in response.output],
             )
-            items += self._run_tools(calls, on_notice)
+            items += self._run_tools(calls, on_notice, confirm)
             used = self._size(response, items, sent)
             if used > self.config.max_context_tokens:
                 raise TurnError(
@@ -216,16 +220,19 @@ class Agent:
         self,
         calls: Sequence[ResponseFunctionToolCall],
         on_notice: Callable[[str], None],
+        confirm: Callable[[Tool, str], bool],
     ) -> ResponseInputParam:
         """Run the model's tool calls and build the outputs to send back.
 
-        Every call gets an output, even a failed or unknown one: the output is
-        text for the model, which can read the error and correct its call.
+        Every call gets an output, even a failed, unknown or denied one: the output
+        is text for the model, which can read the error and correct its call. A
+        tool that is not read-only runs only if `confirm` allows the call.
 
         Args:
             calls: The function calls in the model's response.
             on_notice: Called with each call before it is run, and with its result
                 after, each shortened to one line.
+            confirm: Asked before each call to a tool that is not read-only.
 
         Returns:
             One function_call_output item per call, in order.
@@ -237,8 +244,10 @@ class Agent:
             if tool is None:
                 known = ", ".join(self.tools) or "none"
                 output = f"Unknown tool: {call.name}. Available tools: {known}."
-            else:
+            elif tool.read_only or confirm(tool, call.arguments):
                 output = tool.call(call.arguments)
+            else:
+                output = "The user denied this call."
             on_notice(f"→ {_shorten(output)}")
             outputs.append(
                 {

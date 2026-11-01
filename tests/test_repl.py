@@ -3,6 +3,8 @@ import pytest
 from fake_api import REFUSAL, STREAM_ERROR, TEXT
 from helpers import make_config, make_context, run_repl
 from muagent.agent import Agent
+from muagent.commands import COMMANDS
+from muagent.repl import Repl
 from muagent.tools import Tool
 
 
@@ -19,7 +21,9 @@ class TestRepl:
             agent = Agent(make_config())
             prompts: list[str] = []
 
-            def fake_run_turn(prompt: str, on_text=None, on_notice=None) -> None:
+            def fake_run_turn(
+                prompt: str, on_text=None, on_notice=None, confirm=None
+            ) -> None:
                 prompts.append(prompt)
                 if turn:
                     turn(prompt, agent.context)
@@ -53,7 +57,7 @@ class TestRepl:
     ):
         agent = Agent(make_config())
 
-        def turn(prompt: str, on_text, on_notice) -> None:
+        def turn(prompt: str, on_text, on_notice, confirm) -> None:
             on_text("line\n")
 
         monkeypatch.setattr(agent, "run_turn", turn)
@@ -66,7 +70,7 @@ class TestRepl:
     ):
         agent = Agent(make_config())
 
-        def turn(prompt: str, on_text, on_notice) -> None:
+        def turn(prompt: str, on_text, on_notice, confirm) -> None:
             on_text("partial")
             raise KeyboardInterrupt
 
@@ -148,3 +152,62 @@ def test_stream_error_notice_follows_the_partial_reply(monkeypatch, make_agent, 
 
     out = capsys.readouterr().out
     assert f"Hello\n[Stream error: server_error: {STREAM_ERROR}]\n" in out
+
+
+class TestReplConfirm:
+    @pytest.fixture
+    def run(self, monkeypatch, make_agent):
+        """Run "tool_call" against a tool that is not read-only, answering its
+        question with `answer`; returns the paths the tool was run with."""
+
+        def run(answer) -> list[str]:
+            ran: list[str] = []
+
+            def read_file(path: str) -> str:
+                """Read a text file."""
+                ran.append(path)
+                return "contents"
+
+            agent = make_agent(tools=[Tool.from_function(read_file, read_only=False)])
+            run_repl(monkeypatch, agent, ["tool_call", answer, "/exit"])
+            return ran
+
+        return run
+
+    @pytest.mark.parametrize("answer", ["y", " YES "])
+    def test_yes_lets_the_tool_run(self, run, answer):
+        assert run(answer) == ["notes.txt"]
+
+    @pytest.mark.parametrize("answer", ["", "n", "no", "yep", "ok"])
+    def test_anything_else_denies_it(self, run, answer):
+        assert run(answer) == []
+
+    def test_end_of_input_denies_it(self, run):
+        assert run(EOFError()) == []
+
+    def test_ctrl_c_at_the_question_cancels_the_turn(self, run, capsys):
+        assert run(KeyboardInterrupt()) == []
+        assert "[Cancelled]" in capsys.readouterr().out
+
+    def test_the_question_shows_the_full_arguments(self, run, capsys):
+        run("n")
+
+        out = capsys.readouterr().out
+        assert 'Allow read_file with these arguments?\n{"path": "notes.txt"}\n' in out
+
+    def test_long_arguments_are_not_shortened_and_are_sanitized(
+        self, monkeypatch, capsys
+    ):
+        def read_file(path: str) -> str:
+            """Read a text file."""
+            return ""
+
+        tool = Tool.from_function(read_file, read_only=False)
+        monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+        arguments = '{"path": "' + "a" * 300 + '\x1b]52;c;x"}'
+
+        Repl(Agent(make_config()), COMMANDS).confirm(tool, arguments)
+
+        out = capsys.readouterr().out
+        assert "a" * 300 in out
+        assert "\x1b" not in out
