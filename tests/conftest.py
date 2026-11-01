@@ -1,5 +1,5 @@
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -10,6 +10,7 @@ from fake_api import FakeResponsesHandler
 from helpers import make_config
 from muagent.agent import Agent
 from muagent.config import Config
+from muagent.tools import Tool
 
 
 @pytest.fixture(autouse=True)
@@ -51,7 +52,7 @@ def client(fake_server: ThreadingHTTPServer) -> OpenAI:
 def make_agent(client: OpenAI):
     """Build an Agent wired to the fake server, with config from the given values."""
 
-    def make(**values) -> Agent:
-        return Agent(make_config(**values), client)
+    def make(*, tools: Sequence[Tool] = (), **values) -> Agent:
+        return Agent(make_config(**values), client, tools)
 
     return make

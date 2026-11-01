@@ -3,6 +3,7 @@ import pytest
 from fake_api import REFUSAL, STREAM_ERROR, TEXT
 from helpers import make_config, make_context, run_repl
 from muagent.agent import Agent
+from muagent.tools import Tool
 
 
 class TestRepl:
@@ -116,6 +117,21 @@ class TestReplRendering:
         run_repl(monkeypatch, make_agent(STREAMING=streaming), [prompt, "/exit"])
 
         assert f"\n{notice}\n" in capsys.readouterr().out
+
+    def test_a_tool_call_is_shown_as_a_notice_before_the_reply(
+        self, monkeypatch, make_agent, capsys, streaming
+    ):
+        def read_file(path: str) -> str:
+            """Read a text file."""
+            return "contents"
+
+        agent = make_agent(tools=[Tool.from_function(read_file)], STREAMING=streaming)
+
+        run_repl(monkeypatch, agent, ["tool_call", "/exit"])
+
+        out = capsys.readouterr().out
+        shown = '[read_file({"path": "notes.txt"})]\n[→ contents]'
+        assert f"\n{shown}\n{TEXT}\n\nBye." in out
 
     def test_reports_trimmed_context(self, monkeypatch, make_agent, capsys, streaming):
         agent = make_agent(STREAMING=streaming, MAX_CONTEXT_TOKENS=1)

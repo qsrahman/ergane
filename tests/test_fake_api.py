@@ -31,11 +31,11 @@ def continue_after_tool(prompt: str, response, output: str = "file contents") ->
     return [
         {"role": "user", "content": prompt},
         *(item.model_dump(exclude_none=True) for item in response.output),
-        {
-            "type": "function_call_output",
-            "call_id": FUNCTION_CALL["call_id"],
-            "output": output,
-        },
+        *(
+            {"type": "function_call_output", "call_id": call.call_id, "output": output}
+            for call in response.output
+            if call.type == "function_call"
+        ),
     ]
 
 
@@ -76,6 +76,33 @@ class TestToolScenarios:
             "reasoning",
             "function_call",
             "function_call_output",
+        ]
+
+    def test_two_calls_in_one_response_are_both_answered_in_the_next_request(
+        self, client, fake_server, streaming
+    ):
+        prompt = "tool_call_parallel"
+        first = respond(client, [{"role": "user", "content": prompt}], streaming)
+
+        assert [item.type for item in first.output] == ["function_call"] * 2
+        assert [
+            item.call_id for item in first.output if item.type == "function_call"
+        ] == [
+            "call_1",
+            "call_2",
+        ]
+
+        second = respond(client, continue_after_tool(prompt, first), streaming)
+
+        assert second.output_text == TEXT
+        sent = fake_server.requests[-1]["input"]
+        assert [
+            item.get("call_id")
+            for item in sent
+            if item.get("type") == "function_call_output"
+        ] == [
+            "call_1",
+            "call_2",
         ]
 
     def test_a_tool_loop_calls_again_after_every_output(self, client, streaming):

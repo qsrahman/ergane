@@ -33,6 +33,12 @@ FUNCTION_CALL = {
     "arguments": '{"path": "notes.txt"}',
     "status": "completed",
 }
+SECOND_FUNCTION_CALL = {
+    **FUNCTION_CALL,
+    "id": "fc_2",
+    "call_id": "call_2",
+    "arguments": '{"path": "todo.txt"}',
+}
 
 
 def make_response(status: str | None, output: list | None = None, **extra) -> dict:
@@ -50,6 +56,14 @@ def make_response(status: str | None, output: list | None = None, **extra) -> di
         "error": None,
         **extra,
     }
+
+
+# What each tool scenario's first response contains (tool_loop uses the default).
+TOOL_CALLS = {
+    "tool_call": [FUNCTION_CALL],
+    "tool_call_reasoning": [REASONING_ITEM, FUNCTION_CALL],
+    "tool_call_parallel": [FUNCTION_CALL, SECOND_FUNCTION_CALL],
+}
 
 
 def last_user_prompt(items: list[dict]) -> str:
@@ -76,12 +90,8 @@ def has_tool_output(items: list[dict]) -> bool:
 
 def final_event(scenario: str, tool_output_sent: bool = False) -> tuple[str, dict]:
     """Return the terminal event type and response for a scenario."""
-    if scenario == "tool_loop" or (
-        scenario in ("tool_call", "tool_call_reasoning") and not tool_output_sent
-    ):
-        calls = [FUNCTION_CALL]
-        if scenario == "tool_call_reasoning":
-            calls = [REASONING_ITEM, FUNCTION_CALL]
+    if scenario == "tool_loop" or (scenario in TOOL_CALLS and not tool_output_sent):
+        calls = TOOL_CALLS.get(scenario, [FUNCTION_CALL])
         return "response.completed", make_response("completed", calls)
     if scenario == "incomplete":
         return "response.incomplete", make_response(
@@ -116,8 +126,9 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     `error` event, with or without a code, after the first delta, then the stream
     ends), "tool_call" (calls a tool until its output is in the input, then
     replies with text), "tool_call_reasoning" (the same, with a reasoning item
-    before each call), "tool_loop" (calls a tool every time), or anything else for
-    a completed response.
+    before each call), "tool_call_parallel" (two calls in one response),
+    "tool_loop" (calls a tool every time), or anything else for a completed
+    response.
     """
 
     def log_message(self, format, *args):

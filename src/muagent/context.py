@@ -2,7 +2,25 @@
 
 import json
 
-from openai.types.responses import ResponseInputParam
+from openai.types.responses import ResponseInputItemParam, ResponseInputParam
+
+
+def estimate_tokens(item: ResponseInputItemParam) -> int:
+    """Estimate the number of tokens in one history item.
+
+    About 4 bytes of UTF-8 per token on average: tokenizer-agnostic, so it suits
+    any backend, and counting bytes keeps non-Latin text from being undercounted.
+    The opaque encrypted_content of a reasoning item is left out: the API counts
+    it as the few tokens of reasoning it holds, not as its length.
+
+    Args:
+        item: One item of the conversation history.
+
+    Returns:
+        The estimated number of tokens.
+    """
+    counted = {k: v for k, v in item.items() if k != "encrypted_content"}
+    return len(json.dumps(counted, ensure_ascii=False).encode()) // 4 + 1
 
 
 class Context:
@@ -37,16 +55,7 @@ class Context:
         self.last_prompt = prompt
         self.last_saved = False
         items: ResponseInputParam = [*self.items, {"role": "user", "content": prompt}]
-        # ~4 bytes of UTF-8 per token on average: tokenizer-agnostic, so it suits any
-        # backend, and counting bytes keeps non-Latin text from being undercounted.
-        # The opaque encrypted_content of a reasoning item is left out: the API counts
-        # it as the few tokens of reasoning it holds, not as its length.
-        counts = []
-        for item in items:
-            counted = {k: v for k, v in item.items() if k != "encrypted_content"}
-            counts.append(
-                len(json.dumps(counted, ensure_ascii=False).encode()) // 4 + 1
-            )
+        counts = [estimate_tokens(item) for item in items]
         total = sum(counts)
         user_turn_starts = [
             i

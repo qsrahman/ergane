@@ -2,7 +2,7 @@ import pytest
 from openai.types.responses import ResponseInputParam
 
 from helpers import make_context
-from muagent.context import Context
+from muagent.context import Context, estimate_tokens
 
 ROOMY = 10_000  # a token budget that the tests which don't trim never reach
 
@@ -235,3 +235,30 @@ class TestContextToolTurns:
         assert dict(draft[0]).get("role") == "user"  # never starts mid-turn
         assert ("function_call_output" in kinds) == ("function_call" in kinds)
         assert ("reasoning" in kinds) == ("function_call" in kinds)
+
+
+class TestEstimateTokens:
+    def test_it_grows_with_the_text(self):
+        short = estimate_tokens({"role": "user", "content": "a" * 40})
+        long = estimate_tokens({"role": "user", "content": "a" * 4000})
+
+        assert long - short == 990  # 3,960 more bytes, 4 bytes to a token
+
+    def test_non_latin_text_counts_by_its_bytes(self):
+        latin = estimate_tokens({"role": "user", "content": "a" * 100})
+        cjk = estimate_tokens({"role": "user", "content": "字" * 100})
+
+        assert cjk > 2 * latin
+
+    def test_the_encrypted_content_of_a_reasoning_item_is_not_counted(self):
+        def reasoning(blob: str) -> int:
+            return estimate_tokens(
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [],
+                    "encrypted_content": blob,
+                }
+            )
+
+        assert reasoning("x" * 100_000) == reasoning("")

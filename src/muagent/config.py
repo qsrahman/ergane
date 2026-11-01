@@ -8,6 +8,8 @@ from openai.types.shared import ReasoningEffort
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from muagent.tools import Level
+
 
 class Config(BaseSettings):
     """Configuration for the AI agent."""
@@ -40,6 +42,11 @@ class Config(BaseSettings):
         default=25,
         gt=0,
         validation_alias="MAX_TURNS",
+    )
+    # Which tools the model may use: none, or up to this much access.
+    tools: Level = Field(
+        default="read",
+        validation_alias="TOOLS",
     )
     # None sends no reasoning setting, so the model's default applies.
     # Non-reasoning models reject any effort with HTTP 400.

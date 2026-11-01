@@ -5,6 +5,7 @@ import pytest
 from fake_api import TEXT
 from helpers import run_repl
 from muagent.commands import COMMANDS, Command, command
+from muagent.tools import Tool
 
 
 class TestCommandsWithAgent:
@@ -220,4 +221,105 @@ class TestCommandRegistry:
 
     def test_registering_a_name_twice_is_an_error(self):
         with pytest.raises(ValueError, match="already registered: /help"):
-            command("/help", "again")(lambda repl, args: None)
+            command("/help")(lambda repl, args: None)
+
+
+class TestCommandDefinition:
+    @pytest.mark.parametrize(
+        "name", ["help", "/Reset", "/two words", "", "/", "/a_b", "/-x", "/1x"]
+    )
+    def test_an_invalid_name_is_rejected(self, name):
+        # Otherwise "help" would hijack a plain prompt, and "/Reset" could never be
+        # typed: input is lowercased before the lookup.
+        with pytest.raises(ValueError, match="Command names are"):
+            command(name)
+
+    def test_a_handler_needs_a_docstring(self, monkeypatch):
+        registry: dict = {}
+        monkeypatch.setattr("muagent.commands.COMMANDS", registry)
+
+        with pytest.raises(ValueError, match="Command /probe needs a docstring"):
+            command("/probe")(lambda repl, args: None)
+
+        assert registry == {}
+
+    def test_the_description_is_the_first_line_of_the_docstring(self, monkeypatch):
+        registry: dict = {}
+        monkeypatch.setattr("muagent.commands.COMMANDS", registry)
+
+        @command("/probe")
+        def probe(repl, args):
+            """Do a thing.
+
+            More detail, which /help does not show.
+            """
+
+        assert registry["/probe"] == Command(probe, "Do a thing.")
+
+    def test_every_builtin_command_has_a_short_one_line_description(self):
+        for name, cmd in COMMANDS.items():
+            assert cmd.description, name
+            assert len(cmd.description) < 90, name
+
+
+def look(path: str) -> str:
+    """Look at a file."""
+    return path
+
+
+def save(path: str) -> str:
+    """Save a file."""
+    return path
+
+
+LOOK = Tool.from_function(look)
+SAVE = Tool.from_function(save, access="write")
+
+
+class TestToolsCommand:
+    def test_it_shows_the_level_and_the_tools_offered(
+        self, monkeypatch, make_agent, capsys
+    ):
+        run_repl(monkeypatch, make_agent(tools=[LOOK]), ["/tools", "/exit"])
+
+        assert "[Tools: read (look)]" in capsys.readouterr().out
+
+    def test_off_stops_offering_tools(
+        self, monkeypatch, make_agent, fake_server, capsys
+    ):
+        agent = make_agent(tools=[LOOK])
+
+        run_repl(monkeypatch, agent, ["/TOOLS Off", "hi", "/exit"])
+
+        assert "[Tools: off (none)]" in capsys.readouterr().out
+        assert "tools" not in fake_server.requests[0]
+
+    def test_a_level_offers_the_registered_tools_up_to_it(
+        self, monkeypatch, make_agent, fake_server, capsys
+    ):
+        monkeypatch.setattr("muagent.tools.TOOLS", {"look": LOOK, "save": SAVE})
+        agent = make_agent(tools=[])
+
+        run_repl(
+            monkeypatch,
+            agent,
+            ["/tools read", "hi", "/tools write", "/tools off", "/exit"],
+        )
+
+        out = capsys.readouterr().out
+        assert "[Tools: read (look)]" in out
+        assert "[Tools: write (look, save)]" in out
+        assert "[Tools: off (none)]" in out
+        assert fake_server.requests[0]["tools"] == [LOOK.param()]
+
+    def test_an_unknown_level_changes_nothing(self, monkeypatch, make_agent, capsys):
+        agent = make_agent(tools=[LOOK])
+
+        run_repl(monkeypatch, agent, ["/tools everything", "/exit"])
+
+        assert (
+            "[Unknown level: everything. Use off, read, write, execute.]"
+            in capsys.readouterr().out
+        )
+        assert list(agent.tools) == ["look"]
+        assert agent.config.tools == "read"
