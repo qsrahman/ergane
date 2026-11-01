@@ -16,7 +16,7 @@ from pydantic import TypeAdapter, ValidationError
 from pydantic.json_schema import GenerateJsonSchema
 
 # Longer output is cut: it all goes into the next request.
-MAX_OUTPUT_CHARS = 20_000
+MAX_OUTPUT_CHARS = 20 * 1024
 
 
 class _NoTitles(GenerateJsonSchema):
