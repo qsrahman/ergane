@@ -71,6 +71,11 @@ class TestConsole:
 
         assert capsys.readouterr().out == "[failed: [2Jboom]\n"
 
+    def test_notice_text_is_flattened_to_one_line(self, capsys):
+        Console().notice("line one\nline two\n\tindented")
+
+        assert capsys.readouterr().out == "[line one line two indented]\n"
+
     def test_end_line_and_blank(self, capsys):
         console = Console()
         console.end_line()  # nothing to finish
@@ -91,3 +96,12 @@ class TestConsole:
 
         printed_codes = "\033[2J\033[3J\033[H" in capsys.readouterr().out
         assert printed_codes is is_terminal
+
+    def test_clear_puts_the_cursor_at_a_line_start(self, capsys, monkeypatch):
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+        console = Console()
+        console.write("partial")
+
+        console.clear()
+
+        assert console.at_line_start

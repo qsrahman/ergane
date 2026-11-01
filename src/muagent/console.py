@@ -60,13 +60,15 @@ class Console:
         """Print a bracketed status line, starting a new line if needed.
 
         Args:
-            text: The status message.
+            text: The status message; it is flattened to one line, so text from
+                the server cannot break out of the brackets.
         """
         self.end_line()
-        self.write(f"[{text}]\n")
+        self.write(f"[{' '.join(sanitize(text).split())}]\n")
 
     def clear(self) -> None:
         """Clear the screen and scrollback, like `clear`; the history is kept."""
         # Not when output is redirected, where the escape codes would be garbage.
         if sys.stdout.isatty():
             print("\033[2J\033[3J\033[H", end="", flush=True)
+            self.at_line_start = True

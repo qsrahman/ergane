@@ -42,8 +42,9 @@ def _shorten(text: str) -> str:
 class TurnError(Exception):
     """A turn that ended without a normal reply.
 
-    Nothing is saved to the history, except that a partial reply is kept when the
-    response ended incomplete after some text, which the user has already seen.
+    History is left untouched, with two exceptions: an incomplete response after
+    some text keeps the partial reply the user has already seen, and hitting the
+    max_turns cap keeps the whole turn plus a closing note.
     """
 
 
