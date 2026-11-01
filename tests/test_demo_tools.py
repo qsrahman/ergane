@@ -1,7 +1,7 @@
 import re
 
 from muagent.demo_tools import add, get_time
-from muagent.tools import select
+from muagent.tools import TOOLS
 
 
 def test_add():
@@ -25,5 +25,6 @@ def test_an_unknown_zone_comes_back_as_text_for_the_model():
     assert "Tokyo" in result
 
 
-def test_they_are_registered_as_read_tools():
-    assert {"add", "get_time"} <= {tool.name for tool in select("read")}
+def test_they_are_registered_as_read_only_tools():
+    assert TOOLS["add"].read_only
+    assert TOOLS["get_time"].read_only

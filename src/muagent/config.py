@@ -8,12 +8,12 @@ from openai.types.shared import ReasoningEffort
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from muagent.tools import Level
-
 
 class Config(BaseSettings):
     """Configuration for the AI agent."""
 
+    # A field without an alias is read from the environment variable of the same
+    # name, in any case: max_turns from MAX_TURNS.
     # Config files may hold keys that aren't settings; ignore them, don't fail.
     model_config = SettingsConfigDict(extra="ignore")
     model: str = Field(
@@ -32,27 +32,18 @@ class Config(BaseSettings):
     max_context_tokens: int = Field(
         default=64 * 1024,
         gt=0,
-        validation_alias="MAX_CONTEXT_TOKENS",
     )
     streaming: bool = Field(
         default=True,
-        validation_alias="STREAMING",
     )
     max_turns: int = Field(
         default=25,
         gt=0,
-        validation_alias="MAX_TURNS",
-    )
-    # Which tools the model may use: none, or up to this much access.
-    tools: Level = Field(
-        default="read",
-        validation_alias="TOOLS",
     )
     # None sends no reasoning setting, so the model's default applies.
     # Non-reasoning models reject any effort with HTTP 400.
     reasoning_effort: ReasoningEffort | None = Field(
         default=None,
-        validation_alias="REASONING_EFFORT",
     )
 
 

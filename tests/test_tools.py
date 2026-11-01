@@ -5,7 +5,7 @@ import pytest
 from pydantic import Field
 
 from muagent import tools
-from muagent.tools import MAX_OUTPUT_CHARS, Tool, select, tool
+from muagent.tools import MAX_OUTPUT_CHARS, Tool, tool
 
 
 def add(a: int, b: int = 1) -> str:
@@ -68,34 +68,23 @@ class TestFromFunction:
             "type": "integer",
         }
 
-    @pytest.mark.parametrize("access", ["admin", "off", ""])
-    def test_an_access_level_that_is_not_read_write_or_execute_is_rejected(
-        self, access
-    ):
-        with pytest.raises(
-            ValueError, match="access must be one of read, write, execute"
-        ):
-            Tool.from_function(add, access=access)  # type: ignore[arg-type]
+    def test_a_tool_is_read_only_unless_declared_otherwise(self):
+        assert Tool.from_function(add).read_only is True
+        assert Tool.from_function(add, read_only=False).read_only is False
 
-    @pytest.mark.parametrize(
-        "param", ["json", "copy", "schema", "validate", "model_config", "_secret"]
-    )
-    def test_a_parameter_name_that_pydantic_reserves_is_rejected(self, param):
-        # Without this, json/copy/schema warn at every start-up, model_config can
-        # never be passed, and an underscore name is silently dropped.
-        def function(**kwargs: str) -> str:
+    def test_parameter_names_that_clash_with_pydantic_attributes_work(self):
+        def function(json: str, copy: str = "c", _secret: str = "s") -> str:
             """Doc."""
-            return ""
+            return f"{json}{copy}{_secret}"
 
-        # Give it a signature with one parameter of the name under test.
-        parameter = inspect.Parameter(
-            param, inspect.Parameter.POSITIONAL_OR_KEYWORD, default="x", annotation=str
-        )
-        function.__signature__ = inspect.Signature([parameter], return_annotation=str)  # pyright: ignore[reportFunctionMemberAccess]
-        function.__annotations__ = {param: str, "return": str}
+        defined = Tool.from_function(function)
 
-        with pytest.raises(TypeError, match=f"parameter '{param}' cannot be used"):
-            Tool.from_function(function)
+        assert list(defined.param()["parameters"]["properties"]) == [  # type: ignore[index]
+            "json",
+            "copy",
+            "_secret",
+        ]
+        assert defined.call('{"json": "j", "_secret": "t"}') == "jct"
 
     @pytest.mark.parametrize(
         ("make", "error", "message"),
@@ -147,11 +136,11 @@ class TestCall:
     @pytest.mark.parametrize(
         ("arguments", "expected"),
         [
-            ("{}", "Invalid arguments: a: Field required"),
+            ("{}", "Invalid arguments: a: Missing required argument"),
             ('{"a": "x"}', "Invalid arguments: a: Input should be a valid integer"),
             (
                 '{"a": 1, "c": 2}',
-                "Invalid arguments: c: Extra inputs are not permitted",
+                "Invalid arguments: c: Unexpected keyword argument",
             ),
         ],
     )
@@ -218,13 +207,19 @@ class TestRegistry:
         assert registry == {"ping": ping}
         assert ping.function() == "pong"
 
-    def test_the_decorator_can_set_the_access_level(self, registry):
-        @tool(access="write")
+    def test_the_decorator_can_declare_a_tool_not_read_only(self, registry):
+        @tool
+        def look() -> str:
+            """Look."""
+            return "seen"
+
+        @tool(read_only=False)
         def save() -> str:
             """Save."""
             return "saved"
 
-        assert registry["save"].access == "write"
+        assert registry["look"].read_only is True
+        assert registry["save"].read_only is False
 
     def test_registering_a_name_twice_is_an_error(self, registry):
         @tool
@@ -234,28 +229,3 @@ class TestRegistry:
 
         with pytest.raises(ValueError, match="already registered: ping"):
             tool(ping.function)
-
-    def test_select_offers_the_tools_up_to_a_level(self, registry):
-        @tool
-        def look() -> str:
-            """Look."""
-            return ""
-
-        @tool(access="write")
-        def save() -> str:
-            """Save."""
-            return ""
-
-        @tool(access="execute")
-        def run() -> str:
-            """Run."""
-            return ""
-
-        names = {level: [t.name for t in select(level)] for level in tools.LEVELS}
-
-        assert names == {
-            "off": [],
-            "read": ["look"],
-            "write": ["look", "save"],
-            "execute": ["look", "save", "run"],
-        }

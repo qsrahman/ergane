@@ -23,31 +23,49 @@ def test_main_exits_on_invalid_config(capsys: pytest.CaptureFixture[str]):
     assert "OPENAI_API_KEY" in capsys.readouterr().err
 
 
+def test_main_names_a_bad_setting_by_its_environment_variable(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    monkeypatch.setenv("MAX_TURNS", "0")
+
+    with pytest.raises(SystemExit):
+        main()
+
+    assert "  - MAX_TURNS:" in capsys.readouterr().err
+
+
+def test_settings_are_read_from_the_environment_in_any_case(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from muagent.config import load_config
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    monkeypatch.setenv("MAX_TURNS", "7")
+    monkeypatch.setenv("streaming", "false")
+
+    config = load_config()
+
+    assert (config.max_turns, config.streaming) == (7, False)
+
+
 class RecordingRepl:
     """Stands in for Repl so a test can see which Agent main() built."""
 
     agent = None
 
-    def __init__(self, agent):
+    def __init__(self, agent, commands):
         RecordingRepl.agent = agent
 
     def run(self):
         pass
 
 
-@pytest.mark.parametrize(
-    ("setting", "expected"),
-    [(None, ["add", "get_time"]), ("read", ["add", "get_time"]), ("off", [])],
-)
-def test_main_gives_the_agent_the_tools_the_setting_allows(
-    monkeypatch: pytest.MonkeyPatch, setting, expected
-):
+def test_main_gives_the_agent_the_registered_tools(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test")
-    if setting:
-        monkeypatch.setenv("TOOLS", setting)
     monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
 
     main()
 
     assert RecordingRepl.agent is not None
-    assert list(RecordingRepl.agent.tools) == expected
+    assert list(RecordingRepl.agent.tools) == ["add", "get_time"]

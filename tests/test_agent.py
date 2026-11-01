@@ -315,7 +315,7 @@ class TestAgentToolLoop:
         agent.run_turn("tool_call")
 
         output = fake_server.requests[1]["input"][-1]["output"]
-        assert output == "Invalid arguments: lines: Field required"
+        assert output == "Invalid arguments: lines: Missing required argument"
 
     @pytest.mark.parametrize(
         ("tools", "available"), [([], "none"), ([Tool.from_function(other)], "other")]

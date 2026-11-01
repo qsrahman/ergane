@@ -7,22 +7,8 @@ from helpers import make_config
 from muagent.config import load_config
 
 
-def test_tools_default_to_read_only():
-    assert make_config().tools == "read"
-
-
-@pytest.mark.parametrize("level", ["off", "read", "write", "execute"])
-def test_the_tools_setting_accepts_each_access_level(level):
-    assert make_config(TOOLS=level).tools == level
-
-
-def test_an_unknown_tools_level_is_a_config_error():
-    with pytest.raises(ValidationError, match="TOOLS"):
-        make_config(TOOLS="all")
-
-
 def test_invalid_reasoning_effort_is_a_config_error():
-    with pytest.raises(ValidationError, match="REASONING_EFFORT"):
+    with pytest.raises(ValidationError, match="reasoning_effort"):
         make_config(REASONING_EFFORT="extreme")
 
 

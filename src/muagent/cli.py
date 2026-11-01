@@ -6,9 +6,10 @@ from pydantic import ValidationError
 # tool modules. Remove demo_tools when the real tools arrive.
 from muagent import demo_tools  # noqa: F401
 from muagent.agent import Agent
+from muagent.commands import COMMANDS
 from muagent.config import load_config
 from muagent.repl import Repl
-from muagent.tools import select
+from muagent.tools import TOOLS
 
 
 def main() -> None:
@@ -22,8 +23,8 @@ def main() -> None:
     except ValidationError as exc:
         print("Configuration error:", file=sys.stderr)
         for error in exc.errors():
-            field = ".".join(str(part) for part in error["loc"])
+            field = ".".join(str(part) for part in error["loc"]).upper()
             print(f"  - {field}: {error['msg']}", file=sys.stderr)
         raise SystemExit(1) from None
 
-    Repl(Agent(config, tools=select(config.tools))).run()
+    Repl(Agent(config, tools=list(TOOLS.values())), COMMANDS).run()

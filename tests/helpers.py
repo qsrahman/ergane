@@ -4,6 +4,7 @@ import pytest
 from openai.types.responses import ResponseInputParam
 
 from muagent.agent import Agent
+from muagent.commands import COMMANDS
 from muagent.config import Config
 from muagent.repl import Repl
 
@@ -17,9 +18,8 @@ def make_context(turns: int) -> ResponseInputParam:
 
 
 def make_config(**values) -> Config:
-    return Config.model_validate(
-        {"OPENAI_API_KEY": "test", "OPENAI_MODEL": "gpt-4o", **values}
-    )
+    # Not model_validate(): only the constructor reads names in any case.
+    return Config(**{"OPENAI_API_KEY": "test", "OPENAI_MODEL": "gpt-4o", **values})  # pyright: ignore[reportCallIssue]
 
 
 def run_repl(monkeypatch: pytest.MonkeyPatch, agent: Agent, inputs: list) -> None:
@@ -36,4 +36,4 @@ def run_repl(monkeypatch: pytest.MonkeyPatch, agent: Agent, inputs: list) -> Non
         return line
 
     monkeypatch.setattr("builtins.input", fake_input)
-    Repl(agent).run()
+    Repl(agent, COMMANDS).run()

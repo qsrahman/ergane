@@ -273,53 +273,20 @@ def save(path: str) -> str:
 
 
 LOOK = Tool.from_function(look)
-SAVE = Tool.from_function(save, access="write")
+SAVE = Tool.from_function(save, read_only=False)
 
 
 class TestToolsCommand:
-    def test_it_shows_the_level_and_the_tools_offered(
+    def test_it_lists_the_tools_offered_and_marks_the_read_only_ones(
         self, monkeypatch, make_agent, capsys
     ):
-        run_repl(monkeypatch, make_agent(tools=[LOOK]), ["/tools", "/exit"])
+        agent = make_agent(tools=[LOOK, SAVE])
 
-        assert "[Tools: read (look)]" in capsys.readouterr().out
+        run_repl(monkeypatch, agent, ["/tools", "/exit"])
 
-    def test_off_stops_offering_tools(
-        self, monkeypatch, make_agent, fake_server, capsys
-    ):
-        agent = make_agent(tools=[LOOK])
+        assert "[Tools: look (read-only), save]" in capsys.readouterr().out
 
-        run_repl(monkeypatch, agent, ["/TOOLS Off", "hi", "/exit"])
+    def test_it_says_when_there_are_none(self, monkeypatch, make_agent, capsys):
+        run_repl(monkeypatch, make_agent(), ["/tools", "/exit"])
 
-        assert "[Tools: off (none)]" in capsys.readouterr().out
-        assert "tools" not in fake_server.requests[0]
-
-    def test_a_level_offers_the_registered_tools_up_to_it(
-        self, monkeypatch, make_agent, fake_server, capsys
-    ):
-        monkeypatch.setattr("muagent.tools.TOOLS", {"look": LOOK, "save": SAVE})
-        agent = make_agent(tools=[])
-
-        run_repl(
-            monkeypatch,
-            agent,
-            ["/tools read", "hi", "/tools write", "/tools off", "/exit"],
-        )
-
-        out = capsys.readouterr().out
-        assert "[Tools: read (look)]" in out
-        assert "[Tools: write (look, save)]" in out
-        assert "[Tools: off (none)]" in out
-        assert fake_server.requests[0]["tools"] == [LOOK.param()]
-
-    def test_an_unknown_level_changes_nothing(self, monkeypatch, make_agent, capsys):
-        agent = make_agent(tools=[LOOK])
-
-        run_repl(monkeypatch, agent, ["/tools everything", "/exit"])
-
-        assert (
-            "[Unknown level: everything. Use off, read, write, execute.]"
-            in capsys.readouterr().out
-        )
-        assert list(agent.tools) == ["look"]
-        assert agent.config.tools == "read"
+        assert "[Tools: none]" in capsys.readouterr().out

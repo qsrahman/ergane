@@ -10,7 +10,6 @@ from openai.types.shared import ReasoningEffort
 from pydantic import TypeAdapter, ValidationError
 
 from muagent.config import EFFORTS
-from muagent.tools import LEVELS, Level, select
 
 if TYPE_CHECKING:
     from muagent.repl import Repl
@@ -151,17 +150,9 @@ def effort(repl: Repl, args: str) -> str:
 
 @command("/tools")
 def tools_(repl: Repl, args: str) -> str:
-    """Show the tools offered to the model, or change their level with /tools LEVEL.
-
-    LEVEL is one of off, read, write or execute: the most access the tools offered
-    may have.
-    """
-    config = repl.agent.config
-    if args:
-        try:
-            config.tools = TypeAdapter(Level).validate_python(args.lower())
-        except ValidationError:
-            return f"Unknown level: {args}. Use {', '.join(LEVELS)}."
-        repl.agent.tools = {tool.name: tool for tool in select(config.tools)}
-    offered = ", ".join(repl.agent.tools) or "none"
-    return f"Tools: {config.tools} ({offered})"
+    """List the tools offered to the model."""
+    tools = [
+        f"{tool.name}{' (read-only)' if tool.read_only else ''}"
+        for tool in repl.agent.tools.values()
+    ]
+    return f"Tools: {', '.join(tools) or 'none'}"

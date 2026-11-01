@@ -31,7 +31,6 @@ OPENAI_API_KEY=sk-...
 # STREAMING=true
 # MAX_CONTEXT_TOKENS=65536
 # REASONING_EFFORT=low
-# TOOLS=read
 # MAX_TURNS=25
 ```
 
@@ -46,7 +45,6 @@ Environment variables take precedence over both files. Keys that aren't settings
 | `MAX_CONTEXT_TOKENS` | `65536`               | Token budget for the conversation history sent each turn. It excludes the system instructions and the reply, so keep it well below the model's context window. |
 | `REASONING_EFFORT`   | unset (model default) | `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. Leave unset for non-reasoning models, which reject it.                                           |
 | `MAX_TURNS`          | `25`                  | Most model calls for one prompt: the cap on the tool loop.                                                                        |
-| `TOOLS`              | `read`                | `off`, `read`, `write` or `execute`: the most access the tools offered to the model may have. Use `off` with a model that does not support tool calling. |
 
 ## Usage
 
@@ -63,7 +61,7 @@ Type a prompt at `>` and press Enter. To quit, use `/exit`, `/quit`, Ctrl-D, or 
 | `/help`           | List the commands                                                                |
 | `/retry`          | Resend the last prompt; if its reply was saved, it is replaced                   |
 | `/undo`           | Remove the last exchange from the history                                        |
-| `/tools [LEVEL]`  | Show the tools offered to the model, or set their level (`off`, `read`, `write`, `execute`) |
+| `/tools`          | List the tools offered to the model, marking the read-only ones |
 | `/model [NAME]`   | Show the model, or switch to `NAME` for the rest of the session                  |
 | `/effort [LEVEL]` | Show the reasoning effort, or set it (`none` … `max`, or `default` to leave it out) |
 | `/reset`          | Clear the conversation history and start fresh                                   |

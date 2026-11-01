@@ -1,7 +1,9 @@
 """The interactive terminal loop: reads input, runs commands, shows replies."""
 
+from collections.abc import Mapping
+
 from muagent.agent import Agent, TurnError
-from muagent.commands import COMMANDS
+from muagent.commands import Command
 from muagent.console import Console
 
 try:
@@ -13,16 +15,17 @@ except ImportError:  # not available on Windows
 class Repl:
     """Interactive terminal loop: reads prompts, runs commands and turns."""
 
-    def __init__(self, agent: Agent) -> None:
+    def __init__(self, agent: Agent, commands: Mapping[str, Command]) -> None:
         """Create a REPL for an agent.
 
         Args:
             agent: The agent that answers prompts.
+            commands: The slash commands, by name.
         """
         self.agent = agent
         self.console = Console()
         self.running = False
-        self.commands = COMMANDS
+        self.commands = commands
 
     def run(self) -> None:
         """Read and handle prompts until the user quits."""

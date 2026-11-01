@@ -23,8 +23,8 @@ def isolate_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     # Taken from Config itself, so a new setting needs no change here.
-    for field in Config.model_fields.values():
-        monkeypatch.delenv(str(field.validation_alias), raising=False)
+    for name, field in Config.model_fields.items():
+        monkeypatch.delenv(str(field.validation_alias or name.upper()), raising=False)
 
 
 @pytest.fixture
