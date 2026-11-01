@@ -179,13 +179,13 @@ def test_stream_error_event_reports_the_servers_reason(make_agent, prompt, messa
     assert agent.context.items == []  # ...but a broken stream is not saved
 
 
-def test_a_response_that_only_calls_a_tool_has_no_status_problem():
-    # The two checks are separate so a tool loop can tell an error from a tool call:
-    # having no text is a problem only for the response that ends the turn.
-    response = Response.model_validate(make_response("completed", [FUNCTION_CALL]))
+def test_a_response_that_only_calls_a_tool_is_not_a_problem():
+    # Having no text is a problem only for the response that ends the turn.
+    calls = Response.model_validate(make_response("completed", [FUNCTION_CALL]))
+    empty = Response.model_validate(make_response("completed", []))
 
-    assert Agent._status_problem(response) is None
-    assert Agent._text_problem(response) == "No text in response"
+    assert Agent._problem(calls) is None
+    assert Agent._problem(empty) == "No text in response"
 
 
 def read_file(path: str) -> str:

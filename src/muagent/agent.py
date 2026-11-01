@@ -171,7 +171,7 @@ class Agent:
 
         for _ in range(self.config.max_turns):
             response = self.send_response(items, on_text)
-            problem = self._status_problem(response)
+            problem = self._problem(response)
             calls = [item for item in response.output if item.type == "function_call"]
             if problem or not calls:
                 break
@@ -199,8 +199,6 @@ class Agent:
                 [*items, {"role": "assistant", "content": f"[{message}]"}]
             )
             raise TurnError(message)
-
-        problem = problem or self._text_problem(response)
 
         # Keep the turn if it worked, or was cut off after text the user has already
         # seen. Any other turn is dropped: saving a prompt with no reply would leave
@@ -251,14 +249,17 @@ class Agent:
         return outputs
 
     @staticmethod
-    def _status_problem(response: Response) -> str | None:
-        """Describe what is wrong with a response's status, if anything.
+    def _problem(response: Response) -> str | None:
+        """Describe what is wrong with a response, if anything.
+
+        A response that calls tools has no text, and that is fine: only the
+        response that ends the turn needs some.
 
         Args:
             response: A response from the model.
 
         Returns:
-            A message for the user, or None if the status is fine.
+            A message for the user, or None if the response is fine.
         """
         if response.status == "incomplete":
             details = response.incomplete_details
@@ -271,21 +272,9 @@ class Agent:
         # status is optional in the SDK; some compatible endpoints omit it.
         if response.status not in (None, "completed"):
             return f"Response not completed: {response.status}"
-        return None
-
-    @staticmethod
-    def _text_problem(response: Response) -> str | None:
-        """Describe why a response has no text to show, if it has none.
-
-        Only for a final response: one that calls tools has no text, and that is fine.
-
-        Args:
-            response: The final response of a turn.
-
-        Returns:
-            A message for the user, or None if the response has text.
-        """
-        if response.output_text:
+        if response.output_text or any(
+            i.type == "function_call" for i in response.output
+        ):
             return None
         refusal = "".join(
             part.refusal
