@@ -1,5 +1,3 @@
-"""The agent: sends one conversation turn to the model and keeps the history."""
-
 import platform
 from collections.abc import Callable, Sequence
 from datetime import date
@@ -12,7 +10,6 @@ from openai.types.responses import (
     ResponseInputParam,
 )
 from openai.types.responses.response_create_params import ResponseCreateParamsBase
-from pydantic import BaseModel
 
 from muagent.config import Config
 from muagent.context import Context, estimate_tokens
@@ -73,6 +70,73 @@ class Agent:
         )
         self.context = Context()
 
+    def send_response(
+        self, draft: ResponseInputParam, on_text: Callable[[str], None]
+    ) -> Response:
+        """Get the model's final response, passing its text to on_text as it arrives.
+
+        Args:
+            draft: The input for this turn.
+            on_text: Called with each piece of reply text when streaming, or once
+                with the whole reply otherwise (before any status check, so
+                partial text is always shown).
+
+        Returns:
+            The final response, whatever its status.
+
+        Raises:
+            TurnError: If a stream ends without a final response; the message is the
+                reason the server gave in an `error` event, if it sent one.
+        """
+        params: ResponseCreateParamsBase = {
+            "store": False,
+            "input": draft,
+            "model": self.config.model,
+            "instructions": (
+                f"{SYSTEM_PROMPT}\n"
+                "Environment:\n"
+                f"- Operating system: {platform.platform()}\n"
+                f"- Current date: {date.today().isoformat()}\n"
+            ),
+        }
+        # Non-reasoning models reject a reasoning setting, so leave it out if unset.
+        if self.config.reasoning_effort is not None:
+            params["reasoning"] = {"effort": self.config.reasoning_effort}
+        if self.tools:
+            params["tools"] = [tool.param() for tool in self.tools.values()]
+
+        if not self.config.streaming:
+            response = self.client.responses.create(**params)
+            on_text(response.output_text)
+            return response
+
+        final = None
+        reason = "Stream ended without a final response"
+        with self.client.responses.stream(**params) as stream:
+            for event in stream:
+                if event.type == "response.output_text.delta":
+                    on_text(event.delta)
+                elif event.type == "error":
+                    detail = (
+                        f"{event.code}: {event.message}"
+                        if event.code
+                        else event.message
+                    )
+                    reason = f"Stream error: {detail}"
+                # Take the final response from the terminal event:
+                # get_final_response() raises unless the stream ends with
+                # response.completed. Keep the == chain: pyright narrows the event
+                # type through it but not through `in (...)`.
+                elif (
+                    event.type == "response.completed"
+                    or event.type == "response.incomplete"
+                    or event.type == "response.failed"
+                ):
+                    final = event.response
+        if final is None:
+            raise TurnError(reason)
+        return final
+
     def run_turn(
         self,
         prompt: str,
@@ -106,16 +170,16 @@ class Agent:
             on_notice("Context trimmed: oldest turns dropped")
 
         for _ in range(self.config.max_turns):
-            response = self._respond(items, on_text)
+            response = self.send_response(items, on_text)
             problem = self._status_problem(response)
             calls = [item for item in response.output if item.type == "function_call"]
             if problem or not calls:
                 break
-            # Keep what the model produced (reasoning included), then answer every call.
-            items += self._as_input(response.output)
+            items += cast(
+                ResponseInputParam,
+                [item.model_dump(exclude_none=True) for item in response.output],
+            )
             items += self._run_tools(calls, on_notice)
-            # Nothing else bounds how far a turn grows while it runs, and every
-            # request resends all of it.
             used = sum(estimate_tokens(item) for item in items)
             if used > self.config.max_context_tokens:
                 raise TurnError(
@@ -148,13 +212,6 @@ class Agent:
             )
         if problem:
             raise TurnError(problem)
-
-    @staticmethod
-    def _as_input(items: Sequence[BaseModel]) -> ResponseInputParam:
-        """The model's output items as plain data, to send back as input."""
-        return cast(
-            ResponseInputParam, [item.model_dump(exclude_none=True) for item in items]
-        )
 
     def _run_tools(
         self,
@@ -192,71 +249,6 @@ class Agent:
                 }
             )
         return outputs
-
-    def _respond(
-        self, draft: ResponseInputParam, on_text: Callable[[str], None]
-    ) -> Response:
-        """Get the model's final response, passing its text to on_text as it arrives.
-
-        Args:
-            draft: The input for this turn.
-            on_text: Called with each piece of reply text when streaming, or once
-                with the whole reply otherwise (before any status check, so
-                partial text is always shown).
-
-        Returns:
-            The final response, whatever its status.
-
-        Raises:
-            TurnError: If a stream ends without a final response; the message is the
-                reason the server gave in an `error` event, if it sent one.
-        """
-        # One typed dict for both calls, so pyright checks the keys and they are
-        # written once.
-        params: ResponseCreateParamsBase = {
-            "store": False,
-            "input": draft,
-            "model": self.config.model,
-            "instructions": self._instructions(),
-        }
-        # Non-reasoning models reject a reasoning setting, so leave it out if unset.
-        if self.config.reasoning_effort is not None:
-            params["reasoning"] = {"effort": self.config.reasoning_effort}
-        if self.tools:
-            params["tools"] = [tool.param() for tool in self.tools.values()]
-
-        if not self.config.streaming:
-            response = self.client.responses.create(**params)
-            on_text(response.output_text)
-            return response
-
-        final = None
-        reason = "Stream ended without a final response"
-        with self.client.responses.stream(**params) as stream:
-            for event in stream:
-                if event.type == "response.output_text.delta":
-                    on_text(event.delta)
-                elif event.type == "error":
-                    # Keep the server's reason in case no final response follows.
-                    detail = (
-                        f"{event.code}: {event.message}"
-                        if event.code
-                        else event.message
-                    )
-                    reason = f"Stream error: {detail}"
-                # Take the final response from the terminal event:
-                # get_final_response() raises unless the stream ends with
-                # response.completed. Keep the == chain: pyright narrows the event
-                # type through it but not through `in (...)`.
-                elif (
-                    event.type == "response.completed"
-                    or event.type == "response.incomplete"
-                    or event.type == "response.failed"
-                ):
-                    final = event.response
-        if final is None:
-            raise TurnError(reason)
-        return final
 
     @staticmethod
     def _status_problem(response: Response) -> str | None:
@@ -303,12 +295,3 @@ class Agent:
             if part.type == "refusal"
         )
         return f"Refused: {refusal}" if refusal else "No text in response"
-
-    def _instructions(self) -> str:
-        """Build the system instructions, including details of the environment."""
-        return (
-            f"{SYSTEM_PROMPT}\n"
-            "Environment:\n"
-            f"- Operating system: {platform.platform()}\n"
-            f"- Current date: {date.today().isoformat()}\n"
-        )

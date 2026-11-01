@@ -1,3 +1,3 @@
-from muagent.cli import main
+from muagent import main
 
 main()

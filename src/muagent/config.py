@@ -56,23 +56,29 @@ class Config(BaseSettings):
     )
 
 
-def load_config() -> Config:
-    """Load the settings.
+def user_env_file() -> Path:
+    """Return the user-level settings file, `$XDG_CONFIG_HOME/muagent/.env`.
 
-    Environment variables take precedence, then a `.env` in the current
-    directory, then the user-level `$XDG_CONFIG_HOME/muagent/.env` (by default
-    `~/.config/muagent/.env`). Missing files are skipped.
-
-    Raises:
-        ValidationError: If a setting is missing or invalid.
+    An unset, empty or relative XDG_CONFIG_HOME is ignored, as the XDG spec says,
+    and `~/.config` is used instead.
     """
     config_home = Path(os.environ.get("XDG_CONFIG_HOME", ""))
     if not config_home.is_absolute():
         config_home = Path.home() / ".config"
-    user_file = config_home / "muagent" / ".env"
+    return config_home / "muagent" / ".env"
 
+
+def load_config() -> Config:
+    """Load the settings.
+
+    Environment variables take precedence, then a `.env` in the current directory,
+    then the user-level file (see user_env_file()). Missing files are skipped.
+
+    Raises:
+        ValidationError: If a setting is missing or invalid.
+    """
     # Later files override earlier ones.
-    return Config(_env_file=(user_file, ".env"))  # pyright: ignore[reportCallIssue]
+    return Config(_env_file=(user_env_file(), ".env"))  # pyright: ignore[reportCallIssue]
 
 
 # ReasoningEffort is Optional[Literal[...]]; these are the Literal's values.

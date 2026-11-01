@@ -1,5 +1,3 @@
-"""Command-line entry point: load the settings and start the REPL."""
-
 import sys
 
 from pydantic import ValidationError
