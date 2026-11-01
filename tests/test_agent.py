@@ -1,7 +1,7 @@
 import re
 
 import pytest
-from openai.types.responses import Response
+from openai.types.responses import Response, ResponseInputParam
 
 from fake_api import (
     FUNCTION_CALL,
@@ -14,6 +14,7 @@ from fake_api import (
 )
 from helpers import make_context
 from muagent.agent import NOTICE_CHARS, Agent, TurnError
+from muagent.context import estimate_tokens
 from muagent.tools import MAX_OUTPUT_CHARS, Tool
 
 
@@ -188,6 +189,35 @@ def test_a_response_that_only_calls_a_tool_is_not_a_problem():
     assert Agent._problem(empty) == "No text in response"
 
 
+USAGE = {
+    "input_tokens": 1000,
+    "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+    "output_tokens": 50,
+    "output_tokens_details": {"reasoning_tokens": 0},
+    "total_tokens": 1050,
+}
+
+
+def test_the_size_of_the_next_request_is_the_servers_count_plus_what_was_added():
+    response = Response.model_validate(make_response("completed", usage=USAGE))
+    items: ResponseInputParam = [
+        {"role": "user", "content": "x" * 4000},  # sent, so already in the 1,000
+        {"type": "function_call_output", "call_id": "c", "output": "y" * 400},
+    ]
+
+    assert Agent._size(response, items, 1) == 1000 + estimate_tokens(items[1])
+
+
+def test_without_usage_the_size_is_estimated_from_all_the_items():
+    response = Response.model_validate(make_response("completed"))
+    items: ResponseInputParam = [
+        {"role": "user", "content": "x" * 4000},
+        {"type": "function_call_output", "call_id": "c", "output": "y" * 400},
+    ]
+
+    assert Agent._size(response, items, 1) == sum(estimate_tokens(i) for i in items)
+
+
 def read_file(path: str) -> str:
     """Read a text file."""
     return f"contents of {path}"
@@ -235,6 +265,29 @@ class TestAgentToolLoop:
             FIRST_OUTPUT,
             {"role": "assistant", "content": TEXT},
         ]
+
+    def test_the_tool_work_of_a_finished_turn_is_resent_once_and_then_dropped(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = make_agent(tools=[READ_FILE], STREAMING=streaming)
+        agent.run_turn("tool_call")
+
+        agent.run_turn("and then?")
+        agent.run_turn("and then?")
+
+        def types(request):
+            return [item.get("type") for item in request["input"]]
+
+        # The follow-up still sees the calls of the turn before it...
+        assert types(fake_server.requests[2]) == [
+            None,
+            "function_call",
+            "function_call_output",
+            None,
+            None,
+        ]
+        # ...and the next one only its messages.
+        assert types(fake_server.requests[3]) == [None] * 5
 
     def test_the_tools_are_offered_in_every_request(
         self, make_agent, fake_server, streaming

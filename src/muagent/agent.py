@@ -170,6 +170,7 @@ class Agent:
             on_notice("Context trimmed: oldest turns dropped")
 
         for _ in range(self.config.max_turns):
+            sent = len(items)
             response = self.send_response(items, on_text)
             problem = self._problem(response)
             calls = [item for item in response.output if item.type == "function_call"]
@@ -180,7 +181,7 @@ class Agent:
                 [item.model_dump(exclude_none=True) for item in response.output],
             )
             items += self._run_tools(calls, on_notice)
-            used = sum(estimate_tokens(item) for item in items)
+            used = self._size(response, items, sent)
             if used > self.config.max_context_tokens:
                 raise TurnError(
                     f"This turn grew past the context budget (about {used} of "
@@ -247,6 +248,28 @@ class Agent:
                 }
             )
         return outputs
+
+    @staticmethod
+    def _size(response: Response, items: ResponseInputParam, sent: int) -> int:
+        """Estimate how many tokens the next request will have.
+
+        The server's own count of the request it just answered is exact, so it is
+        used when the response has one; the items added since are estimated. Some
+        compatible servers send no usage, and then everything is estimated.
+
+        Args:
+            response: The response to the last request.
+            items: The turn's items, including those added since that request.
+            sent: How many of the items were in that request.
+
+        Returns:
+            The estimated number of tokens.
+        """
+        if response.usage is None:
+            return sum(estimate_tokens(item) for item in items)
+        return response.usage.input_tokens + sum(
+            estimate_tokens(item) for item in items[sent:]
+        )
 
     @staticmethod
     def _problem(response: Response) -> str | None:

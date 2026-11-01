@@ -177,6 +177,32 @@ class TestContextToolTurns:
 
         assert context.items == TOOL_TURN
 
+    def test_only_the_latest_turn_keeps_its_tool_work(self):
+        context = Context()
+        draft, _ = context.draft("read notes.txt", ROOMY)
+        context.commit([*draft, *TOOL_TURN[1:]])
+        draft, _ = context.draft("and again", ROOMY)
+
+        context.commit([*draft, *TOOL_TURN[1:]])
+
+        expected: ResponseInputParam = [
+            TOOL_TURN[0],
+            TOOL_TURN[4],  # the first turn: its messages only
+            {"role": "user", "content": "and again"},
+            *TOOL_TURN[1:],
+        ]
+        assert context.items == expected
+
+    def test_undo_after_pruning_removes_only_the_latest_turn(self):
+        context = Context()
+        for prompt in ("read notes.txt", "and again"):
+            draft, _ = context.draft(prompt, ROOMY)
+            context.commit([*draft, *TOOL_TURN[1:]])
+
+        context.undo()
+
+        assert context.items == [TOOL_TURN[0], TOOL_TURN[4]]
+
     def test_undo_removes_all_of_a_tool_turn(self):
         context = Context()
         context.items = make_context(1)

@@ -4,6 +4,9 @@ import json
 
 from openai.types.responses import ResponseInputItemParam, ResponseInputParam
 
+# Item types that only matter while a turn runs, and for the turn after it.
+_TOOL_WORK = ("reasoning", "function_call", "function_call_output")
+
 
 def estimate_tokens(item: ResponseInputItemParam) -> int:
     """Estimate the number of tokens in one history item.
@@ -74,12 +77,31 @@ class Context:
     def commit(self, items: ResponseInputParam) -> None:
         """Make a finished turn the new history.
 
+        The finished turn is kept whole, so a follow-up can refer to what the tools
+        found. In the turns before it, only the messages are kept: the final reply
+        says what the calls found, and the reasoning, calls and outputs are the
+        bulk of the history. They are dropped together, so no call is left without
+        its output, which the API rejects.
+
         Args:
             items: The whole history after the turn: the input returned by
                 draft(), followed by everything the model produced, such as its
                 reply.
         """
-        self.items = list(items)
+        turn = max(
+            (
+                i
+                for i, item in enumerate(items)
+                if isinstance(item, dict) and item.get("role") == "user"
+            ),
+            default=0,
+        )
+        earlier = [
+            item
+            for item in items[:turn]
+            if not (isinstance(item, dict) and item.get("type") in _TOOL_WORK)
+        ]
+        self.items = [*earlier, *items[turn:]]
         self.last_saved = True
 
     def reset(self) -> None:
