@@ -195,6 +195,30 @@ class TestContextToolTurns:
         assert context.rewind() == "read notes.txt"
         assert context.items == []
 
+    def test_the_opaque_encrypted_content_of_a_reasoning_item_is_not_counted(self):
+        # The API counts that blob as the few tokens of reasoning it holds (18 tokens
+        # for 1,636 characters, measured on gpt-5.5), not as its length.
+        blob = "x" * 100_000  # about 25,000 estimated tokens if it were counted
+        history: ResponseInputParam = [
+            {"role": "user", "content": "first"},
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "summary": [],
+                "encrypted_content": blob,
+            },
+            {"type": "function_call", "call_id": "c1", "name": "f", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c1", "output": "ok"},
+            {"role": "assistant", "content": "done"},
+        ]
+        context = Context()
+        context.items = history
+
+        draft, trimmed = context.draft("next", 1_000)
+
+        assert not trimmed
+        assert draft[:5] == history  # nothing dropped, and the blob is still sent
+
     # Budgets that drop every old turn, only the tool turn, or nothing.
     @pytest.mark.parametrize("budget", [1, 90, ROOMY])
     def test_trimming_never_leaves_part_of_a_tool_turn(self, budget):
