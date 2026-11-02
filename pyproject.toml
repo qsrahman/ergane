@@ -16,12 +16,18 @@ dependencies = [
 [project.scripts]
 muagent = "muagent.cli:main"
 
+[project.optional-dependencies]
+mcp = [
+    "mcp>=2.3,<3",
+]
+
 [build-system]
 requires = ["uv_build>=0.13.1,<0.14.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "mcp>=2.3,<3",
     "pyright>=1.1.414",
     "pytest>=9.1.1",
     "ruff>=0.17.1",
