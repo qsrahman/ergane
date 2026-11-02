@@ -4,7 +4,6 @@ from typing import Annotated, Any
 import pytest
 from pydantic import Field
 
-from muagent import tools
 from muagent.tools import MAX_OUTPUT_CHARS, Tool, tool
 
 
@@ -15,14 +14,6 @@ def add(a: int, b: int = 1) -> str:
         a: The first number.
     """
     return str(a + b)
-
-
-@pytest.fixture
-def registry(monkeypatch: pytest.MonkeyPatch) -> dict[str, Tool]:
-    """An empty registry, so the tools a test defines do not leak into others."""
-    empty: dict[str, Tool] = {}
-    monkeypatch.setattr(tools, "TOOLS", empty)
-    return empty
 
 
 class TestFromFunction:
@@ -196,18 +187,17 @@ class TestCall:
         )
 
 
-class TestRegistry:
-    def test_a_bare_decorator_registers_and_returns_the_tool(self, registry):
+class TestDecorator:
+    def test_a_bare_decorator_returns_the_tool(self):
         @tool
         def ping() -> str:
             """Ping."""
             return "pong"
 
         assert isinstance(ping, Tool)
-        assert registry == {"ping": ping}
         assert ping.function() == "pong"
 
-    def test_the_decorator_can_declare_a_tool_not_read_only(self, registry):
+    def test_the_decorator_can_declare_a_tool_not_read_only(self):
         @tool
         def look() -> str:
             """Look."""
@@ -218,14 +208,5 @@ class TestRegistry:
             """Save."""
             return "saved"
 
-        assert registry["look"].read_only is True
-        assert registry["save"].read_only is False
-
-    def test_registering_a_name_twice_is_an_error(self, registry):
-        @tool
-        def ping() -> str:
-            """Ping."""
-            return "pong"
-
-        with pytest.raises(ValueError, match="already registered: ping"):
-            tool(ping.function)
+        assert look.read_only is True
+        assert save.read_only is False

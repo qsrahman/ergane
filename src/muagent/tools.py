@@ -1,4 +1,4 @@
-"""Tools the model can call: the @tool decorator, the registry, and how a call is run.
+"""Tools the model can call: the @tool decorator and how a call is run.
 
 A tool is a plain function. Its name is the function's name, its description is its
 docstring, and its parameters are inferred from its type hints, as in FastMCP. A tool
@@ -40,7 +40,7 @@ class Tool:
     def from_function(
         cls, function: Callable[..., str], read_only: bool = True
     ) -> Tool:
-        """Describe a function as a tool, without registering it.
+        """Describe a function as a tool.
 
         Args:
             function: A synchronous function that returns text.
@@ -123,9 +123,6 @@ class Tool:
         return result
 
 
-TOOLS: dict[str, Tool] = {}
-
-
 @overload
 def tool(function: Callable[..., str], /) -> Tool: ...
 @overload
@@ -133,10 +130,11 @@ def tool(*, read_only: bool = True) -> Callable[[Callable[..., str]], Tool]: ...
 def tool(
     function: Callable[..., str] | None = None, /, *, read_only: bool = True
 ) -> Tool | Callable[[Callable[..., str]], Tool]:
-    """Register a function as a tool: `@tool`, or `@tool(read_only=False)`.
+    """Make a function a tool: `@tool`, or `@tool(read_only=False)`.
 
     The decorated name becomes the Tool, so a test calls `add.function(...)` and a
-    list of tools is `[add, get_time]`.
+    list of tools is `[add, get_time]`. Nothing is registered: whoever builds the
+    agent lists the tools to offer.
 
     Args:
         function: The function, when used as a bare `@tool`.
@@ -146,16 +144,11 @@ def tool(
         The Tool, or a decorator that returns it.
 
     Raises:
-        ValueError: If a tool with the same name is already registered, or the
-            function has no docstring.
+        ValueError: If the function has no docstring.
         TypeError: See Tool.from_function.
     """
 
-    def register(function: Callable[..., str]) -> Tool:
-        defined = Tool.from_function(function, read_only)
-        if defined.name in TOOLS:
-            raise ValueError(f"Tool already registered: {defined.name}")
-        TOOLS[defined.name] = defined
-        return defined
+    def make(function: Callable[..., str]) -> Tool:
+        return Tool.from_function(function, read_only)
 
-    return register if function is None else register(function)
+    return make if function is None else make(function)

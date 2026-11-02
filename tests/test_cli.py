@@ -61,7 +61,7 @@ class RecordingRepl:
         pass
 
 
-def test_main_gives_the_agent_the_registered_tools(monkeypatch: pytest.MonkeyPatch):
+def test_main_gives_the_agent_the_demo_tools(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test")
     monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
 

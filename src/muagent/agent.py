@@ -60,7 +60,10 @@ class Agent:
             config: The agent configuration.
             client: The API client; built from the config if omitted.
             tools: The tools the model may call. The agent only ever uses the tools
-                it is given here, never a global registry.
+                it is given here.
+
+        Raises:
+            ValueError: If two tools have the same name.
         """
         self.config = config
         self.client = client or OpenAI(
@@ -69,6 +72,8 @@ class Agent:
         )
         self.context = Context()
         self.tools = {tool.name: tool for tool in tools}
+        if len(self.tools) < len(tools):
+            raise ValueError("Tool names must be unique")
 
     def run_turn(
         self,

@@ -293,6 +293,10 @@ class TestAgentToolLoop:
         # ...and the next one only its messages.
         assert types(fake_server.requests[3]) == [None] * 5
 
+    def test_two_tools_with_the_same_name_are_an_error(self, make_agent, streaming):
+        with pytest.raises(ValueError, match="unique"):
+            make_agent(tools=[READ_FILE, READ_FILE], STREAMING=streaming)
+
     def test_the_tools_are_offered_in_every_request(
         self, make_agent, fake_server, streaming
     ):
