@@ -1,4 +1,7 @@
-"""MCP servers as tools: connect to a server over stdio and offer its tools to the agent.
+"""MCP servers as tools: connect to a server and offer its tools to the agent.
+
+A server is a program muagent runs and talks to over stdio, or a server it connects
+to over streamable HTTP.
 
 The MCP SDK is async and the rest of muagent is not, so each server runs on a
 background thread with its own event loop, and a call blocks until the loop answers.
@@ -13,10 +16,12 @@ import json
 import re
 import threading
 from collections.abc import Callable, Coroutine, Mapping, Sequence
+from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, TextIO
+from typing import TYPE_CHECKING, Annotated, Any, Self, TextIO
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from muagent.tools import Tool
 
@@ -120,18 +125,60 @@ def _leaf(exc: BaseException) -> BaseException:
     return exc
 
 
+# The hosts that may be reached without TLS: the traffic never leaves the machine.
+_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
+def _check_url(url: str) -> None:
+    """Refuse a server URL that would send what it carries where it can be read.
+
+    Raises:
+        ValueError: If it is not https (http only to this machine), names no host,
+            or carries a user name or password, which belong in `headers`.
+    """
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError(
+            f"url must be http(s)://host/path, not {parts.scheme or url!r}"
+        )
+    if parts.scheme == "http" and parts.hostname not in _LOOPBACK_HOSTS:
+        raise ValueError(
+            "url must be https, except for localhost: headers and tool calls would "
+            "cross the network unencrypted"
+        )
+    if parts.username or parts.password:
+        raise ValueError("url must not hold a user name or password: use headers")
+
+
 class McpServerConfig(BaseModel):
-    """One server in mcp.json."""
+    """One server in mcp.json: a program to run (`command`) or a `url` to connect to."""
 
     model_config = ConfigDict(extra="forbid")
 
-    command: str = Field(min_length=1)
+    command: str | None = Field(default=None, min_length=1)
     args: list[str] = []
     env: dict[str, str] = {}
+    url: str | None = None
+    headers: dict[str, str] = {}  # e.g. Authorization, for a url
     # Trust the server's tools to run without asking. Off unless the user says so.
     read_only: bool = False
     startup_timeout: float = Field(default=20, gt=0)  # seconds
     call_timeout: float = Field(default=60, gt=0)  # seconds
+
+    @model_validator(mode="after")
+    def _one_transport(self) -> Self:
+        if (self.command is None) == (self.url is None):
+            raise ValueError(
+                "give either command (a program to run) or url (a server to connect to)"
+            )
+        if self.url is None:
+            if self.headers:
+                raise ValueError("headers go with url")
+        else:
+            if self.args or self.env:
+                raise ValueError("args and env go with command")
+            _check_url(self.url)
+        return self
 
 
 class _McpFile(BaseModel):
@@ -165,16 +212,22 @@ def load_servers(path: Path) -> dict[str, McpServerConfig]:
 
 
 class McpServer:
-    """A connection to one MCP server over stdio, used from synchronous code."""
+    """A connection to one MCP server, used from synchronous code.
+
+    The server is a program run by `command` and spoken to over stdio, or a `url`
+    spoken to over streamable HTTP; exactly one of them.
+    """
 
     def __init__(
         self,
         name: str,
-        command: str,
+        command: str | None = None,
         args: Sequence[str] = (),
         env: Mapping[str, str] | None = None,
         *,
-        log: Path,
+        url: str | None = None,
+        headers: Mapping[str, str] | None = None,
+        log: Path | None = None,
         read_only: bool = False,
         startup_timeout: float = 20,
         call_timeout: float = 60,
@@ -183,30 +236,40 @@ class McpServer:
 
         Args:
             name: Prefixes the names of its tools. Letters, digits, `_` and `-`.
-            command: The program that runs the server.
+            command: The program that runs the server, for stdio.
             args: Its arguments.
             env: Environment variables for it, added to a short allow-list (PATH,
                 HOME and the like): it does not inherit the rest, so it does not
                 see this program's API key.
-            log: The file for the server's stderr, so that its log lines do not land
-                in the terminal. Opened (and emptied) by `start()`, closed by
-                `close()`.
+            url: The server's endpoint, for streamable HTTP. Not checked here: the
+                rules for which URLs are allowed are those of `McpServerConfig`.
+            headers: Sent with every request to the url (an Authorization, say).
+            log: For a program: the file for its stderr, so that its log lines do
+                not land in the terminal. Opened (and emptied) by `launch()`,
+                closed by `close()`.
             read_only: Whether to treat its tools as read-only, so they run without
                 asking. The server's own claim is never used: it is unverified.
             startup_timeout: Seconds to connect, and to list the tools.
             call_timeout: Seconds a call may take.
 
         Raises:
-            ValueError: If the name has other characters.
+            ValueError: If the name has other characters, or there is not exactly one
+                of command and url, or a command has no log.
         """
         if not _NAME_CHARS.fullmatch(name):
             raise ValueError(
                 f"MCP server name {name!r} must be letters, digits, _ and - only"
             )
+        if (command is None) == (url is None):
+            raise ValueError("an MCP server needs either a command or a url")
+        if command is not None and log is None:
+            raise ValueError("a command needs a log for its stderr")
         self.name = name
         self._command = command
         self._args = list(args)
         self._env = dict(env) if env else None
+        self._url = url
+        self._headers = dict(headers) if headers else None
         self._log_path = log
         self._log: TextIO | None = None
         self._read_only = read_only
@@ -245,13 +308,15 @@ class McpServer:
                 f"MCP server {self.name!r} needs the mcp package: "
                 "install muagent with its mcp extra"
             )
-        try:
-            self._log_path.parent.mkdir(parents=True, exist_ok=True)
-            self._log = log = self._log_path.open("w")
-        except OSError as exc:
-            raise McpServerError(
-                f"MCP server {self.name!r}: cannot write its log: {exc}"
-            ) from None
+        log = None
+        if self._log_path is not None:
+            try:
+                self._log_path.parent.mkdir(parents=True, exist_ok=True)
+                self._log = log = self._log_path.open("w")
+            except OSError as exc:
+                raise McpServerError(
+                    f"MCP server {self.name!r}: cannot write its log: {exc}"
+                ) from None
         loop = self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
             target=loop.run_forever, name=f"mcp-{self.name}", daemon=True
@@ -290,24 +355,42 @@ class McpServer:
             raise McpServerError(f"MCP server {self.name!r} {reason}") from None
 
     async def _serve(
-        self, ready: concurrent.futures.Future[ClientSession], log: TextIO
+        self, ready: concurrent.futures.Future[ClientSession], log: TextIO | None
     ) -> None:
         """Own the connection for as long as it lasts.
 
         One task enters and leaves all of it: the SDK's task groups must be left by
         the task that entered them.
         """
+        import httpx2
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
+        from mcp.client.streamable_http import streamable_http_client
 
-        params = StdioServerParameters(
-            command=self._command, args=self._args, env=self._env
-        )
         try:
-            async with (
-                stdio_client(params, errlog=log) as (read, write),
-                ClientSession(read, write) as session,
-            ):
+            async with AsyncExitStack() as stack:
+                if self._url is None:
+                    assert self._command is not None and log is not None
+                    params = StdioServerParameters(
+                        command=self._command, args=self._args, env=self._env
+                    )
+                    read, write = await stack.enter_async_context(
+                        stdio_client(params, errlog=log)
+                    )
+                else:
+                    # Redirects are followed only within the url's origin, so
+                    # the headers go nowhere else.
+                    # The SDK's own timeouts: a server may hold a response open.
+                    http = await stack.enter_async_context(
+                        httpx2.AsyncClient(
+                            headers=self._headers,
+                            timeout=httpx2.Timeout(30.0, read=300.0),
+                        )
+                    )
+                    read, write = await stack.enter_async_context(
+                        streamable_http_client(self._url, http_client=http)
+                    )
+                session = await stack.enter_async_context(ClientSession(read, write))
                 await session.initialize()
                 ready.set_result(session)
                 await self._stop.wait()
@@ -440,7 +523,10 @@ def start_servers(
             config.command,
             config.args,
             config.env,
-            log=log_dir / f"{name}.log",
+            url=config.url,
+            headers=config.headers,
+            # Only a program has a stderr to keep.
+            log=log_dir / f"{name}.log" if config.command else None,
             read_only=config.read_only,
             startup_timeout=config.startup_timeout,
             call_timeout=config.call_timeout,

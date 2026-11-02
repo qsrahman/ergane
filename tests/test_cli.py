@@ -111,6 +111,20 @@ class TestMcpServers:
         assert "fake__add" in names
         assert (tmp_path / "muagent" / "fake.log").exists()
 
+    def test_a_server_at_a_url_in_mcp_json_gives_the_agent_its_tools(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
+        from test_mcp_client import serve_http
+
+        monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
+        with serve_http() as url:
+            write_mcp_json(tmp_path, {"web": {"url": url}})
+
+            main()
+
+        assert RecordingRepl.agent is not None
+        assert "web__add" in RecordingRepl.agent.tools
+
     def test_the_servers_are_stopped_when_muagent_ends(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ):
@@ -146,7 +160,7 @@ class TestMcpServers:
         main()
 
         out = capsys.readouterr().out
-        assert out.startswith("[MCP server 'fake': 12 tools]\n\nAI coding agent")
+        assert out.startswith("[MCP server 'fake': 13 tools]\n\nAI coding agent")
 
     def test_a_server_that_fails_does_not_stop_muagent(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys

@@ -1,14 +1,16 @@
 """A stdio MCP server for the tests, with one tool for each case a client must handle.
 
-The tests start it as a subprocess (`python fake_mcp_server.py`), the way muagent
-starts a real server, so they go through the real SDK client and the real transport.
+The tests start it as a subprocess, the way muagent starts a real server, so they go
+through the real SDK client and the real transport: over stdio for `python
+fake_mcp_server.py`, or over streamable HTTP on a port for `python fake_mcp_server.py
+PORT`.
 """
 
 import os
 import sys
 import time
 
-from mcp.server.mcpserver import Image, MCPServer
+from mcp.server.mcpserver import Context, Image, MCPServer
 from mcp_types import ToolAnnotations
 
 server = MCPServer("fake")
@@ -76,6 +78,13 @@ def getenv(name: str) -> str:
     return os.environ.get(name, "unset")
 
 
+@server.tool()
+def header(name: str, ctx: Context) -> str:
+    """Return a header of the HTTP request that carried this call."""
+    request = ctx.request_context.request
+    return request.headers.get(name, "unset") if request is not None else "no request"
+
+
 @server.tool(name="search.docs")
 def search_dots(query: str) -> str:
     """A tool whose name has a dot in it, which OpenAI rejects."""
@@ -89,4 +98,7 @@ def search_underscore(query: str) -> str:
 
 
 if __name__ == "__main__":
-    server.run("stdio")
+    if len(sys.argv) > 1:
+        server.run("streamable-http", host="127.0.0.1", port=int(sys.argv[1]))
+    else:
+        server.run("stdio")

@@ -1,7 +1,11 @@
 import asyncio
+import contextlib
+import json
 import os
 import re
 import signal
+import socket
+import subprocess
 import sys
 import threading
 import time
@@ -34,6 +38,38 @@ def tools(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, Tool]]
     server.start()
     yield {tool.name: tool for tool in server.tools()}
     server.close()
+
+
+@contextlib.contextmanager
+def serve_http() -> Iterator[str]:
+    """Run the fake server over streamable HTTP on a free port; yield its url."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    process = subprocess.Popen(
+        [sys.executable, FAKE, str(port)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        for _ in range(200):
+            try:
+                socket.create_connection(("127.0.0.1", port), 0.1).close()
+                break
+            except OSError:
+                time.sleep(0.05)
+        else:
+            raise RuntimeError("the fake HTTP server did not start")
+        yield f"http://127.0.0.1:{port}/mcp"
+    finally:
+        process.terminate()
+        process.wait(10)
+
+
+@pytest.fixture(scope="module")
+def http_url() -> Iterator[str]:
+    with serve_http() as url:
+        yield url
 
 
 @pytest.fixture
@@ -333,10 +369,10 @@ class TestLoadServers:
         ("text", "message"),
         [
             ("not json", "Invalid JSON"),
-            ('{"mcpServers": {"a": {}}}', "mcpServers.a.command"),
+            ('{"mcpServers": {"a": {}}}', "give either command"),
             ('{"mcpServers": {"a": {"command": ""}}}', "mcpServers.a.command"),
             ('{"mcpServers": {"a": {"command": "x", "arg": []}}}', "mcpServers.a.arg"),
-            ('{"mcpServers": {"a": {"url": "http://x"}}}', "mcpServers.a.url"),
+            ('{"mcpServers": {"a": {"url": "http://x"}}}', "url must be https"),
             (
                 '{"mcpServers": {"a.b": {"command": "x"}}}',
                 "String should match pattern",
@@ -373,6 +409,139 @@ class TestLoadServers:
             load_servers(self.write(tmp_path, text))
 
 
+class TestUrls:
+    def load(self, tmp_path: Path, entry: dict):
+        path = tmp_path / "mcp.json"
+        path.write_text(json.dumps({"mcpServers": {"web": entry}}))
+        return load_servers(path)["web"]
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://example.com/mcp",
+            "http://localhost:8000/mcp",
+            "http://127.0.0.1:9/mcp",
+            "http://[::1]:9/mcp",
+        ],
+    )
+    def test_a_url_may_be_https_or_http_to_this_machine(self, tmp_path, url):
+        config = self.load(tmp_path, {"url": url, "headers": {"A": "b"}})
+
+        assert (config.url, config.command) == (url, None)
+        assert config.headers == {"A": "b"}
+
+    @pytest.mark.parametrize(
+        ("entry", "message"),
+        [
+            ({"url": "http://example.com/mcp"}, "url must be https"),
+            ({"url": "http://localhost.example.com/mcp"}, "url must be https"),
+            ({"url": "ftp://example.com/mcp"}, "url must be http"),
+            ({"url": "example.com/mcp"}, "url must be http"),
+            ({"url": "https://"}, "url must be http"),
+            ({"url": "https://user:pass@example.com/mcp"}, "user name or password"),
+            ({"url": "https://example.com", "command": "x"}, "either command"),
+            ({"url": "https://example.com", "args": ["x"]}, "args and env go with"),
+            ({"url": "https://example.com", "env": {"A": "b"}}, "args and env go with"),
+            ({"command": "x", "headers": {"A": "b"}}, "headers go with url"),
+            ({}, "either command"),
+        ],
+    )
+    def test_a_server_is_one_thing_and_its_url_must_be_safe(
+        self, tmp_path, entry, message
+    ):
+        with pytest.raises(ValidationError, match=message):
+            self.load(tmp_path, entry)
+
+
+class TestHttp:
+    def make(self, make_server, url, **values) -> McpServer:
+        # No command, so no stderr to log.
+        return make_server(
+            name="web", command=None, args=[], log=None, url=url, **values
+        )
+
+    def test_the_tools_of_a_server_at_a_url_can_be_called(self, make_server, http_url):
+        server = self.make(make_server, http_url)
+
+        by_name = {tool.name: tool for tool in server.tools()}
+
+        assert "web__add" in by_name
+        assert by_name["web__add"].call('{"a": 1, "b": 2}') == "3"
+        assert not any(tool.read_only for tool in by_name.values())
+
+    def test_headers_are_sent_with_every_request(self, make_server, http_url):
+        server = self.make(make_server, http_url, headers={"Authorization": "Bearer t"})
+        header = {tool.name: tool for tool in server.tools()}["web__header"]
+
+        assert header.call('{"name": "authorization"}') == "Bearer t"
+
+    def test_no_log_is_made_for_a_server_that_has_no_stderr(
+        self, make_server, http_url, tmp_path
+    ):
+        self.make(make_server, http_url)
+
+        assert not (tmp_path / "mcp.log").exists()
+
+    def test_nothing_listening_is_a_start_failure(self, make_server):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            closed = probe.getsockname()[1]
+
+        with pytest.raises(McpServerError, match="failed to start: ConnectError"):
+            self.make(make_server, f"http://127.0.0.1:{closed}/mcp")
+
+    def test_a_wrong_path_is_a_start_failure(self, make_server, http_url):
+        with pytest.raises(McpServerError, match="Not Found"):
+            self.make(make_server, http_url.replace("/mcp", "/elsewhere"))
+
+    def test_a_server_that_never_answers_is_given_up_on(self, make_server):
+        with socket.socket() as silent:
+            silent.bind(("127.0.0.1", 0))
+            silent.listen()
+            port = silent.getsockname()[1]
+            with pytest.raises(McpServerError, match="did not answer within 0.5 s"):
+                self.make(
+                    make_server, f"http://127.0.0.1:{port}/mcp", startup_timeout=0.5
+                )
+
+        assert "mcp-web" not in [thread.name for thread in threading.enumerate()]
+
+    def test_a_server_that_goes_away_gives_an_error_that_names_it(self, make_server):
+        with serve_http() as url:
+            server = self.make(make_server, url)
+            add = {tool.name: tool for tool in server.tools()}["web__add"]
+            assert add.call('{"a": 1}') == "2"
+
+        assert add.call('{"a": 1}').startswith(
+            "Error: McpServerError: MCP server 'web'"
+        )
+
+    def test_close_stops_the_thread(self, make_server, http_url):
+        server = self.make(make_server, http_url)
+
+        server.close()
+
+        assert "mcp-web" not in [thread.name for thread in threading.enumerate()]
+
+
+class TestTransportChoice:
+    @pytest.mark.parametrize(
+        "values",
+        [
+            {},
+            {"command": "x", "url": "https://example.com/mcp", "log": Path("log")},
+        ],
+        ids=["neither", "both"],
+    )
+    def test_there_must_be_one_of_command_and_url(self, values):
+        with pytest.raises(ValueError, match="either a command or a url"):
+            McpServer("web", **values)
+
+    def test_a_command_needs_a_log(self):
+        with pytest.raises(ValueError, match="needs a log"):
+            McpServer("web", "x")
+
+
 class TestStartServers:
     def fake(self, **values):
         from muagent.mcp_client import McpServerConfig
@@ -390,8 +559,8 @@ class TestStartServers:
             assert not names["one__add"].read_only
             assert names["two__add"].read_only
             assert notices == [
-                "MCP server 'one': 12 tools",
-                "MCP server 'two': 12 tools",
+                "MCP server 'one': 13 tools",
+                "MCP server 'two': 13 tools",
             ]
             assert (tmp_path / "one.log").exists()
         finally:
@@ -413,7 +582,7 @@ class TestStartServers:
             assert all(tool.name.startswith("good__") for tool in found)
             assert len(notices) == 2
             assert notices[0].startswith("MCP server 'broken' failed to start")
-            assert notices[1] == "MCP server 'good': 12 tools"
+            assert notices[1] == "MCP server 'good': 13 tools"
         finally:
             for server in servers:
                 server.close()
@@ -473,6 +642,7 @@ class TestStartServers:
             "    time.sleep(0.05)\n"
             "else:\n"
             "    sys.exit('the other server never started')\n"
+            "sys.argv = ['fake']\n"  # the server takes an argument to mean a port
             f"runpy.run_path({FAKE!r}, run_name='__main__')\n"
         )
         from muagent.mcp_client import McpServerConfig
@@ -506,6 +676,27 @@ class TestStartServers:
 
         assert time.monotonic() - started < 6
         assert "mcp-pending" not in [t.name for t in threading.enumerate()]
+
+    def test_a_server_at_a_url_starts_with_its_headers_and_leaves_no_log(
+        self, tmp_path, http_url
+    ):
+        from muagent.mcp_client import McpServerConfig
+
+        configs = {
+            "web": McpServerConfig(url=http_url, headers={"X-Test": "yes"}),
+            "local": self.fake(),
+        }
+
+        servers, found = start_servers(configs, tmp_path, lambda notice: None)
+        try:
+            by_name = {tool.name: tool for tool in found}
+            assert by_name["web__header"].call('{"name": "x-test"}') == "yes"
+            assert by_name["local__add"].call('{"a": 1}') == "2"
+            assert (tmp_path / "local.log").exists()
+            assert not (tmp_path / "web.log").exists()
+        finally:
+            for server in servers:
+                server.close()
 
     def test_no_servers_is_no_work(self, tmp_path):
         assert start_servers({}, tmp_path, print) == ([], [])

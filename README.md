@@ -89,7 +89,7 @@ def add(a: int, b: int) -> str:
 
 ## MCP servers
 
-`muagent` can use the tools of [MCP](https://modelcontextprotocol.io) servers that run as a local program (stdio). List them in `~/.config/muagent/mcp.json` (or `$XDG_CONFIG_HOME/muagent/mcp.json`), in the usual format:
+`muagent` can use the tools of [MCP](https://modelcontextprotocol.io) servers, either a local program it runs (stdio) or a server it connects to over HTTP (streamable HTTP). List them in `~/.config/muagent/mcp.json` (or `$XDG_CONFIG_HOME/muagent/mcp.json`), in the usual format:
 
 ```json
 {
@@ -99,26 +99,33 @@ def add(a: int, b: int) -> str:
       "args": ["--root", "/path/to/project"],
       "env": { "SOME_TOKEN": "..." }
     },
-    "notes": { "command": "my-notes-server", "read_only": true }
+    "notes": { "command": "my-notes-server", "read_only": true },
+    "remote": {
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "Bearer ..." }
+    }
   }
 }
 ```
 
 | Key         | Description                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------ |
-| `command`   | The program that runs the server (required)                                                                  |
+| `command`   | The program that runs the server. Give this or `url`, not both.                                              |
 | `args`      | Its arguments                                                                                                |
 | `env`       | Environment variables for it. The server gets only a short list (`PATH`, `HOME`, ...) and these, so it does not see your `OPENAI_API_KEY`. |
+| `url`       | The address of a server to connect to, instead of a `command`. `https://`, or `http://` for `localhost`, `127.0.0.1` and `[::1]` only. |
+| `headers`   | Sent with every request to the `url`, for an `Authorization` or an API key. Not in the URL itself: a user name or password there is refused. |
 | `read_only` | `true` lets the server's tools run without asking. Default `false`.                                          |
 | `startup_timeout` | Seconds to wait for the server to start and list its tools. Default `20`.                              |
 | `call_timeout` | Seconds a call to one of its tools may take before it is given up on. Default `60`.                       |
 
-The names are letters, digits, `_` and `-`. A server's tools are offered to the model as `name__tool`; `/tools` lists them. The servers start at the same time, so a few slow ones do not add up. A server that fails to start is reported and left out; one that stops while you work makes its tools return an error that names it, and the others carry on. Its stderr goes to `~/.local/state/muagent/NAME.log` (or `$XDG_STATE_HOME/muagent/NAME.log`), where you will find why it failed.
+The names are letters, digits, `_` and `-`. A server's tools are offered to the model as `name__tool`; `/tools` lists them. The servers start at the same time, so a few slow ones do not add up. A server that fails to start is reported and left out; one that stops while you work makes its tools return an error that names it, and the others carry on. The stderr of a program goes to `~/.local/state/muagent/NAME.log` (or `$XDG_STATE_HOME/muagent/NAME.log`), where you will find why it failed.
 
 A few things to know before you add a server:
 
 - **A server is a program that runs as you, when `muagent` starts.** Only the user-level `mcp.json` is read, never one from the directory you are in, so a project you open cannot start programs.
 - **Every MCP tool asks before it runs**, showing the full arguments, unless you set `read_only` for that server. A server's own claim that a tool is read-only is ignored: it is not something `muagent` can check.
+- **A server at a URL receives what the model sends it**: the arguments of every call, which can hold file contents or other things from your conversation. Connect only to servers you trust with that. `mcp.json` holds the headers in plain text, so keep it to yourself (`chmod 600`). Redirects to another host are not followed, so the headers go only where you pointed them.
 - **Tool descriptions come from the server** and are read by the model. Add servers you trust.
 - The list of tools is read once, at start.
 
