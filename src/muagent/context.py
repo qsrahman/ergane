@@ -29,17 +29,19 @@ def estimate_tokens(item: ResponseInputItemParam) -> int:
 class Context:
     """Conversation history, resent in full each turn because requests use store=False.
 
-    A turn is staged with draft() and only becomes history through commit(), so
+    A turn is begun with begin_turn() and only becomes history through save_turn(), so
     failed requests never leave a user message without a reply.
     """
 
     def __init__(self) -> None:
         """Create an empty conversation."""
         self.items: ResponseInputParam = []
-        self.last_prompt: str | None = None  # the prompt most recently drafted
+        self.last_prompt: str | None = None  # the prompt most recently begun
         self.last_saved = False  # whether that prompt's turn is in items
 
-    def draft(self, prompt: str, max_tokens: int) -> tuple[ResponseInputParam, bool]:
+    def begin_turn(
+        self, prompt: str, max_tokens: int
+    ) -> tuple[ResponseInputParam, bool]:
         """Start a turn: build the next request's input within a token budget.
 
         The history is not changed; only the prompt is remembered (as not saved
@@ -74,7 +76,7 @@ class Context:
             start = turn_start
         return items[start:], start > 0
 
-    def commit(self, items: ResponseInputParam) -> None:
+    def save_turn(self, items: ResponseInputParam) -> None:
         """Make a finished turn the new history.
 
         The finished turn is kept whole, so a follow-up can refer to what the tools
@@ -85,7 +87,7 @@ class Context:
 
         Args:
             items: The whole history after the turn: the input returned by
-                draft(), followed by everything the model produced, such as its
+                begin_turn(), followed by everything the model produced, such as its
                 reply.
         """
         turn = max(

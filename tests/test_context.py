@@ -7,24 +7,24 @@ from muagent.context import Context, estimate_tokens
 ROOMY = 10_000  # a token budget that the tests which don't trim never reach
 
 
-def commit_reply(context: Context, draft: ResponseInputParam, reply: str) -> None:
-    context.commit([*draft, {"role": "assistant", "content": reply}])
+def save_reply(context: Context, draft: ResponseInputParam, reply: str) -> None:
+    context.save_turn([*draft, {"role": "assistant", "content": reply}])
 
 
 class TestContext:
-    def test_draft_appends_prompt_without_changing_history(self):
+    def test_begin_turn_appends_prompt_without_changing_history(self):
         context = Context()
         context.items = make_context(2)
         original = list(context.items)
 
-        draft, trimmed = context.draft("new", ROOMY)
+        draft, trimmed = context.begin_turn("new", ROOMY)
 
         assert not trimmed
         assert draft == [*original, {"role": "user", "content": "new"}]
         assert context.items == original
 
     @pytest.mark.parametrize("kept_turns", [1, 2])
-    def test_draft_drops_only_as_many_oldest_turns_as_needed(self, kept_turns):
+    def test_begin_turn_drops_only_as_many_oldest_turns_as_needed(self, kept_turns):
         # Each turn is about 2,000 tokens, so a budget of kept_turns and a half
         # keeps exactly kept_turns, whatever the estimate's per-item overhead.
         big = "x" * 4000
@@ -35,7 +35,7 @@ class TestContext:
         context = Context()
         context.items = history
 
-        draft, trimmed = context.draft("new", kept_turns * 2000 + 1000)
+        draft, trimmed = context.begin_turn("new", kept_turns * 2000 + 1000)
 
         assert trimmed
         assert draft == [
@@ -43,20 +43,20 @@ class TestContext:
             {"role": "user", "content": "new"},
         ]
 
-    def test_draft_keeps_last_user_turn_even_if_over_budget(self):
+    def test_begin_turn_keeps_last_user_turn_even_if_over_budget(self):
         context = Context()
         prompt = "word " * 100
 
-        draft, trimmed = context.draft(prompt, 1)
+        draft, trimmed = context.begin_turn(prompt, 1)
 
         assert not trimmed
         assert draft == [{"role": "user", "content": prompt}]
 
-    def test_commit_appends_reply_to_draft(self):
+    def test_save_turn_appends_reply_to_the_input(self):
         context = Context()
-        draft, _ = context.draft("hi", ROOMY)
+        draft, _ = context.begin_turn("hi", ROOMY)
 
-        commit_reply(context, draft, "hello")
+        save_reply(context, draft, "hello")
 
         assert context.items == [
             {"role": "user", "content": "hi"},
@@ -71,7 +71,7 @@ class TestContext:
 
         assert context.items == []
 
-    def test_draft_counts_utf8_bytes_so_non_latin_text_is_not_undercounted(self):
+    def test_begin_turn_counts_utf8_bytes_so_non_latin_text_is_not_undercounted(self):
         # The same number of characters is about 3x the bytes in CJK as in ASCII,
         # so only the CJK history goes over the budget.
         def draft_trimmed(text: str) -> bool:
@@ -80,7 +80,7 @@ class TestContext:
                 {"role": "user", "content": text},
                 {"role": "assistant", "content": "ok"},
             ]
-            _, trimmed = context.draft("new", 200)
+            _, trimmed = context.begin_turn("new", 200)
             return trimmed
 
         assert not draft_trimmed("a" * 400)
@@ -104,10 +104,10 @@ class TestContextUndo:
 
 
 class TestContextRewind:
-    def test_draft_remembers_the_prompt_without_saving_it(self):
+    def test_begin_turn_remembers_the_prompt_without_saving_it(self):
         context = Context()
 
-        context.draft("hi", ROOMY)
+        context.begin_turn("hi", ROOMY)
 
         assert context.last_prompt == "hi"
         assert not context.last_saved
@@ -116,8 +116,8 @@ class TestContextRewind:
     def test_rewind_drops_a_saved_turn_and_returns_its_prompt(self):
         context = Context()
         context.items = make_context(1)
-        draft, _ = context.draft("hi", ROOMY)
-        commit_reply(context, draft, "hello")
+        draft, _ = context.begin_turn("hi", ROOMY)
+        save_reply(context, draft, "hello")
 
         assert context.last_saved
         assert context.rewind() == "hi"
@@ -126,7 +126,7 @@ class TestContextRewind:
     def test_rewind_keeps_the_history_when_the_turn_was_not_saved(self):
         context = Context()
         context.items = make_context(1)
-        context.draft("failed", ROOMY)  # no commit: the turn failed
+        context.begin_turn("failed", ROOMY)  # no save_turn: the turn failed
 
         assert context.rewind() == "failed"
         assert context.items == make_context(1)
@@ -134,8 +134,8 @@ class TestContextRewind:
     def test_rewind_after_undo_does_not_drop_an_older_turn(self):
         context = Context()
         for prompt in ("first", "second"):
-            draft, _ = context.draft(prompt, ROOMY)
-            commit_reply(context, draft, "reply")
+            draft, _ = context.begin_turn(prompt, ROOMY)
+            save_reply(context, draft, "reply")
         context.undo()
 
         assert context.rewind() == "second"
@@ -146,8 +146,8 @@ class TestContextRewind:
 
     def test_rewind_after_reset_returns_the_prompt_and_leaves_history_empty(self):
         context = Context()
-        draft, _ = context.draft("hi", ROOMY)
-        commit_reply(context, draft, "hello")
+        draft, _ = context.begin_turn("hi", ROOMY)
+        save_reply(context, draft, "hello")
         context.reset()
 
         assert context.rewind() == "hi"
@@ -169,21 +169,21 @@ TOOL_TURN: ResponseInputParam = [
 class TestContextToolTurns:
     """A turn that used tools is more than a prompt and a reply."""
 
-    def test_commit_keeps_the_whole_turn(self):
+    def test_save_turn_keeps_the_whole_turn(self):
         context = Context()
-        draft, _ = context.draft("read notes.txt", ROOMY)
+        draft, _ = context.begin_turn("read notes.txt", ROOMY)
 
-        context.commit([*draft, *TOOL_TURN[1:]])
+        context.save_turn([*draft, *TOOL_TURN[1:]])
 
         assert context.items == TOOL_TURN
 
     def test_only_the_latest_turn_keeps_its_tool_work(self):
         context = Context()
-        draft, _ = context.draft("read notes.txt", ROOMY)
-        context.commit([*draft, *TOOL_TURN[1:]])
-        draft, _ = context.draft("and again", ROOMY)
+        draft, _ = context.begin_turn("read notes.txt", ROOMY)
+        context.save_turn([*draft, *TOOL_TURN[1:]])
+        draft, _ = context.begin_turn("and again", ROOMY)
 
-        context.commit([*draft, *TOOL_TURN[1:]])
+        context.save_turn([*draft, *TOOL_TURN[1:]])
 
         expected: ResponseInputParam = [
             TOOL_TURN[0],
@@ -196,8 +196,8 @@ class TestContextToolTurns:
     def test_undo_after_pruning_removes_only_the_latest_turn(self):
         context = Context()
         for prompt in ("read notes.txt", "and again"):
-            draft, _ = context.draft(prompt, ROOMY)
-            context.commit([*draft, *TOOL_TURN[1:]])
+            draft, _ = context.begin_turn(prompt, ROOMY)
+            context.save_turn([*draft, *TOOL_TURN[1:]])
 
         context.undo()
 
@@ -206,8 +206,8 @@ class TestContextToolTurns:
     def test_undo_removes_all_of_a_tool_turn(self):
         context = Context()
         context.items = make_context(1)
-        draft, _ = context.draft("read notes.txt", ROOMY)
-        context.commit([*draft, *TOOL_TURN[1:]])
+        draft, _ = context.begin_turn("read notes.txt", ROOMY)
+        context.save_turn([*draft, *TOOL_TURN[1:]])
 
         context.undo()
 
@@ -215,8 +215,8 @@ class TestContextToolTurns:
 
     def test_rewind_removes_all_of_a_tool_turn_and_returns_its_prompt(self):
         context = Context()
-        draft, _ = context.draft("read notes.txt", ROOMY)
-        context.commit([*draft, *TOOL_TURN[1:]])
+        draft, _ = context.begin_turn("read notes.txt", ROOMY)
+        context.save_turn([*draft, *TOOL_TURN[1:]])
 
         assert context.rewind() == "read notes.txt"
         assert context.items == []
@@ -240,7 +240,7 @@ class TestContextToolTurns:
         context = Context()
         context.items = history
 
-        draft, trimmed = context.draft("next", 1_000)
+        draft, trimmed = context.begin_turn("next", 1_000)
 
         assert not trimmed
         assert draft[:5] == history  # nothing dropped, and the blob is still sent
@@ -255,7 +255,7 @@ class TestContextToolTurns:
             {"role": "assistant", "content": "welcome"},
         ]
 
-        draft, _ = context.draft("next", budget)
+        draft, _ = context.begin_turn("next", budget)
 
         kinds = [dict(item).get("type") for item in draft]
         assert dict(draft[0]).get("role") == "user"  # never starts mid-turn

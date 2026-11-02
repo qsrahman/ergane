@@ -102,7 +102,7 @@ class Agent:
                 is still calling tools after max_turns calls, or if the tool
                 results grow the turn past the context budget.
         """
-        items, trimmed = self.context.draft(prompt, self.config.max_context_tokens)
+        items, trimmed = self.context.begin_turn(prompt, self.config.max_context_tokens)
         if trimmed:
             on_notice("Context trimmed: oldest turns dropped")
 
@@ -133,7 +133,7 @@ class Agent:
                 f"Stopped after {self.config.max_turns} model calls without a "
                 "final answer"
             )
-            self.context.commit(
+            self.context.save_turn(
                 [*items, {"role": "assistant", "content": f"[{message}]"}]
             )
             raise TurnError(message)
@@ -143,7 +143,7 @@ class Agent:
         # two user messages in a row.
         cut_off = response.status == "incomplete"
         if response.output_text and (problem is None or cut_off):
-            self.context.commit(
+            self.context.save_turn(
                 [*items, {"role": "assistant", "content": response.output_text}]
             )
         if problem:

@@ -20,7 +20,7 @@ from muagent.tools import MAX_OUTPUT_CHARS, Tool
 
 @pytest.mark.parametrize("streaming", [True, False])
 class TestAgentRunTurn:
-    def test_completed_response_is_committed(self, make_agent, streaming):
+    def test_completed_response_is_saved(self, make_agent, streaming):
         agent = make_agent(STREAMING=streaming)
 
         notices: list[str] = []
