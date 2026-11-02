@@ -206,8 +206,17 @@ class TestServer:
         server = make_server()
         by_name = {tool.name: tool for tool in server.tools()}
 
-        assert by_name["fake__die"].call("{}").startswith("Error: ")
-        assert by_name["fake__add"].call('{"a": 1, "b": 1}').startswith("Error: ")
+        # The error says which server it was.
+        assert (
+            by_name["fake__die"]
+            .call("{}")
+            .startswith("Error: McpServerError: MCP server 'fake': ")
+        )
+        assert (
+            by_name["fake__add"]
+            .call('{"a": 1, "b": 1}')
+            .startswith("Error: McpServerError: MCP server 'fake': ")
+        )
 
     def test_a_call_after_close_says_the_server_is_not_running(self, make_server):
         server = make_server()
@@ -311,6 +320,8 @@ class TestLoadServers:
 
         assert servers["plain"].args == [] and servers["plain"].env == {}
         assert servers["plain"].read_only is False  # trust must be asked for
+        assert servers["plain"].startup_timeout == 20
+        assert servers["plain"].call_timeout == 60
         assert servers["full"].args == ["a", "b"]
         assert servers["full"].env == {"K": "v"}
         assert servers["full"].read_only is True
@@ -331,8 +342,31 @@ class TestLoadServers:
                 "String should match pattern",
             ),
             ('{"servers": {}}', "servers"),
+            (
+                '{"mcpServers": {"a": {"command": "x", "call_timeout": 0}}}',
+                "call_timeout",
+            ),
+            (
+                '{"mcpServers": {"a": {"command": "x", "startup_timeout": -1}}}',
+                "startup_timeout",
+            ),
+            (
+                '{"mcpServers": {"a": {"command": "x", "call_timeout": "soon"}}}',
+                "call_timeout",
+            ),
         ],
-        ids=["not-json", "no-command", "empty-command", "typo", "http", "name", "key"],
+        ids=[
+            "not-json",
+            "no-command",
+            "empty-command",
+            "typo",
+            "http",
+            "name",
+            "key",
+            "zero-timeout",
+            "negative-timeout",
+            "text-timeout",
+        ],
     )
     def test_a_mistake_names_where_it_is(self, tmp_path, text, message):
         with pytest.raises(ValidationError, match=message.replace(".", r"\.")):
@@ -393,7 +427,85 @@ class TestStartServers:
                 {"first": self.fake(), "second": self.fake()}, tmp_path, interrupt
             )
 
-        assert "mcp-first" not in [t.name for t in threading.enumerate()]
+        # The second was still starting when the first one was reported.
+        names = [t.name for t in threading.enumerate()]
+        assert "mcp-first" not in names and "mcp-second" not in names
+
+    def test_the_timeouts_of_a_server_are_used(self, tmp_path):
+        servers, found = start_servers(
+            {"quick": self.fake(call_timeout=0.3)}, tmp_path, lambda notice: None
+        )
+        try:
+            by_name = {tool.name: tool for tool in found}
+
+            result = by_name["quick__slow"].call('{"seconds": 1}')
+
+            assert result.endswith("did not answer within 0.3 s")
+        finally:
+            for server in servers:
+                server.close()
+
+    def test_a_server_that_is_too_slow_to_start_is_given_up_on(self, tmp_path):
+        from muagent.mcp_client import McpServerConfig
+
+        notices: list[str] = []
+        silent = McpServerConfig(
+            command=sys.executable,
+            args=["-c", "import time; time.sleep(60)"],
+            startup_timeout=0.5,
+        )
+
+        servers, found = start_servers({"silent": silent}, tmp_path, notices.append)
+
+        assert (servers, found) == ([], [])
+        assert notices == ["MCP server 'silent' did not answer within 0.5 s"]
+
+    def test_the_servers_start_at_the_same_time(self, tmp_path):
+        # Each server waits for the other to have started, and gives up if it does
+        # not: only servers that are started together can both come up.
+        script = (
+            "import pathlib, runpy, sys, time\n"
+            "mine, other = map(pathlib.Path, sys.argv[1:3])\n"
+            "mine.touch()\n"
+            "for _ in range(100):\n"
+            "    if other.exists():\n"
+            "        break\n"
+            "    time.sleep(0.05)\n"
+            "else:\n"
+            "    sys.exit('the other server never started')\n"
+            f"runpy.run_path({FAKE!r}, run_name='__main__')\n"
+        )
+        from muagent.mcp_client import McpServerConfig
+
+        a, b = tmp_path / "a", tmp_path / "b"
+        configs = {
+            "one": McpServerConfig(
+                command=sys.executable, args=["-c", script, str(a), str(b)]
+            ),
+            "two": McpServerConfig(
+                command=sys.executable, args=["-c", script, str(b), str(a)]
+            ),
+        }
+
+        servers, found = start_servers(configs, tmp_path, lambda notice: None)
+        try:
+            assert [server.name for server in servers] == ["one", "two"]
+            assert {tool.name.split("__")[0] for tool in found} == {"one", "two"}
+        finally:
+            for server in servers:
+                server.close()
+
+    def test_close_cancels_a_server_that_is_still_starting(self, make_server):
+        server = make_server(
+            name="pending", args=["-c", "import time; time.sleep(60)"], start=False
+        )
+        server.launch()
+        started = time.monotonic()
+
+        server.close()
+
+        assert time.monotonic() - started < 6
+        assert "mcp-pending" not in [t.name for t in threading.enumerate()]
 
     def test_no_servers_is_no_work(self, tmp_path):
         assert start_servers({}, tmp_path, print) == ([], [])

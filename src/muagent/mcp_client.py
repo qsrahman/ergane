@@ -130,6 +130,8 @@ class McpServerConfig(BaseModel):
     env: dict[str, str] = {}
     # Trust the server's tools to run without asking. Off unless the user says so.
     read_only: bool = False
+    startup_timeout: float = Field(default=20, gt=0)  # seconds
+    call_timeout: float = Field(default=60, gt=0)  # seconds
 
 
 class _McpFile(BaseModel):
@@ -215,6 +217,7 @@ class McpServer:
         self._thread: threading.Thread | None = None
         self._session: ClientSession | None = None
         self._task: asyncio.Task[None] | None = None
+        self._ready: concurrent.futures.Future[ClientSession] | None = None
         self._stop = asyncio.Event()  # set to let the task end the connection
         self._finished = threading.Event()  # set when the task has ended
 
@@ -222,9 +225,20 @@ class McpServer:
         """Start the server and connect to it. Call `close()` when done.
 
         Raises:
-            McpServerError: If the `mcp` package is missing, the log cannot be opened,
-                the server cannot be run, exits before it answers, or takes longer
-                than the startup timeout.
+            McpServerError: See `launch()` and `connect()`.
+        """
+        self.launch()
+        self.connect()
+
+    def launch(self) -> None:
+        """Begin starting the server without waiting for it; `connect()` waits.
+
+        Launching several servers before connecting to any lets them start at the
+        same time.
+
+        Raises:
+            McpServerError: If the `mcp` package is missing or the log cannot be
+                opened.
         """
         if importlib.util.find_spec("mcp") is None:
             raise McpServerError(
@@ -244,13 +258,26 @@ class McpServer:
         )
         self._thread.start()
         ready: concurrent.futures.Future[ClientSession] = concurrent.futures.Future()
+        self._ready = ready
 
-        def launch() -> None:
+        def create_task() -> None:
             self._task = loop.create_task(self._serve(ready, log))
+            # Not in _serve: a task cancelled before its first step never runs it.
+            self._task.add_done_callback(lambda task: self._finished.set())
 
-        loop.call_soon_threadsafe(launch)
+        loop.call_soon_threadsafe(create_task)
+
+    def connect(self) -> None:
+        """Wait until a launched server is up.
+
+        Raises:
+            McpServerError: If the server cannot be run, exits before it answers, or
+                takes longer than the startup timeout.
+        """
+        if self._ready is None:
+            raise McpServerError(f"MCP server {self.name!r} was not launched")
         try:
-            self._session = ready.result(self._startup_timeout)
+            self._session = self._ready.result(self._startup_timeout)
         except BaseException as exc:
             self._close(cancel=True)
             if not isinstance(exc, Exception):
@@ -288,28 +315,34 @@ class McpServer:
             if not ready.done():
                 ready.set_exception(exc)
             raise
-        finally:
-            self._finished.set()
 
     def close(self) -> None:
         """Disconnect and stop the server and its thread. Safe to call twice."""
-        self._close(cancel=False)
+        # A server that is still starting cannot be asked to stop; it is cancelled.
+        self._close(cancel=self._session is None)
 
     def _close(self, cancel: bool) -> None:
-        loop, thread, task = self._loop, self._thread, self._task
+        loop, thread = self._loop, self._thread
         if loop is None or thread is None:
             return
-        self._loop = self._thread = self._session = self._task = None
-        if cancel and task is not None:
-            loop.call_soon_threadsafe(task.cancel)
+        self._loop = self._thread = self._session = None
+
+        def cancel_task() -> None:
+            # Run on the loop, after the callback that creates the task.
+            if self._task is not None:
+                self._task.cancel()
+
+        if cancel:
+            loop.call_soon_threadsafe(cancel_task)
         else:
             loop.call_soon_threadsafe(self._stop.set)
         # Unwinding stops the server process, so wait for it before the loop stops.
-        if not self._finished.wait(_STOP_SECONDS) and task is not None:
-            loop.call_soon_threadsafe(task.cancel)
+        if not self._finished.wait(_STOP_SECONDS):
+            loop.call_soon_threadsafe(cancel_task)
             self._finished.wait(_STOP_SECONDS)
         loop.call_soon_threadsafe(loop.stop)
         thread.join(_STOP_SECONDS)
+        self._task = self._ready = None
         if self._log is not None:
             self._log.close()
             self._log = None
@@ -357,7 +390,8 @@ class McpServer:
         """Run a coroutine on the server's loop and wait for its result.
 
         Raises:
-            McpServerError: If the server is not running.
+            McpServerError: If the server is not running, or fails the request (it
+                has stopped, say).
             TimeoutError: If it takes longer than `timeout`; the request is cancelled
                 and the connection stays usable.
             KeyboardInterrupt: On Ctrl-C, after cancelling the request.
@@ -376,6 +410,11 @@ class McpServer:
         except KeyboardInterrupt:
             future.cancel()
             raise
+        except Exception as exc:  # noqa: BLE001
+            leaf = _leaf(exc)
+            raise McpServerError(
+                f"MCP server {self.name!r}: {type(leaf).__name__}: {leaf}"
+            ) from None
 
 
 def start_servers(
@@ -383,7 +422,7 @@ def start_servers(
     log_dir: Path,
     on_notice: Callable[[str], None],
 ) -> tuple[list[McpServer], list[Tool]]:
-    """Start the servers and collect their tools.
+    """Start the servers, all at once, and collect their tools.
 
     A server that fails is reported and left out: it must not stop muagent.
 
@@ -395,34 +434,50 @@ def start_servers(
     Returns:
         The servers that are running, which the caller must close, and their tools.
     """
-    servers: list[McpServer] = []
+    servers = [
+        McpServer(
+            name,
+            config.command,
+            config.args,
+            config.env,
+            log=log_dir / f"{name}.log",
+            read_only=config.read_only,
+            startup_timeout=config.startup_timeout,
+            call_timeout=config.call_timeout,
+        )
+        for name, config in configs.items()
+    ]
+    running: list[McpServer] = []
     tools: list[Tool] = []
     try:
-        for name, config in configs.items():
-            server = McpServer(
-                name,
-                config.command,
-                config.args,
-                config.env,
-                log=log_dir / f"{name}.log",
-                read_only=config.read_only,
-            )
+        # They all start at once, and are waited for in turn.
+        refused: dict[str, str] = {}
+        for server in servers:
             try:
-                server.start()
+                server.launch()
+            except McpServerError as exc:
+                refused[server.name] = str(exc)
+        for server in servers:
+            if server.name in refused:
+                on_notice(refused[server.name])
+                continue
+            try:
+                server.connect()
                 found = server.tools()
             except Exception as exc:  # noqa: BLE001
                 server.close()
                 on_notice(
                     str(exc)
                     if isinstance(exc, McpServerError)
-                    else f"MCP server {name!r} failed: {type(exc).__name__}: {exc}"
+                    else f"MCP server {server.name!r} failed: "
+                    f"{type(exc).__name__}: {exc}"
                 )
                 continue
-            servers.append(server)
+            running.append(server)
             tools += found
-            on_notice(f"MCP server {name!r}: {len(found)} tools")
+            on_notice(f"MCP server {server.name!r}: {len(found)} tools")
     except BaseException:
         for server in servers:
             server.close()
         raise
-    return servers, tools
+    return running, tools

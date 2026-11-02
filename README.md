@@ -110,8 +110,10 @@ def add(a: int, b: int) -> str:
 | `args`      | Its arguments                                                                                                |
 | `env`       | Environment variables for it. The server gets only a short list (`PATH`, `HOME`, ...) and these, so it does not see your `OPENAI_API_KEY`. |
 | `read_only` | `true` lets the server's tools run without asking. Default `false`.                                          |
+| `startup_timeout` | Seconds to wait for the server to start and list its tools. Default `20`.                              |
+| `call_timeout` | Seconds a call to one of its tools may take before it is given up on. Default `60`.                       |
 
-The names are letters, digits, `_` and `-`. A server's tools are offered to the model as `name__tool`; `/tools` lists them. A server that fails to start is reported and left out. Its stderr goes to `~/.local/state/muagent/NAME.log` (or `$XDG_STATE_HOME/muagent/NAME.log`), where you will find why it failed.
+The names are letters, digits, `_` and `-`. A server's tools are offered to the model as `name__tool`; `/tools` lists them. The servers start at the same time, so a few slow ones do not add up. A server that fails to start is reported and left out; one that stops while you work makes its tools return an error that names it, and the others carry on. Its stderr goes to `~/.local/state/muagent/NAME.log` (or `$XDG_STATE_HOME/muagent/NAME.log`), where you will find why it failed.
 
 A few things to know before you add a server:
 
