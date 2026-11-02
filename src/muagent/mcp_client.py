@@ -13,12 +13,13 @@ import asyncio
 import concurrent.futures
 import importlib.util
 import json
+import os
 import re
 import threading
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Self, TextIO
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Self, TextIO
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -155,9 +156,14 @@ class McpServerConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # What kind of server it is. Optional, since command or url says it already, but
+    # if given it must agree with them: a mistake is better caught than ignored.
+    type: Literal["local", "remote"] | None = None
+    enable: bool = True  # False keeps the entry but does not start the server
     command: str | None = Field(default=None, min_length=1)
     args: list[str] = []
     env: dict[str, str] = {}
+    cwd: str | None = Field(default=None, min_length=1)  # where the program runs
     url: str | None = None
     headers: dict[str, str] = {}  # e.g. Authorization, for a url
     # Trust the server's tools to run without asking. Off unless the user says so.
@@ -171,12 +177,18 @@ class McpServerConfig(BaseModel):
             raise ValueError(
                 "give either command (a program to run) or url (a server to connect to)"
             )
+        kind = "local" if self.url is None else "remote"
+        if self.type not in (None, kind):
+            raise ValueError(
+                f"type is {self.type!r}, but a server with a "
+                f"{'command' if self.url is None else 'url'} is {kind!r}"
+            )
         if self.url is None:
             if self.headers:
                 raise ValueError("headers go with url")
         else:
-            if self.args or self.env:
-                raise ValueError("args and env go with command")
+            if self.args or self.env or self.cwd:
+                raise ValueError("args, env and cwd go with command")
             _check_url(self.url)
         return self
 
@@ -225,6 +237,7 @@ class McpServer:
         args: Sequence[str] = (),
         env: Mapping[str, str] | None = None,
         *,
+        cwd: str | None = None,
         url: str | None = None,
         headers: Mapping[str, str] | None = None,
         log: Path | None = None,
@@ -241,6 +254,7 @@ class McpServer:
             env: Environment variables for it, added to a short allow-list (PATH,
                 HOME and the like): it does not inherit the rest, so it does not
                 see this program's API key.
+            cwd: The directory the program runs in; muagent's own if omitted.
             url: The server's endpoint, for streamable HTTP. Not checked here: the
                 rules for which URLs are allowed are those of `McpServerConfig`.
             headers: Sent with every request to the url (an Authorization, say).
@@ -268,6 +282,7 @@ class McpServer:
         self._command = command
         self._args = list(args)
         self._env = dict(env) if env else None
+        self._cwd = cwd
         self._url = url
         self._headers = dict(headers) if headers else None
         self._log_path = log
@@ -327,8 +342,7 @@ class McpServer:
 
         def create_task() -> None:
             self._task = loop.create_task(self._serve(ready, log))
-            # Not in _serve: a task cancelled before its first step never runs it.
-            self._task.add_done_callback(lambda task: self._finished.set())
+            self._task.add_done_callback(self._task_done)
 
         loop.call_soon_threadsafe(create_task)
 
@@ -354,6 +368,18 @@ class McpServer:
                 reason = f"failed to start: {type(leaf).__name__}: {leaf}"
             raise McpServerError(f"MCP server {self.name!r} {reason}") from None
 
+    def _task_done(self, task: asyncio.Task[None]) -> None:
+        """Note that the connection's task has ended, however it ended.
+
+        This is here, not in `_serve`: a task cancelled before its first step never
+        runs any of its code.
+        """
+        if not task.cancelled():
+            # A server that dies ends the task with an error. The caller has it,
+            # as the error of the call that failed, so asyncio need not log it.
+            task.exception()
+        self._finished.set()
+
     async def _serve(
         self, ready: concurrent.futures.Future[ClientSession], log: TextIO | None
     ) -> None:
@@ -372,7 +398,10 @@ class McpServer:
                 if self._url is None:
                     assert self._command is not None and log is not None
                     params = StdioServerParameters(
-                        command=self._command, args=self._args, env=self._env
+                        command=self._command,
+                        args=self._args,
+                        env=self._env,
+                        cwd=self._cwd,
                     )
                     read, write = await stack.enter_async_context(
                         stdio_client(params, errlog=log)
@@ -500,70 +529,117 @@ class McpServer:
             ) from None
 
 
+_PLACEHOLDER = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _expand(
+    name: str, config: McpServerConfig, environ: Mapping[str, str]
+) -> McpServerConfig:
+    """Fill in the `${NAME}` placeholders of a server from the environment.
+
+    Only in what a server is given to run with: `args`, `env`, `headers` and `cwd`.
+    This keeps keys out of the file, and a server gets only the variables the file
+    names. The text a variable holds is not looked at again for placeholders.
+
+    Raises:
+        McpServerError: If a variable is not set. It names the variable and where it
+            is used, never a value.
+    """
+
+    def fill(text: str, where: str) -> str:
+        def value(match: re.Match[str]) -> str:
+            variable = match.group(1)
+            if variable not in environ:
+                raise McpServerError(
+                    f"MCP server {name!r}: {where} uses ${{{variable}}}, "
+                    "which is not set"
+                )
+            return environ[variable]
+
+        return _PLACEHOLDER.sub(value, text)
+
+    return config.model_copy(
+        update={
+            "args": [fill(arg, "args") for arg in config.args],
+            "env": {k: fill(v, f"env.{k}") for k, v in config.env.items()},
+            "headers": {k: fill(v, f"headers.{k}") for k, v in config.headers.items()},
+            "cwd": fill(config.cwd, "cwd") if config.cwd else None,
+        }
+    )
+
+
 def start_servers(
     configs: Mapping[str, McpServerConfig],
     log_dir: Path,
     on_notice: Callable[[str], None],
+    *,
+    environ: Mapping[str, str] = os.environ,
 ) -> tuple[list[McpServer], list[Tool]]:
     """Start the servers, all at once, and collect their tools.
 
-    A server that fails is reported and left out: it must not stop muagent.
+    A server that fails is reported and left out: it must not stop muagent. One
+    that is switched off (`enable` false) is left out without a word.
 
     Args:
         configs: The servers to start, by name.
         log_dir: Where each server's stderr goes, in a file named after it.
         on_notice: Called with a line about each server, once it is up or has failed.
+        environ: Where the `${NAME}` placeholders of the servers are filled in from.
 
     Returns:
         The servers that are running, which the caller must close, and their tools.
     """
-    servers = [
-        McpServer(
-            name,
-            config.command,
-            config.args,
-            config.env,
-            url=config.url,
-            headers=config.headers,
-            # Only a program has a stderr to keep.
-            log=log_dir / f"{name}.log" if config.command else None,
-            read_only=config.read_only,
-            startup_timeout=config.startup_timeout,
-            call_timeout=config.call_timeout,
-        )
-        for name, config in configs.items()
-    ]
-    running: list[McpServer] = []
-    tools: list[Tool] = []
+    # Each server, or why it cannot be started, in the order of the file.
+    entries: list[tuple[str, McpServer | str]] = []
     try:
-        # They all start at once, and are waited for in turn.
-        refused: dict[str, str] = {}
-        for server in servers:
-            try:
-                server.launch()
-            except McpServerError as exc:
-                refused[server.name] = str(exc)
-        for server in servers:
-            if server.name in refused:
-                on_notice(refused[server.name])
+        for name, config in configs.items():
+            if not config.enable:
                 continue
             try:
-                server.connect()
-                found = server.tools()
+                config = _expand(name, config, environ)
+                server = McpServer(
+                    name,
+                    config.command,
+                    config.args,
+                    config.env,
+                    cwd=config.cwd,
+                    url=config.url,
+                    headers=config.headers,
+                    # Only a program has a stderr to keep.
+                    log=log_dir / f"{name}.log" if config.command else None,
+                    read_only=config.read_only,
+                    startup_timeout=config.startup_timeout,
+                    call_timeout=config.call_timeout,
+                )
+                server.launch()  # they all start at once; connect() waits below
+            except McpServerError as exc:
+                entries.append((name, str(exc)))
+            else:
+                entries.append((name, server))
+
+        running: list[McpServer] = []
+        tools: list[Tool] = []
+        for name, entry in entries:
+            if isinstance(entry, str):
+                on_notice(entry)
+                continue
+            try:
+                entry.connect()
+                found = entry.tools()
             except Exception as exc:  # noqa: BLE001
-                server.close()
+                entry.close()
                 on_notice(
                     str(exc)
                     if isinstance(exc, McpServerError)
-                    else f"MCP server {server.name!r} failed: "
-                    f"{type(exc).__name__}: {exc}"
+                    else f"MCP server {name!r} failed: {type(exc).__name__}: {exc}"
                 )
                 continue
-            running.append(server)
+            running.append(entry)
             tools += found
-            on_notice(f"MCP server {server.name!r}: {len(found)} tools")
+            on_notice(f"MCP server {name!r}: {len(found)} tools")
     except BaseException:
-        for server in servers:
-            server.close()
+        for _, entry in entries:
+            if not isinstance(entry, str):
+                entry.close()
         raise
     return running, tools

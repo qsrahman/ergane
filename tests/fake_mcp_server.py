@@ -79,6 +79,12 @@ def getenv(name: str) -> str:
 
 
 @server.tool()
+def getcwd() -> str:
+    """Return the working directory of the server process."""
+    return os.getcwd()
+
+
+@server.tool()
 def header(name: str, ctx: Context) -> str:
     """Return a header of the HTTP request that carried this call."""
     request = ctx.request_context.request

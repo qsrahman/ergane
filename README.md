@@ -97,12 +97,14 @@ def add(a: int, b: int) -> str:
     "files": {
       "command": "my-files-server",
       "args": ["--root", "/path/to/project"],
-      "env": { "SOME_TOKEN": "..." }
+      "env": { "SOME_TOKEN": "${SOME_TOKEN}" },
+      "cwd": "${HOME}"
     },
     "notes": { "command": "my-notes-server", "read_only": true },
     "remote": {
       "url": "https://example.com/mcp",
-      "headers": { "Authorization": "Bearer ..." }
+      "headers": { "Authorization": "Bearer ${REMOTE_TOKEN}" },
+      "enable": false
     }
   }
 }
@@ -110,14 +112,19 @@ def add(a: int, b: int) -> str:
 
 | Key         | Description                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------ |
+| `type`      | `"local"` for a `command`, `"remote"` for a `url`. Optional; if given it must agree with them.               |
+| `enable`    | `false` keeps the entry but does not start the server. Default `true`.                                       |
 | `command`   | The program that runs the server. Give this or `url`, not both.                                              |
 | `args`      | Its arguments                                                                                                |
+| `cwd`       | The directory it runs in. Default: where you run `muagent`.                                                  |
 | `env`       | Environment variables for it. The server gets only a short list (`PATH`, `HOME`, ...) and these, so it does not see your `OPENAI_API_KEY`. |
 | `url`       | The address of a server to connect to, instead of a `command`. `https://`, or `http://` for `localhost`, `127.0.0.1` and `[::1]` only. |
 | `headers`   | Sent with every request to the `url`, for an `Authorization` or an API key. Not in the URL itself: a user name or password there is refused. |
 | `read_only` | `true` lets the server's tools run without asking. Default `false`.                                          |
 | `startup_timeout` | Seconds to wait for the server to start and list its tools. Default `20`.                              |
 | `call_timeout` | Seconds a call to one of its tools may take before it is given up on. Default `60`.                       |
+
+Write `${NAME}` in `args`, `env`, `headers` or `cwd` to use the environment variable `NAME`, so that keys stay out of the file: `"env": { "API_KEY": "${MY_API_KEY}" }`. A server whose variable is not set is skipped, with a notice that names the variable. The server gets only the variables you list, not the rest of your environment.
 
 The names are letters, digits, `_` and `-`. A server's tools are offered to the model as `name__tool`; `/tools` lists them. The servers start at the same time, so a few slow ones do not add up. A server that fails to start is reported and left out; one that stops while you work makes its tools return an error that names it, and the others carry on. The stderr of a program goes to `~/.local/state/muagent/NAME.log` (or `$XDG_STATE_HOME/muagent/NAME.log`), where you will find why it failed.
 

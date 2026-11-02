@@ -125,6 +125,44 @@ class TestMcpServers:
         assert RecordingRepl.agent is not None
         assert "web__add" in RecordingRepl.agent.tools
 
+    def test_a_file_with_type_enable_cwd_and_placeholders_works(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
+        monkeypatch.setenv("FAKE_KEY", "the-key")
+        monkeypatch.setenv("WORK", str(tmp_path))
+
+        class CallingRepl(RecordingRepl):
+            key = None
+
+            def run(self):  # the servers are only running while the REPL does
+                agent = RecordingRepl.agent
+                assert agent is not None
+                CallingRepl.key = agent.tools["on__getenv"].call('{"name": "KEY"}')
+
+        monkeypatch.setattr("muagent.cli.Repl", CallingRepl)
+        write_mcp_json(
+            tmp_path,
+            {
+                "on": {
+                    **FAKE_SERVER,
+                    "type": "local",
+                    "enable": True,
+                    "cwd": "${WORK}",
+                    "env": {"KEY": "${FAKE_KEY}"},
+                },
+                "off": {**FAKE_SERVER, "type": "local", "enable": False},
+                "unset": {**FAKE_SERVER, "env": {"KEY": "${NOT_SET_ANYWHERE}"}},
+            },
+        )
+
+        main()
+
+        assert RecordingRepl.agent is not None
+        tools = RecordingRepl.agent.tools
+        assert "on__add" in tools
+        assert not any(name.startswith(("off__", "unset__")) for name in tools)
+        assert CallingRepl.key == "the-key"
+
     def test_the_servers_are_stopped_when_muagent_ends(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ):
@@ -160,7 +198,7 @@ class TestMcpServers:
         main()
 
         out = capsys.readouterr().out
-        assert out.startswith("[MCP server 'fake': 13 tools]\n\nAI coding agent")
+        assert out.startswith("[MCP server 'fake': 14 tools]\n\nAI coding agent")
 
     def test_a_server_that_fails_does_not_stop_muagent(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys

@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import gc
 import json
 import os
 import re
@@ -20,7 +21,9 @@ from pydantic import ValidationError
 from fake_api import TEXT
 from muagent.mcp_client import (
     McpServer,
+    McpServerConfig,
     McpServerError,
+    _expand,
     _list_tools,
     load_servers,
     start_servers,
@@ -440,8 +443,8 @@ class TestUrls:
             ({"url": "https://"}, "url must be http"),
             ({"url": "https://user:pass@example.com/mcp"}, "user name or password"),
             ({"url": "https://example.com", "command": "x"}, "either command"),
-            ({"url": "https://example.com", "args": ["x"]}, "args and env go with"),
-            ({"url": "https://example.com", "env": {"A": "b"}}, "args and env go with"),
+            ({"url": "https://example.com", "args": ["x"]}, "go with command"),
+            ({"url": "https://example.com", "env": {"A": "b"}}, "go with command"),
             ({"command": "x", "headers": {"A": "b"}}, "headers go with url"),
             ({}, "either command"),
         ],
@@ -451,6 +454,127 @@ class TestUrls:
     ):
         with pytest.raises(ValidationError, match=message):
             self.load(tmp_path, entry)
+
+
+class TestMcpJsonKeys:
+    """`type`, `enable` and `cwd`, as other tools' mcp.json files have them."""
+
+    def load(self, tmp_path: Path, entry: dict):
+        path = tmp_path / "mcp.json"
+        path.write_text(json.dumps({"mcpServers": {"s": entry}}))
+        return load_servers(path)["s"]
+
+    def test_a_server_is_on_by_default_and_can_be_switched_off(self, tmp_path):
+        assert self.load(tmp_path, {"command": "x"}).enable is True
+        assert self.load(tmp_path, {"command": "x", "enable": False}).enable is False
+
+    def test_a_program_can_have_a_working_directory(self, tmp_path):
+        assert self.load(tmp_path, {"command": "x", "cwd": "/srv"}).cwd == "/srv"
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            {"type": "local", "command": "x"},
+            {"type": "remote", "url": "https://example.com/mcp"},
+        ],
+    )
+    def test_a_type_that_agrees_is_accepted(self, tmp_path, entry):
+        assert self.load(tmp_path, entry).type == entry["type"]
+
+    @pytest.mark.parametrize(
+        ("entry", "message"),
+        [
+            (
+                {"type": "remote", "command": "x"},
+                "type is 'remote', but a server with a command",
+            ),
+            (
+                {"type": "local", "url": "https://example.com"},
+                "type is 'local', but a server with a url",
+            ),
+            ({"type": "stdio", "command": "x"}, "local"),
+            ({"url": "https://example.com", "cwd": "/srv"}, "go with command"),
+            ({"command": "x", "cwd": ""}, "cwd"),
+            ({"command": "x", "enable": "maybe"}, "enable"),
+        ],
+    )
+    def test_a_mistake_is_reported(self, tmp_path, entry, message):
+        with pytest.raises(ValidationError, match=message):
+            self.load(tmp_path, entry)
+
+    def test_a_file_in_this_dialect_loads(self, tmp_path):
+        path = tmp_path / "mcp.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "docs": {
+                            "type": "remote",
+                            "url": "https://docs.example.com/mcp",
+                            "headers": {"API_KEY": "${DOCS_KEY}"},
+                            "enable": True,
+                        },
+                        "files": {
+                            "type": "local",
+                            "command": "npx",
+                            "args": ["-y", "files-server@1.2.3"],
+                            "env": {"TOKEN": "${FILES_TOKEN}"},
+                            "cwd": "${HOME}",
+                            "enable": False,
+                        },
+                    }
+                }
+            )
+        )
+
+        servers = load_servers(path)
+
+        assert list(servers) == ["docs", "files"]
+        assert servers["files"].cwd == "${HOME}"  # filled in when it starts
+
+
+class TestPlaceholders:
+    def expand(self, **values):
+        config = McpServerConfig(command="x", **values)
+        return _expand("s", config, {"A": "1", "B": "two", "NESTED": "${A}"})
+
+    def test_they_are_filled_in_where_a_server_is_given_things(self):
+        config = self.expand(
+            args=["--n=${A}", "${B}-${A}"],
+            env={"K": "v${B}"},
+            cwd="/${B}",
+        )
+
+        assert config.args == ["--n=1", "two-1"]
+        assert config.env == {"K": "vtwo"}
+        assert config.cwd == "/two"
+
+    def test_headers_too(self):
+        config = McpServerConfig(
+            url="https://example.com", headers={"H": "Bearer ${B}"}
+        )
+
+        assert _expand("s", config, {"B": "tok"}).headers == {"H": "Bearer tok"}
+
+    def test_the_command_and_the_url_are_left_as_they_are(self):
+        assert self.expand().command == "x"
+        config = McpServerConfig(url="https://example.com/${A}")
+        assert _expand("s", config, {"A": "1"}).url == "https://example.com/${A}"
+
+    def test_a_value_is_not_searched_for_placeholders_again(self):
+        assert self.expand(env={"K": "${NESTED}"}).env == {"K": "${A}"}
+
+    @pytest.mark.parametrize("text", ["$A", "${A", "${1A}", "${}", "$ {A}", "{A}"])
+    def test_anything_else_is_text(self, text):
+        assert self.expand(env={"K": text}).env == {"K": text}
+
+    def test_a_variable_that_is_not_set_names_itself_and_where_it_is_used(self):
+        with pytest.raises(McpServerError) as exc:
+            self.expand(env={"TOKEN": "${MISSING}"})
+
+        assert str(exc.value) == (
+            "MCP server 's': env.TOKEN uses ${MISSING}, which is not set"
+        )
 
 
 class TestHttp:
@@ -506,15 +630,24 @@ class TestHttp:
 
         assert "mcp-web" not in [thread.name for thread in threading.enumerate()]
 
-    def test_a_server_that_goes_away_gives_an_error_that_names_it(self, make_server):
+    def test_a_server_that_goes_away_gives_an_error_that_names_it(
+        self, make_server, caplog
+    ):
         with serve_http() as url:
             server = self.make(make_server, url)
             add = {tool.name: tool for tool in server.tools()}["web__add"]
             assert add.call('{"a": 1}') == "2"
+        time.sleep(0.5)  # the SDK's background tasks notice
 
-        assert add.call('{"a": 1}').startswith(
-            "Error: McpServerError: MCP server 'web'"
-        )
+        result = add.call('{"a": 1}')
+        server.close()
+
+        assert result.startswith("Error: McpServerError: MCP server 'web'")
+        # asyncio logs an error nobody retrieved, with a traceback, when its task is
+        # collected, and with no handler that goes to the terminal; the call's error
+        # already says what happened.
+        gc.collect()
+        assert [r.getMessage() for r in caplog.records if r.name == "asyncio"] == []
 
     def test_close_stops_the_thread(self, make_server, http_url):
         server = self.make(make_server, http_url)
@@ -559,8 +692,8 @@ class TestStartServers:
             assert not names["one__add"].read_only
             assert names["two__add"].read_only
             assert notices == [
-                "MCP server 'one': 13 tools",
-                "MCP server 'two': 13 tools",
+                "MCP server 'one': 14 tools",
+                "MCP server 'two': 14 tools",
             ]
             assert (tmp_path / "one.log").exists()
         finally:
@@ -582,7 +715,7 @@ class TestStartServers:
             assert all(tool.name.startswith("good__") for tool in found)
             assert len(notices) == 2
             assert notices[0].startswith("MCP server 'broken' failed to start")
-            assert notices[1] == "MCP server 'good': 13 tools"
+            assert notices[1] == "MCP server 'good': 14 tools"
         finally:
             for server in servers:
                 server.close()
@@ -694,6 +827,82 @@ class TestStartServers:
             assert by_name["local__add"].call('{"a": 1}') == "2"
             assert (tmp_path / "local.log").exists()
             assert not (tmp_path / "web.log").exists()
+        finally:
+            for server in servers:
+                server.close()
+
+    def test_a_server_that_is_switched_off_is_not_started_or_mentioned(self, tmp_path):
+        notices: list[str] = []
+        configs = {"off": self.fake(enable=False), "on": self.fake()}
+
+        servers, _ = start_servers(configs, tmp_path, notices.append)
+        try:
+            assert [server.name for server in servers] == ["on"]
+            assert notices == ["MCP server 'on': 14 tools"]
+            assert not (tmp_path / "off.log").exists()
+        finally:
+            for server in servers:
+                server.close()
+
+    def test_placeholders_are_filled_in_from_the_environment(self, tmp_path):
+        work = tmp_path / "work"
+        work.mkdir()
+        configs = {
+            "local": self.fake(env={"GIVEN": "${SOURCE}"}, cwd="${WHERE}"),
+        }
+        environ = {"SOURCE": "from-the-environment", "WHERE": str(work)}
+
+        servers, found = start_servers(
+            configs, tmp_path, lambda notice: None, environ=environ
+        )
+        try:
+            by_name = {tool.name: tool for tool in found}
+            assert by_name["local__getenv"].call('{"name": "GIVEN"}') == (
+                "from-the-environment"
+            )
+            # Only what the file names is passed on, not the variable it came from.
+            assert by_name["local__getenv"].call('{"name": "SOURCE"}') == "unset"
+            assert Path(by_name["local__getcwd"].call("{}")).resolve() == work.resolve()
+        finally:
+            for server in servers:
+                server.close()
+
+    def test_headers_are_filled_in_too(self, tmp_path, http_url):
+        configs = {
+            "web": McpServerConfig(
+                url=http_url, headers={"Authorization": "Bearer ${TOKEN}"}
+            )
+        }
+
+        servers, found = start_servers(
+            configs, tmp_path, lambda notice: None, environ={"TOKEN": "s3cret"}
+        )
+        try:
+            header = {tool.name: tool for tool in found}["web__header"]
+            assert header.call('{"name": "authorization"}') == "Bearer s3cret"
+        finally:
+            for server in servers:
+                server.close()
+
+    def test_a_server_whose_variable_is_not_set_is_reported_in_its_place_and_skipped(
+        self, tmp_path
+    ):
+        notices: list[str] = []
+        configs = {
+            "first": self.fake(),
+            "needs": self.fake(env={"K": "${NOT_SET}"}),
+            "last": self.fake(),
+        }
+
+        servers, _ = start_servers(configs, tmp_path, notices.append, environ={})
+        try:
+            assert [server.name for server in servers] == ["first", "last"]
+            assert notices == [
+                "MCP server 'first': 14 tools",
+                "MCP server 'needs': env.K uses ${NOT_SET}, which is not set",
+                "MCP server 'last': 14 tools",
+            ]
+            assert not (tmp_path / "needs.log").exists()  # it was never launched
         finally:
             for server in servers:
                 server.close()
