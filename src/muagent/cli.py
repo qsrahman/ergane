@@ -1,29 +1,67 @@
 import sys
+from typing import NoReturn
 
 from pydantic import ValidationError
 
 from muagent.agent import Agent
 from muagent.commands import COMMANDS
-from muagent.config import load_config
+from muagent.config import load_config, user_config_dir, user_state_dir
+from muagent.console import Console
 
 # Remove demo_tools when the real tools arrive.
 from muagent.demo_tools import add, get_time
+from muagent.mcp_client import load_servers, start_servers
 from muagent.repl import Repl
+
+
+def _exit_with(title: str, exc: ValidationError, *, upper: bool = False) -> NoReturn:
+    """Print what is wrong with a configuration, and exit.
+
+    Args:
+        title: The heading of the report.
+        exc: The validation errors.
+        upper: Whether to show the names in upper case, as environment variables.
+
+    Raises:
+        SystemExit: Always, with status 1.
+    """
+    print(title, file=sys.stderr)
+    for error in exc.errors():
+        field = ".".join(str(part) for part in error["loc"])
+        field = field.upper() if upper else field
+        print(f"  - {field + ': ' if field else ''}{error['msg']}", file=sys.stderr)
+    raise SystemExit(1) from None
 
 
 def main() -> None:
     """Entry point for the AI coding agent CLI.
 
     Raises:
-        SystemExit: If the configuration is invalid.
+        SystemExit: If the configuration is invalid, or Ctrl-C ends the start.
     """
     try:
         config = load_config()
     except ValidationError as exc:
-        print("Configuration error:", file=sys.stderr)
-        for error in exc.errors():
-            field = ".".join(str(part) for part in error["loc"]).upper()
-            print(f"  - {field}: {error['msg']}", file=sys.stderr)
-        raise SystemExit(1) from None
+        _exit_with("Configuration error:", exc, upper=True)
 
-    Repl(Agent(config, tools=[add, get_time]), COMMANDS).run()
+    mcp_file = user_config_dir() / "mcp.json"
+    try:
+        mcp_configs = load_servers(mcp_file)
+    except ValidationError as exc:
+        _exit_with(f"Configuration error in {mcp_file}:", exc)
+
+    console = Console()
+    try:
+        servers, mcp_tools = start_servers(
+            mcp_configs, user_state_dir(), console.notice
+        )
+    except KeyboardInterrupt:
+        raise SystemExit(130) from None
+    if mcp_configs:
+        console.blank()
+
+    try:
+        Repl(Agent(config, tools=[add, get_time, *mcp_tools]), COMMANDS).run()
+    finally:
+        for server in servers:
+            server.close()

@@ -21,6 +21,8 @@ A minimal terminal chat agent built on the OpenAI [Responses API](https://platfo
 uv sync
 ```
 
+To use [MCP servers](#mcp-servers), install the extra too: `uv sync --extra mcp` (or `pip install 'muagent[mcp]'`).
+
 Put your settings in `~/.config/muagent/.env` (or `$XDG_CONFIG_HOME/muagent/.env`), or in a `.env` in the directory you run `muagent` from, which overrides the user file. The project's `.env` is git-ignored.
 
 ```dotenv
@@ -84,6 +86,39 @@ def add(a: int, b: int) -> str:
     """Add two integers and return the sum."""
     return str(a + b)
 ```
+
+## MCP servers
+
+`muagent` can use the tools of [MCP](https://modelcontextprotocol.io) servers that run as a local program (stdio). List them in `~/.config/muagent/mcp.json` (or `$XDG_CONFIG_HOME/muagent/mcp.json`), in the usual format:
+
+```json
+{
+  "mcpServers": {
+    "files": {
+      "command": "my-files-server",
+      "args": ["--root", "/path/to/project"],
+      "env": { "SOME_TOKEN": "..." }
+    },
+    "notes": { "command": "my-notes-server", "read_only": true }
+  }
+}
+```
+
+| Key         | Description                                                                                                  |
+| ----------- | ------------------------------------------------------------------------------------------------------------ |
+| `command`   | The program that runs the server (required)                                                                  |
+| `args`      | Its arguments                                                                                                |
+| `env`       | Environment variables for it. The server gets only a short list (`PATH`, `HOME`, ...) and these, so it does not see your `OPENAI_API_KEY`. |
+| `read_only` | `true` lets the server's tools run without asking. Default `false`.                                          |
+
+The names are letters, digits, `_` and `-`. A server's tools are offered to the model as `name__tool`; `/tools` lists them. A server that fails to start is reported and left out. Its stderr goes to `~/.local/state/muagent/NAME.log` (or `$XDG_STATE_HOME/muagent/NAME.log`), where you will find why it failed.
+
+A few things to know before you add a server:
+
+- **A server is a program that runs as you, when `muagent` starts.** Only the user-level `mcp.json` is read, never one from the directory you are in, so a project you open cannot start programs.
+- **Every MCP tool asks before it runs**, showing the full arguments, unless you set `read_only` for that server. A server's own claim that a tool is read-only is ignored: it is not something `muagent` can check.
+- **Tool descriptions come from the server** and are read by the model. Add servers you trust.
+- The list of tools is read once, at start.
 
 ## Tests
 

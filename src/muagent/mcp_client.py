@@ -8,11 +8,15 @@ as long as no server is configured.
 
 import asyncio
 import concurrent.futures
+import importlib.util
 import json
 import re
 import threading
 from collections.abc import Callable, Coroutine, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, TextIO
+from pathlib import Path
+from typing import TYPE_CHECKING, Annotated, Any, TextIO
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from muagent.tools import Tool
 
@@ -22,7 +26,8 @@ if TYPE_CHECKING:
     from mcp_types import Tool as ToolDefinition
 
 # OpenAI rejects the whole request, not just the tool, for a name outside this.
-_NAME_CHARS = re.compile(r"[a-zA-Z0-9_-]+")
+_NAME_PATTERN = r"^[a-zA-Z0-9_-]+$"  # anchored: pydantic searches, not matches
+_NAME_CHARS = re.compile(_NAME_PATTERN)
 _MAX_NAME_CHARS = 128
 
 # How long a server gets to stop on its own before it is cancelled.
@@ -115,6 +120,48 @@ def _leaf(exc: BaseException) -> BaseException:
     return exc
 
 
+class McpServerConfig(BaseModel):
+    """One server in mcp.json."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    command: str = Field(min_length=1)
+    args: list[str] = []
+    env: dict[str, str] = {}
+    # Trust the server's tools to run without asking. Off unless the user says so.
+    read_only: bool = False
+
+
+class _McpFile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Named as in the file: with an alias, pydantic does not flag the field's own
+    # name as an unknown key, and `servers` would be ignored without a word.
+    mcpServers: dict[Annotated[str, Field(pattern=_NAME_PATTERN)], McpServerConfig] = (
+        Field(default_factory=dict)
+    )
+
+
+def load_servers(path: Path) -> dict[str, McpServerConfig]:
+    """Read the servers from an mcp.json: `{"mcpServers": {name: {command, ...}}}`.
+
+    Args:
+        path: The file. It is meant to be the user's own, never one from a project:
+            a server is a program that runs when muagent starts.
+
+    Returns:
+        The servers by name; none if the file does not exist.
+
+    Raises:
+        ValidationError: If the file is not valid JSON or has other contents.
+    """
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return {}
+    return _McpFile.model_validate_json(text).mcpServers
+
+
 class McpServer:
     """A connection to one MCP server over stdio, used from synchronous code."""
 
@@ -125,7 +172,7 @@ class McpServer:
         args: Sequence[str] = (),
         env: Mapping[str, str] | None = None,
         *,
-        errlog: TextIO,
+        log: Path,
         read_only: bool = False,
         startup_timeout: float = 20,
         call_timeout: float = 60,
@@ -139,8 +186,9 @@ class McpServer:
             env: Environment variables for it, added to a short allow-list (PATH,
                 HOME and the like): it does not inherit the rest, so it does not
                 see this program's API key.
-            errlog: Where the server's stderr goes, so that its log lines do not
-                land in the terminal.
+            log: The file for the server's stderr, so that its log lines do not land
+                in the terminal. Opened (and emptied) by `start()`, closed by
+                `close()`.
             read_only: Whether to treat its tools as read-only, so they run without
                 asking. The server's own claim is never used: it is unverified.
             startup_timeout: Seconds to connect, and to list the tools.
@@ -157,7 +205,8 @@ class McpServer:
         self._command = command
         self._args = list(args)
         self._env = dict(env) if env else None
-        self._errlog = errlog
+        self._log_path = log
+        self._log: TextIO | None = None
         self._read_only = read_only
         self._startup_timeout = startup_timeout
         self._call_timeout = call_timeout
@@ -173,9 +222,22 @@ class McpServer:
         """Start the server and connect to it. Call `close()` when done.
 
         Raises:
-            McpServerError: If the server cannot be run, exits before it answers, or
-                takes longer than the startup timeout.
+            McpServerError: If the `mcp` package is missing, the log cannot be opened,
+                the server cannot be run, exits before it answers, or takes longer
+                than the startup timeout.
         """
+        if importlib.util.find_spec("mcp") is None:
+            raise McpServerError(
+                f"MCP server {self.name!r} needs the mcp package: "
+                "install muagent with its mcp extra"
+            )
+        try:
+            self._log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._log = log = self._log_path.open("w")
+        except OSError as exc:
+            raise McpServerError(
+                f"MCP server {self.name!r}: cannot write its log: {exc}"
+            ) from None
         loop = self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
             target=loop.run_forever, name=f"mcp-{self.name}", daemon=True
@@ -184,7 +246,7 @@ class McpServer:
         ready: concurrent.futures.Future[ClientSession] = concurrent.futures.Future()
 
         def launch() -> None:
-            self._task = loop.create_task(self._serve(ready))
+            self._task = loop.create_task(self._serve(ready, log))
 
         loop.call_soon_threadsafe(launch)
         try:
@@ -200,7 +262,9 @@ class McpServer:
                 reason = f"failed to start: {type(leaf).__name__}: {leaf}"
             raise McpServerError(f"MCP server {self.name!r} {reason}") from None
 
-    async def _serve(self, ready: concurrent.futures.Future[ClientSession]) -> None:
+    async def _serve(
+        self, ready: concurrent.futures.Future[ClientSession], log: TextIO
+    ) -> None:
         """Own the connection for as long as it lasts.
 
         One task enters and leaves all of it: the SDK's task groups must be left by
@@ -214,7 +278,7 @@ class McpServer:
         )
         try:
             async with (
-                stdio_client(params, errlog=self._errlog) as (read, write),
+                stdio_client(params, errlog=log) as (read, write),
                 ClientSession(read, write) as session,
             ):
                 await session.initialize()
@@ -246,6 +310,9 @@ class McpServer:
             self._finished.wait(_STOP_SECONDS)
         loop.call_soon_threadsafe(loop.stop)
         thread.join(_STOP_SECONDS)
+        if self._log is not None:
+            self._log.close()
+            self._log = None
 
     def tools(self) -> list[Tool]:
         """The server's tools, as tools for the agent.
@@ -309,3 +376,53 @@ class McpServer:
         except KeyboardInterrupt:
             future.cancel()
             raise
+
+
+def start_servers(
+    configs: Mapping[str, McpServerConfig],
+    log_dir: Path,
+    on_notice: Callable[[str], None],
+) -> tuple[list[McpServer], list[Tool]]:
+    """Start the servers and collect their tools.
+
+    A server that fails is reported and left out: it must not stop muagent.
+
+    Args:
+        configs: The servers to start, by name.
+        log_dir: Where each server's stderr goes, in a file named after it.
+        on_notice: Called with a line about each server, once it is up or has failed.
+
+    Returns:
+        The servers that are running, which the caller must close, and their tools.
+    """
+    servers: list[McpServer] = []
+    tools: list[Tool] = []
+    try:
+        for name, config in configs.items():
+            server = McpServer(
+                name,
+                config.command,
+                config.args,
+                config.env,
+                log=log_dir / f"{name}.log",
+                read_only=config.read_only,
+            )
+            try:
+                server.start()
+                found = server.tools()
+            except Exception as exc:  # noqa: BLE001
+                server.close()
+                on_notice(
+                    str(exc)
+                    if isinstance(exc, McpServerError)
+                    else f"MCP server {name!r} failed: {type(exc).__name__}: {exc}"
+                )
+                continue
+            servers.append(server)
+            tools += found
+            on_notice(f"MCP server {name!r}: {len(found)} tools")
+    except BaseException:
+        for server in servers:
+            server.close()
+        raise
+    return servers, tools

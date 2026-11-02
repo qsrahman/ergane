@@ -17,11 +17,13 @@ from muagent.tools import Tool
 def isolate_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Keep the developer's config files and environment out of load_config().
 
-    Each test runs in an empty directory that is also XDG_CONFIG_HOME, so
-    neither the project's .env nor the user-level config file is found.
+    Each test runs in an empty directory that is also XDG_CONFIG_HOME (and
+    XDG_STATE_HOME, so no test writes a log into the developer's home), so neither
+    the project's .env nor the user-level config file is found.
     """
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     # Taken from Config itself, so a new setting needs no change here.
     for name, field in Config.model_fields.items():
         monkeypatch.delenv(str(field.validation_alias or name.upper()), raising=False)

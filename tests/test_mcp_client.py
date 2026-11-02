@@ -11,9 +11,16 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from fake_api import TEXT
-from muagent.mcp_client import McpServer, McpServerError, _list_tools
+from muagent.mcp_client import (
+    McpServer,
+    McpServerError,
+    _list_tools,
+    load_servers,
+    start_servers,
+)
 from muagent.tools import MAX_OUTPUT_CHARS, Tool
 
 FAKE = str(Path(__file__).parent / "fake_mcp_server.py")
@@ -22,11 +29,11 @@ FAKE = str(Path(__file__).parent / "fake_mcp_server.py")
 @pytest.fixture(scope="module")
 def tools(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, Tool]]:
     """The fake server's tools, from one server shared by the tests that only call it."""
-    with open(tmp_path_factory.mktemp("mcp") / "log", "w") as log:
-        server = McpServer("fake", sys.executable, [FAKE], errlog=log)
-        server.start()
-        yield {tool.name: tool for tool in server.tools()}
-        server.close()
+    log = tmp_path_factory.mktemp("mcp") / "log"
+    server = McpServer("fake", sys.executable, [FAKE], log=log)
+    server.start()
+    yield {tool.name: tool for tool in server.tools()}
+    server.close()
 
 
 @pytest.fixture
@@ -36,24 +43,24 @@ def make_server(tmp_path: Path) -> Iterator[Callable[..., McpServer]]:
     The server's stderr goes to `tmp_path / "mcp.log"`.
     """
     started: list[McpServer] = []
-    with open(tmp_path / "mcp.log", "w") as log:
 
-        def make(*, start: bool = True, **values) -> McpServer:
-            values = {
-                "name": "fake",
-                "command": sys.executable,
-                "args": [FAKE],
-                **values,
-            }
-            server = McpServer(**values, errlog=log)
-            started.append(server)
-            if start:
-                server.start()
-            return server
+    def make(*, start: bool = True, **values) -> McpServer:
+        values = {
+            "name": "fake",
+            "command": sys.executable,
+            "args": [FAKE],
+            "log": tmp_path / "mcp.log",
+            **values,
+        }
+        server = McpServer(**values)
+        started.append(server)
+        if start:
+            server.start()
+        return server
 
-        yield make
-        for server in started:
-            server.close()
+    yield make
+    for server in started:
+        server.close()
 
 
 class TestTools:
@@ -250,6 +257,146 @@ class TestStartFailures:
 
         # Nothing is left running for it.
         assert "mcp-silent" not in [thread.name for thread in threading.enumerate()]
+
+
+class TestLog:
+    def test_the_log_is_made_where_it_is_asked_and_emptied_by_each_start(
+        self, make_server, tmp_path
+    ):
+        log = tmp_path / "deeper" / "still" / "fake.log"
+        log.parent.mkdir(parents=True)
+        log.write_text("left over from the last session\n")
+
+        server = make_server(log=log)
+        {t.name: t for t in server.tools()}["fake__chatty"].call("{}")
+
+        assert log.read_text() == "fake server log line\n"
+
+    def test_a_log_that_cannot_be_written_is_a_start_failure(self, tmp_path):
+        server = McpServer("fake", sys.executable, [FAKE], log=tmp_path)  # a directory
+
+        with pytest.raises(McpServerError, match="cannot write its log"):
+            server.start()
+
+    def test_a_missing_mcp_package_is_explained(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("importlib.util.find_spec", lambda name: None)
+        server = McpServer("fake", sys.executable, [FAKE], log=tmp_path / "log")
+
+        with pytest.raises(McpServerError, match="needs the mcp package"):
+            server.start()
+
+
+class TestLoadServers:
+    def write(self, tmp_path: Path, text: str) -> Path:
+        path = tmp_path / "mcp.json"
+        path.write_text(text)
+        return path
+
+    def test_no_file_means_no_servers(self, tmp_path):
+        assert load_servers(tmp_path / "mcp.json") == {}
+
+    def test_a_server_has_a_command_and_optional_arguments_environment_and_trust(
+        self, tmp_path
+    ):
+        path = self.write(
+            tmp_path,
+            """{"mcpServers": {
+                "plain": {"command": "tool"},
+                "full": {"command": "uvx", "args": ["a", "b"], "env": {"K": "v"},
+                         "read_only": true}
+            }}""",
+        )
+
+        servers = load_servers(path)
+
+        assert servers["plain"].args == [] and servers["plain"].env == {}
+        assert servers["plain"].read_only is False  # trust must be asked for
+        assert servers["full"].args == ["a", "b"]
+        assert servers["full"].env == {"K": "v"}
+        assert servers["full"].read_only is True
+
+    def test_an_empty_object_has_no_servers(self, tmp_path):
+        assert load_servers(self.write(tmp_path, "{}")) == {}
+
+    @pytest.mark.parametrize(
+        ("text", "message"),
+        [
+            ("not json", "Invalid JSON"),
+            ('{"mcpServers": {"a": {}}}', "mcpServers.a.command"),
+            ('{"mcpServers": {"a": {"command": ""}}}', "mcpServers.a.command"),
+            ('{"mcpServers": {"a": {"command": "x", "arg": []}}}', "mcpServers.a.arg"),
+            ('{"mcpServers": {"a": {"url": "http://x"}}}', "mcpServers.a.url"),
+            (
+                '{"mcpServers": {"a.b": {"command": "x"}}}',
+                "String should match pattern",
+            ),
+            ('{"servers": {}}', "servers"),
+        ],
+        ids=["not-json", "no-command", "empty-command", "typo", "http", "name", "key"],
+    )
+    def test_a_mistake_names_where_it_is(self, tmp_path, text, message):
+        with pytest.raises(ValidationError, match=message.replace(".", r"\.")):
+            load_servers(self.write(tmp_path, text))
+
+
+class TestStartServers:
+    def fake(self, **values):
+        from muagent.mcp_client import McpServerConfig
+
+        return McpServerConfig(command=sys.executable, args=[FAKE], **values)
+
+    def test_every_server_starts_and_its_tools_are_collected(self, tmp_path):
+        notices: list[str] = []
+        configs = {"one": self.fake(), "two": self.fake(read_only=True)}
+
+        servers, found = start_servers(configs, tmp_path, notices.append)
+        try:
+            names = {tool.name: tool for tool in found}
+            assert "one__add" in names and "two__add" in names
+            assert not names["one__add"].read_only
+            assert names["two__add"].read_only
+            assert notices == [
+                "MCP server 'one': 12 tools",
+                "MCP server 'two': 12 tools",
+            ]
+            assert (tmp_path / "one.log").exists()
+        finally:
+            for server in servers:
+                server.close()
+
+    def test_a_server_that_fails_is_reported_and_the_others_still_start(self, tmp_path):
+        from muagent.mcp_client import McpServerConfig
+
+        notices: list[str] = []
+        configs = {
+            "broken": McpServerConfig(command="/no/such/server"),
+            "good": self.fake(),
+        }
+
+        servers, found = start_servers(configs, tmp_path, notices.append)
+        try:
+            assert [server.name for server in servers] == ["good"]
+            assert all(tool.name.startswith("good__") for tool in found)
+            assert len(notices) == 2
+            assert notices[0].startswith("MCP server 'broken' failed to start")
+            assert notices[1] == "MCP server 'good': 12 tools"
+        finally:
+            for server in servers:
+                server.close()
+
+    def test_nothing_is_left_running_when_the_start_is_interrupted(self, tmp_path):
+        def interrupt(notice: str) -> None:
+            raise KeyboardInterrupt
+
+        with pytest.raises(KeyboardInterrupt):
+            start_servers(
+                {"first": self.fake(), "second": self.fake()}, tmp_path, interrupt
+            )
+
+        assert "mcp-first" not in [t.name for t in threading.enumerate()]
+
+    def test_no_servers_is_no_work(self, tmp_path):
+        assert start_servers({}, tmp_path, print) == ([], [])
 
 
 class TestListTools:

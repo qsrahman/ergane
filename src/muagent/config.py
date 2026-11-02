@@ -47,16 +47,31 @@ class Config(BaseSettings):
     )
 
 
-def user_env_file() -> Path:
-    """Return the user-level settings file, `$XDG_CONFIG_HOME/muagent/.env`.
+def _xdg_dir(variable: str, default: str) -> Path:
+    """Return the muagent directory under an XDG base directory.
 
-    An unset, empty or relative XDG_CONFIG_HOME is ignored, as the XDG spec says,
-    and `~/.config` is used instead.
+    An unset, empty or relative variable is ignored, as the XDG spec says, and the
+    default under the home directory is used instead.
     """
-    config_home = Path(os.environ.get("XDG_CONFIG_HOME", ""))
-    if not config_home.is_absolute():
-        config_home = Path.home() / ".config"
-    return config_home / "muagent" / ".env"
+    base = Path(os.environ.get(variable, ""))
+    if not base.is_absolute():
+        base = Path.home() / default
+    return base / "muagent"
+
+
+def user_config_dir() -> Path:
+    """Return the user-level config directory, `$XDG_CONFIG_HOME/muagent`."""
+    return _xdg_dir("XDG_CONFIG_HOME", ".config")
+
+
+def user_state_dir() -> Path:
+    """Return the directory for logs, `$XDG_STATE_HOME/muagent`."""
+    return _xdg_dir("XDG_STATE_HOME", ".local/state")
+
+
+def user_env_file() -> Path:
+    """Return the user-level settings file, `$XDG_CONFIG_HOME/muagent/.env`."""
+    return user_config_dir() / ".env"
 
 
 def load_config() -> Config:
