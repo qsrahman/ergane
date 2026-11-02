@@ -185,8 +185,8 @@ def test_a_response_that_only_calls_a_tool_is_not_a_problem():
     calls = Response.model_validate(make_response("completed", [FUNCTION_CALL]))
     empty = Response.model_validate(make_response("completed", []))
 
-    assert Agent._problem(calls) is None
-    assert Agent._problem(empty) == "No text in response"
+    assert Agent._response_status(calls) is None
+    assert Agent._response_status(empty) == "No text in response"
 
 
 USAGE = {
@@ -205,7 +205,9 @@ def test_the_size_of_the_next_request_is_the_servers_count_plus_what_was_added()
         {"type": "function_call_output", "call_id": "c", "output": "y" * 400},
     ]
 
-    assert Agent._size(response, items, 1) == 1000 + estimate_tokens(items[1])
+    assert Agent._next_request_tokens(response, items, 1) == 1000 + estimate_tokens(
+        items[1]
+    )
 
 
 def test_without_usage_the_size_is_estimated_from_all_the_items():
@@ -215,7 +217,9 @@ def test_without_usage_the_size_is_estimated_from_all_the_items():
         {"type": "function_call_output", "call_id": "c", "output": "y" * 400},
     ]
 
-    assert Agent._size(response, items, 1) == sum(estimate_tokens(i) for i in items)
+    assert Agent._next_request_tokens(response, items, 1) == sum(
+        estimate_tokens(i) for i in items
+    )
 
 
 def read_file(path: str) -> str:

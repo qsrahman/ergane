@@ -30,7 +30,7 @@ Operating rules:
 NOTICE_CHARS = 80
 
 
-def _shorten(text: str) -> str:
+def _one_line(text: str) -> str:
     """The text as one line of at most NOTICE_CHARS characters, for a notice."""
     line = " ".join(text.split())
     return line if len(line) <= NOTICE_CHARS else line[: NOTICE_CHARS - 1] + "…"
@@ -63,14 +63,93 @@ class Agent:
                 it is given here, never a global registry.
         """
         self.config = config
-        self.tools = {tool.name: tool for tool in tools}
         self.client = client or OpenAI(
             api_key=config.api_key.get_secret_value(),
             base_url=config.base_url,
         )
         self.context = Context()
+        self.tools = {tool.name: tool for tool in tools}
 
-    def send_response(
+    def run_turn(
+        self,
+        prompt: str,
+        on_text: Callable[[str], None] = lambda text: None,
+        on_notice: Callable[[str], None] = lambda text: None,
+        confirm: Callable[[Tool, str], bool] = lambda tool, arguments: False,
+    ) -> None:
+        """Send one user message, passing the reply text to on_text.
+
+        If the model calls tools, each call is run and answered, and the model is
+        called again, up to max_turns times, until it gives a reply. The whole turn
+        (the calls and their outputs included) is added to the conversation if the
+        final response completes with text, or ends incomplete after some text,
+        which the user has seen, or if the model hits the max_turns cap (closed with
+        a note saying so).
+
+        Args:
+            prompt: The user's input prompt.
+            on_text: Called with each piece of reply text as it arrives when
+                streaming, or once with the whole reply otherwise.
+            on_notice: Called with status messages, such as old turns being
+                dropped to fit the token budget, and each tool call as it is run.
+            confirm: Called with a tool that is not read-only and the model's
+                arguments for it, before it runs; it returns whether to allow
+                the call. The default denies every such call.
+
+        Raises:
+            TurnError: If the response is incomplete, failed, refused or has no
+                text, if a stream ends without a final response, if the model
+                is still calling tools after max_turns calls, or if the tool
+                results grow the turn past the context budget.
+        """
+        items, trimmed = self.context.draft(prompt, self.config.max_context_tokens)
+        if trimmed:
+            on_notice("Context trimmed: oldest turns dropped")
+
+        for _ in range(self.config.max_turns):
+            sent = len(items)
+            response = self._send_response(items, on_text)
+            problem = self._response_status(response)
+            calls = [item for item in response.output if item.type == "function_call"]
+            if problem or not calls:
+                break
+            items += cast(
+                ResponseInputParam,
+                [item.model_dump(exclude_none=True) for item in response.output],
+            )
+            items += self._run_tools(calls, on_notice, confirm)
+            used = self._next_request_tokens(response, items, sent)
+            if used > self.config.max_context_tokens:
+                raise TurnError(
+                    f"This turn grew past the context budget (about {used} of "
+                    f"{self.config.max_context_tokens} tokens). Ask for less, or "
+                    "raise MAX_CONTEXT_TOKENS"
+                )
+        else:
+            # Every call has its output, so the turn is coherent. Keep it, closed with
+            # a note, so the model still knows the question and the work already done
+            # (some of it may have had effects) when the user says to carry on.
+            message = (
+                f"Stopped after {self.config.max_turns} model calls without a "
+                "final answer"
+            )
+            self.context.commit(
+                [*items, {"role": "assistant", "content": f"[{message}]"}]
+            )
+            raise TurnError(message)
+
+        # Keep the turn if it worked, or was cut off after text the user has already
+        # seen. Any other turn is dropped: saving a prompt with no reply would leave
+        # two user messages in a row.
+        cut_off = response.status == "incomplete"
+        if response.output_text and (problem is None or cut_off):
+            self.context.commit(
+                [*items, {"role": "assistant", "content": response.output_text}]
+            )
+        if problem:
+            raise TurnError(problem)
+
+    def _send_response(
         self, draft: ResponseInputParam, on_text: Callable[[str], None]
     ) -> Response:
         """Get the model's final response, passing its text to on_text as it arrives.
@@ -137,85 +216,6 @@ class Agent:
             raise TurnError(reason)
         return final
 
-    def run_turn(
-        self,
-        prompt: str,
-        on_text: Callable[[str], None] = lambda text: None,
-        on_notice: Callable[[str], None] = lambda text: None,
-        confirm: Callable[[Tool, str], bool] = lambda tool, arguments: False,
-    ) -> None:
-        """Send one user message, passing the reply text to on_text.
-
-        If the model calls tools, each call is run and answered, and the model is
-        called again, up to max_turns times, until it gives a reply. The whole turn
-        (the calls and their outputs included) is added to the conversation if the
-        final response completes with text, or ends incomplete after some text,
-        which the user has seen, or if the model hits the max_turns cap (closed with
-        a note saying so).
-
-        Args:
-            prompt: The user's input prompt.
-            on_text: Called with each piece of reply text as it arrives when
-                streaming, or once with the whole reply otherwise.
-            on_notice: Called with status messages, such as old turns being
-                dropped to fit the token budget, and each tool call as it is run.
-            confirm: Called with a tool that is not read-only and the model's
-                arguments for it, before it runs; it returns whether to allow
-                the call. The default denies every such call.
-
-        Raises:
-            TurnError: If the response is incomplete, failed, refused or has no
-                text, if a stream ends without a final response, if the model
-                is still calling tools after max_turns calls, or if the tool
-                results grow the turn past the context budget.
-        """
-        items, trimmed = self.context.draft(prompt, self.config.max_context_tokens)
-        if trimmed:
-            on_notice("Context trimmed: oldest turns dropped")
-
-        for _ in range(self.config.max_turns):
-            sent = len(items)
-            response = self.send_response(items, on_text)
-            problem = self._problem(response)
-            calls = [item for item in response.output if item.type == "function_call"]
-            if problem or not calls:
-                break
-            items += cast(
-                ResponseInputParam,
-                [item.model_dump(exclude_none=True) for item in response.output],
-            )
-            items += self._run_tools(calls, on_notice, confirm)
-            used = self._size(response, items, sent)
-            if used > self.config.max_context_tokens:
-                raise TurnError(
-                    f"This turn grew past the context budget (about {used} of "
-                    f"{self.config.max_context_tokens} tokens). Ask for less, or "
-                    "raise MAX_CONTEXT_TOKENS"
-                )
-        else:
-            # Every call has its output, so the turn is coherent. Keep it, closed with
-            # a note, so the model still knows the question and the work already done
-            # (some of it may have had effects) when the user says to carry on.
-            message = (
-                f"Stopped after {self.config.max_turns} model calls without a "
-                "final answer"
-            )
-            self.context.commit(
-                [*items, {"role": "assistant", "content": f"[{message}]"}]
-            )
-            raise TurnError(message)
-
-        # Keep the turn if it worked, or was cut off after text the user has already
-        # seen. Any other turn is dropped: saving a prompt with no reply would leave
-        # two user messages in a row.
-        cut_off = response.status == "incomplete"
-        if response.output_text and (problem is None or cut_off):
-            self.context.commit(
-                [*items, {"role": "assistant", "content": response.output_text}]
-            )
-        if problem:
-            raise TurnError(problem)
-
     def _run_tools(
         self,
         calls: Sequence[ResponseFunctionToolCall],
@@ -239,7 +239,7 @@ class Agent:
         """
         outputs: ResponseInputParam = []
         for call in calls:
-            on_notice(f"{call.name}({_shorten(call.arguments)})")
+            on_notice(f"{call.name}({_one_line(call.arguments)})")
             tool = self.tools.get(call.name)
             if tool is None:
                 known = ", ".join(self.tools) or "none"
@@ -248,7 +248,7 @@ class Agent:
                 output = tool.call(call.arguments)
             else:
                 output = "The user denied this call."
-            on_notice(f"→ {_shorten(output)}")
+            on_notice(f"→ {_one_line(output)}")
             outputs.append(
                 {
                     "type": "function_call_output",
@@ -259,7 +259,9 @@ class Agent:
         return outputs
 
     @staticmethod
-    def _size(response: Response, items: ResponseInputParam, sent: int) -> int:
+    def _next_request_tokens(
+        response: Response, items: ResponseInputParam, sent: int
+    ) -> int:
         """Estimate how many tokens the next request will have.
 
         The server's own count of the request it just answered is exact, so it is
@@ -281,7 +283,7 @@ class Agent:
         )
 
     @staticmethod
-    def _problem(response: Response) -> str | None:
+    def _response_status(response: Response) -> str | None:
         """Describe what is wrong with a response, if anything.
 
         A response that calls tools has no text, and that is fine: only the
