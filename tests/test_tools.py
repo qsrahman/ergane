@@ -117,6 +117,38 @@ class TestFromFunction:
             Tool.from_function(function)
 
 
+class TestCheck:
+    def test_valid_arguments_have_no_problem(self):
+        assert Tool.from_function(add).check('{"a": 1}') is None
+
+    @pytest.mark.parametrize(
+        ("arguments", "expected"),
+        [
+            ("{}", "Invalid arguments: a: Missing required argument"),
+            ('{"a": "x"}', "Invalid arguments: a: Input should be a valid integer"),
+            ('{"a": 1, "c": 2}', "Invalid arguments: c: Unexpected keyword argument"),
+            ("add them please", "Invalid arguments: Invalid JSON"),
+        ],
+    )
+    def test_invalid_arguments_are_described(self, arguments, expected):
+        problem = Tool.from_function(add).check(arguments)
+
+        assert problem is not None
+        assert problem.startswith(expected)
+
+    def test_the_function_is_not_run(self):
+        ran: list[str] = []
+
+        def save(path: str) -> str:
+            """Save a file."""
+            ran.append(path)
+            return "saved"
+
+        Tool.from_function(save).check('{"path": "notes.txt"}')
+
+        assert ran == []
+
+
 class TestCall:
     def test_runs_the_function_with_the_models_arguments(self):
         assert Tool.from_function(add).call('{"a": 2, "b": 3}') == "5"
@@ -184,6 +216,64 @@ class TestCall:
 
         assert (
             result == "x" * MAX_OUTPUT_CHARS + "\n[output truncated: 5 more characters]"
+        )
+
+
+ECHO_SCHEMA = {
+    "type": "object",
+    "properties": {"text": {"type": "string"}},
+    "required": ["text"],
+}
+
+
+class TestToolFromParts:
+    """A tool that is not made from a function, as an MCP server's tool will be."""
+
+    def make(self, runner, validator=lambda arguments: None) -> Tool:
+        return Tool(
+            "remote__echo",
+            "Echo some text.",
+            lambda **kwargs: "",
+            ECHO_SCHEMA,
+            validator,
+            runner,
+            read_only=False,
+        )
+
+    def test_it_is_offered_with_the_schema_it_was_given(self):
+        assert self.make(lambda arguments: "").param() == {
+            "type": "function",
+            "name": "remote__echo",
+            "description": "Echo some text.",
+            "parameters": ECHO_SCHEMA,
+            "strict": False,
+        }
+
+    def test_check_asks_its_validator(self):
+        tool = self.make(lambda arguments: "", lambda arguments: f"bad: {arguments}")
+
+        assert tool.check("{}") == "bad: {}"
+
+    def test_a_call_that_fails_the_check_is_not_run(self):
+        ran: list[str] = []
+        tool = self.make(ran.append, lambda arguments: "Invalid arguments: no text")
+
+        assert tool.call("{}") == "Invalid arguments: no text"
+        assert ran == []
+
+    def test_a_call_returns_what_the_runner_returns_cut_to_the_limit(self):
+        tool = self.make(lambda arguments: "x" * (MAX_OUTPUT_CHARS + 3))
+
+        result = tool.call('{"text": "hi"}')
+
+        assert result.endswith("\n[output truncated: 3 more characters]")
+
+    def test_a_failure_of_the_runner_comes_back_as_text(self):
+        def runner(arguments: str) -> str:
+            raise ConnectionError("server went away")
+
+        assert self.make(runner).call('{"text": "hi"}') == (
+            "Error: ConnectionError: server went away"
         )
 
 

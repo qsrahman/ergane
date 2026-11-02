@@ -5,7 +5,6 @@ from collections.abc import Mapping
 from muagent.agent import Agent, TurnError
 from muagent.commands import Command
 from muagent.console import Console
-from muagent.tools import Tool
 
 try:
     import readline  # noqa: F401
@@ -84,7 +83,7 @@ class Repl:
                 prompt,
                 on_text=console.write,
                 on_notice=console.notice,
-                confirm=self.confirm,
+                confirm=console.confirm,
             )
         except TurnError as exc:
             console.notice(str(exc))
@@ -94,24 +93,3 @@ class Repl:
             console.notice(f"Agent error: {type(exc).__name__}: {exc}")
         console.end_line()
         console.blank()
-
-    def confirm(self, tool: Tool, arguments: str) -> bool:
-        """Ask the user whether a tool that is not read-only may run.
-
-        The arguments are shown in full: a shortened call could hide what it does.
-
-        Args:
-            tool: The tool the model wants to call.
-            arguments: The model's arguments, as JSON text.
-
-        Returns:
-            True only if the user answers y or yes; end of input is a no.
-        """
-        console = self.console
-        console.end_line()
-        console.write(f"Allow {tool.name} with these arguments?\n{arguments}\n")
-        try:
-            answer = input("[y/N] ")
-        except EOFError:
-            answer = ""
-        return answer.strip().lower() in ("y", "yes")

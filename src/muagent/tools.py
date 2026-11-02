@@ -4,12 +4,18 @@ A tool is a plain function. Its name is the function's name, its description is 
 docstring, and its parameters are inferred from its type hints, as in FastMCP. A tool
 returns text for the model, and any failure is returned as text too, so the model can
 read the error and correct its call.
+
+A Tool is what the agent needs of a tool and nothing more: a name, a description, a
+JSON schema for the parameters, a way to check the model's arguments and a way to run
+them. Tool.from_function builds one from a function; a tool from anywhere else (an
+MCP server, say) fills in the same parts.
 """
 
+import functools
 import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import get_type_hints, overload
+from typing import Any, get_type_hints, overload
 
 from openai.types.responses import FunctionToolParam
 from pydantic import TypeAdapter, ValidationError
@@ -26,14 +32,33 @@ class _NoTitles(GenerateJsonSchema):
         return False
 
 
+def _validator(checker: TypeAdapter[str]) -> Callable[[str], str | None]:
+    """Make a check of the model's arguments out of an adapter that runs nothing."""
+
+    def validate(arguments: str) -> str | None:
+        try:
+            checker.validate_json(arguments)
+        except ValidationError as exc:
+            problems = []
+            for error in exc.errors():
+                where = ".".join(str(part) for part in error["loc"])
+                problems.append(f"{where}: {error['msg']}" if where else error["msg"])
+            return "Invalid arguments: " + "; ".join(problems)
+        return None
+
+    return validate
+
+
 @dataclass(frozen=True)
 class Tool:
-    """A function the model may call, with the schema inferred from its signature."""
+    """A tool the model may call: what it is, how to check a call and how to run it."""
 
     name: str
     description: str  # the function's docstring
     function: Callable[..., str]
-    arguments: TypeAdapter[str]  # validates the model's arguments and gives the schema
+    parameters: dict[str, Any]  # JSON schema of the arguments
+    validator: Callable[[str], str | None]  # arguments as JSON text -> problem or None
+    runner: Callable[[str], str]  # arguments as JSON text -> result; may raise
     read_only: bool  # False if it may change anything outside the program
 
     @classmethod
@@ -81,18 +106,44 @@ class Tool:
 
         # Validating JSON against a function's signature calls the function.
         arguments = TypeAdapter[str](function)  # pyright: ignore[reportArgumentType]
-        return cls(name, description, function, arguments, read_only)
+        parameters = arguments.json_schema(schema_generator=_NoTitles)
+
+        # Same signature, so the same validation, but it does nothing when called.
+        @functools.wraps(function)
+        def stub(*args, **kwargs) -> str:
+            return ""
+
+        checker = TypeAdapter[str](stub)  # pyright: ignore[reportArgumentType]
+        return cls(
+            name,
+            description,
+            function,
+            parameters,
+            _validator(checker),
+            arguments.validate_json,
+            read_only,
+        )
 
     def param(self) -> FunctionToolParam:
         """The tool as the Responses API wants it."""
-        parameters = self.arguments.json_schema(schema_generator=_NoTitles)
         return {
             "type": "function",
             "name": self.name,
             "description": self.description,
-            "parameters": parameters,
+            "parameters": self.parameters,
             "strict": False,
         }
+
+    def check(self, arguments: str) -> str | None:
+        """Check the model's arguments without running the tool.
+
+        Args:
+            arguments: The model's arguments, as the JSON text it produced.
+
+        Returns:
+            A description of what is wrong with them, or None if they are valid.
+        """
+        return self.validator(arguments)
 
     def call(self, arguments: str) -> str:
         """Run the tool for a model's call.
@@ -107,14 +158,10 @@ class Tool:
             What the tool returned, cut to MAX_OUTPUT_CHARS, or a description of
             what went wrong.
         """
+        if problem := self.check(arguments):
+            return problem
         try:
-            result = self.arguments.validate_json(arguments)
-        except ValidationError as exc:
-            problems = []
-            for error in exc.errors():
-                where = ".".join(str(part) for part in error["loc"])
-                problems.append(f"{where}: {error['msg']}" if where else error["msg"])
-            return "Invalid arguments: " + "; ".join(problems)
+            result = self.runner(arguments)
         except Exception as exc:  # noqa: BLE001
             return f"Error: {type(exc).__name__}: {exc}"
         if len(result) > MAX_OUTPUT_CHARS:

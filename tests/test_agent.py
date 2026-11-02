@@ -13,7 +13,7 @@ from fake_api import (
     make_response,
 )
 from helpers import make_context
-from muagent.agent import NOTICE_CHARS, Agent, TurnError
+from muagent.agent import NOTICE_CHARS, Agent, TurnError, _one_line
 from muagent.context import estimate_tokens
 from muagent.tools import MAX_OUTPUT_CHARS, Tool
 
@@ -412,42 +412,11 @@ class TestAgentToolLoop:
 
         agent.run_turn("tool_call_parallel", on_notice=notices.append)
 
+        # Only the calls: their results go to the model, not to the screen.
         assert notices == [
             'read_file({"path": "notes.txt"})',
-            "→ contents of notes.txt",
             'read_file({"path": "todo.txt"})',
-            "→ contents of todo.txt",
         ]
-
-    def test_a_failed_call_shows_its_error_in_the_notice(self, make_agent, streaming):
-        def failing(path: str) -> str:
-            """Read a text file."""
-            raise FileNotFoundError(f"no such file: {path}")
-
-        agent = make_agent(tools=[tool_with(failing)], STREAMING=streaming)
-        notices: list[str] = []
-
-        agent.run_turn("tool_call", on_notice=notices.append)
-
-        assert notices[-1] == "→ Error: FileNotFoundError: no such file: notes.txt"
-
-    def test_a_long_result_is_shortened_to_one_line_in_its_notice(
-        self, make_agent, streaming
-    ):
-        def long(path: str) -> str:
-            """Read a text file."""
-            return "line one\n" + "word " * 100
-
-        agent = make_agent(tools=[tool_with(long)], STREAMING=streaming)
-        notices: list[str] = []
-
-        agent.run_turn("tool_call", on_notice=notices.append)
-
-        result = notices[-1]
-        assert result.startswith("→ line one word word")
-        assert result.endswith("…")
-        assert "\n" not in result
-        assert len(result) == len("→ ") + NOTICE_CHARS
 
     def test_a_tool_that_is_not_read_only_is_denied_unless_confirmed(
         self, make_agent, fake_server, streaming
@@ -471,7 +440,6 @@ class TestAgentToolLoop:
         assert fake_server.requests[1]["input"][-1]["output"] == (
             "The user denied this call."
         )
-        assert notices[-1] == "→ The user denied this call."
         assert agent.context.items[-1] == {"role": "assistant", "content": TEXT}
 
     def test_confirm_is_given_the_tool_and_the_full_arguments(
@@ -490,6 +458,31 @@ class TestAgentToolLoop:
 
         assert asked == [("read_file", FUNCTION_CALL["arguments"])]
         assert agent.context.items[2] == FIRST_OUTPUT
+
+    def test_a_call_with_invalid_arguments_is_not_asked_about(
+        self, make_agent, fake_server, streaming
+    ):
+        ran: list[str] = []
+
+        def read_file(path: str, mode: str) -> str:
+            """Read a text file."""
+            ran.append(path)
+            return "contents"
+
+        agent = make_agent(
+            tools=[Tool.from_function(read_file, read_only=False)], STREAMING=streaming
+        )
+
+        def confirm(tool: Tool, arguments: str) -> bool:
+            raise AssertionError("asked about a call that would be rejected")
+
+        agent.run_turn("tool_call", confirm=confirm)
+
+        # The model reads why the call failed, as it would for a read-only tool.
+        assert fake_server.requests[1]["input"][-1]["output"].startswith(
+            "Invalid arguments: mode: Missing required argument"
+        )
+        assert ran == []
 
     def test_each_call_is_confirmed_on_its_own(self, make_agent, streaming):
         agent = make_agent(
@@ -613,3 +606,11 @@ class TestAgentToolLoop:
 
         assert agent.context.undo()
         assert agent.context.items == []
+
+
+def test_a_long_call_is_flattened_and_cut_to_one_line_for_its_notice():
+    line = _one_line('read_file({"path": "' + "a b\n" * 100 + '"})')
+
+    assert "\n" not in line
+    assert line.endswith("…")
+    assert len(line) == NOTICE_CHARS

@@ -72,7 +72,7 @@ Command names are case-insensitive. A mistyped command such as `/rest` is report
 
 ## Tools
 
-The model can call tools. When it does, `muagent` prints the call and a short result, such as `[add({"a":17,"b":25})]` then `[→ 42]`, and sends the result back, repeating until the model answers. A turn that grows past `MAX_CONTEXT_TOKENS` while it runs is stopped. If a call fails, the error text goes back to the model so it can correct the call. The Responses API must support function calling; set `TOOLS=off` if your model does not.
+The model can call tools. When it does, `muagent` prints the call, such as `[add({"a":17,"b":25})]`, and sends the result back to the model, which says what it found, repeating until the model answers. A turn that grows past `MAX_CONTEXT_TOKENS` while it runs is stopped. If a call fails, the error text goes back to the model so it can correct the call. The Responses API must support function calling; set `TOOLS=off` if your model does not.
 
 Only two placeholder tools exist so far, `add` and `get_time`, which stand in until the real tools arrive. Try: *"What is 17 plus 25, and what time is it in Tokyo?"*
 

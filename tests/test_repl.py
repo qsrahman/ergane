@@ -3,8 +3,6 @@ import pytest
 from fake_api import REFUSAL, STREAM_ERROR, TEXT
 from helpers import make_config, make_context, run_repl
 from muagent.agent import Agent
-from muagent.commands import COMMANDS
-from muagent.repl import Repl
 from muagent.tools import Tool
 
 
@@ -134,8 +132,8 @@ class TestReplRendering:
         run_repl(monkeypatch, agent, ["tool_call", "/exit"])
 
         out = capsys.readouterr().out
-        shown = '[read_file({"path": "notes.txt"})]\n[→ contents]'
-        assert f"\n{shown}\n{TEXT}\n\nBye." in out
+        shown = '[read_file({"path": "notes.txt"})]'
+        assert f"\n{shown}\n\n{TEXT}\n\nBye." in out
 
     def test_reports_trimmed_context(self, monkeypatch, make_agent, capsys, streaming):
         agent = make_agent(STREAMING=streaming, MAX_CONTEXT_TOKENS=1)
@@ -144,7 +142,7 @@ class TestReplRendering:
         run_repl(monkeypatch, agent, ["hi", "/exit"])
 
         out = capsys.readouterr().out
-        assert f"[Context trimmed: oldest turns dropped]\n{TEXT}\n" in out
+        assert f"[Context trimmed: oldest turns dropped]\n\n{TEXT}\n" in out
 
 
 def test_stream_error_notice_follows_the_partial_reply(monkeypatch, make_agent, capsys):
@@ -155,6 +153,8 @@ def test_stream_error_notice_follows_the_partial_reply(monkeypatch, make_agent, 
 
 
 class TestReplConfirm:
+    """The Repl hands the console's question to the agent; see test_console."""
+
     @pytest.fixture
     def run(self, monkeypatch, make_agent):
         """Run "tool_call" against a tool that is not read-only, answering its
@@ -188,26 +188,3 @@ class TestReplConfirm:
     def test_ctrl_c_at_the_question_cancels_the_turn(self, run, capsys):
         assert run(KeyboardInterrupt()) == []
         assert "[Cancelled]" in capsys.readouterr().out
-
-    def test_the_question_shows_the_full_arguments(self, run, capsys):
-        run("n")
-
-        out = capsys.readouterr().out
-        assert 'Allow read_file with these arguments?\n{"path": "notes.txt"}\n' in out
-
-    def test_long_arguments_are_not_shortened_and_are_sanitized(
-        self, monkeypatch, capsys
-    ):
-        def read_file(path: str) -> str:
-            """Read a text file."""
-            return ""
-
-        tool = Tool.from_function(read_file, read_only=False)
-        monkeypatch.setattr("builtins.input", lambda _prompt: "n")
-        arguments = '{"path": "' + "a" * 300 + '\x1b]52;c;x"}'
-
-        Repl(Agent(make_config()), COMMANDS).confirm(tool, arguments)
-
-        out = capsys.readouterr().out
-        assert "a" * 300 in out
-        assert "\x1b" not in out

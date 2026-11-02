@@ -235,8 +235,9 @@ class Agent:
 
         Args:
             calls: The function calls in the model's response.
-            on_notice: Called with each call before it is run, and with its result
-                after, each shortened to one line.
+            on_notice: Called with each call before it is run, shortened to one line.
+                The result is not shown: it goes to the model, and the reply says
+                what it found.
             confirm: Asked before each call to a tool that is not read-only.
 
         Returns:
@@ -249,11 +250,13 @@ class Agent:
             if tool is None:
                 known = ", ".join(self.tools) or "none"
                 output = f"Unknown tool: {call.name}. Available tools: {known}."
+            # A call that would be rejected is not worth asking the user about.
+            elif problem := tool.check(call.arguments):
+                output = problem
             elif tool.read_only or confirm(tool, call.arguments):
                 output = tool.call(call.arguments)
             else:
                 output = "The user denied this call."
-            on_notice(f"→ {_one_line(output)}")
             outputs.append(
                 {
                     "type": "function_call_output",
