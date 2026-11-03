@@ -191,10 +191,10 @@ class McpServerConfig(BaseModel):
         if self.url is None:
             if self.headers:
                 raise ValueError("headers go with url")
-        else:
-            if self.args or self.env:
-                raise ValueError("args and env go with command")
-            _check_url(self.url)
+            return self
+        if self.args or self.env:
+            raise ValueError("args and env go with command")
+        _check_url(self.url)
         return self
 
 

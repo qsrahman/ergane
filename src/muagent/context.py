@@ -7,6 +7,10 @@ from openai.types.responses import ResponseInputParam
 _TOOL_WORK = ("reasoning", "function_call", "function_call_output")
 
 
+def _is_user_message(item: object) -> bool:
+    return isinstance(item, dict) and item.get("role") == "user"
+
+
 def estimate_tokens(item: Mapping[str, object]) -> int:
     """Estimate the number of tokens in one history item, or any JSON-like mapping.
 
@@ -61,11 +65,7 @@ class Context:
         items: ResponseInputParam = [*self.items, {"role": "user", "content": prompt}]
         counts = [estimate_tokens(item) for item in items]
         total = sum(counts)
-        user_turn_starts = [
-            i
-            for i, item in enumerate(items)
-            if isinstance(item, dict) and item.get("role") == "user"
-        ]
+        user_turn_starts = [i for i, item in enumerate(items) if _is_user_message(item)]
 
         start = 0
         for turn_start in user_turn_starts[1:]:
@@ -90,11 +90,7 @@ class Context:
                 reply.
         """
         turn = max(
-            (
-                i
-                for i, item in enumerate(items)
-                if isinstance(item, dict) and item.get("role") == "user"
-            ),
+            (i for i, item in enumerate(items) if _is_user_message(item)),
             default=0,
         )
         earlier = [
@@ -128,7 +124,7 @@ class Context:
         """
         for i in range(len(self.items) - 1, -1, -1):
             item = self.items[i]
-            if isinstance(item, dict) and item.get("role") == "user":
+            if _is_user_message(item):
                 self.items = self.items[:i]
                 self.last_saved = False
                 return True

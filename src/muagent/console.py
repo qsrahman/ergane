@@ -144,7 +144,7 @@ class Console:
             text: The status message; it is flattened to one line, so text from
                 the server cannot break out of the brackets.
         """
-        self._emit(f"[{' '.join(sanitize(text).split())}]\n", status=True)
+        self._emit(f"[{' '.join(text.split())}]\n", status=True)
 
     def confirm(self, tool: Tool, arguments: str) -> bool:
         """Ask the user, on one line, whether a tool that is not read-only may run.

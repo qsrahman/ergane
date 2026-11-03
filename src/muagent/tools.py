@@ -158,10 +158,10 @@ class Tool:
             result = self.runner(arguments)
         except Exception as exc:  # noqa: BLE001
             return f"Error: {type(exc).__name__}: {exc}"
-        if len(result) > MAX_OUTPUT_CHARS:
-            cut = len(result) - MAX_OUTPUT_CHARS
-            result = f"{result[:MAX_OUTPUT_CHARS]}\n[output truncated: {cut} more characters]"
-        return result
+        if len(result) <= MAX_OUTPUT_CHARS:
+            return result
+        cut = len(result) - MAX_OUTPUT_CHARS
+        return f"{result[:MAX_OUTPUT_CHARS]}\n[output truncated: {cut} more characters]"
 
 
 @overload
