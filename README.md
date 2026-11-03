@@ -63,7 +63,7 @@ Type a prompt at `>` and press Enter. To quit, use `/exit`, `/quit`, Ctrl-D, or 
 | `/help`           | List the commands                                                                |
 | `/retry`          | Resend the last prompt; if its reply was saved, it is replaced                   |
 | `/undo`           | Remove the last exchange from the history                                        |
-| `/tools`          | List the tools offered to the model, marking the read-only ones |
+| `/tools`          | List the tools offered to the model, by whether they ask first  |
 | `/model [NAME]`   | Show the model, or switch to `NAME` for the rest of the session                  |
 | `/effort [LEVEL]` | Show the reasoning effort, or set it (`none` … `max`, or `default` to leave it out) |
 | `/reset`          | Clear the conversation history and start fresh                                   |
@@ -74,7 +74,7 @@ Command names are case-insensitive. A mistyped command such as `/rest` is report
 
 ## Tools
 
-The model can call tools. When it does, `muagent` prints the call, such as `[add({"a":17,"b":25})]`, and sends the result back to the model, which says what it found, repeating until the model answers. A turn that grows past `MAX_CONTEXT_TOKENS` while it runs is stopped. If a call fails, the error text goes back to the model so it can correct the call. The Responses API must support function calling; set `TOOLS=off` if your model does not.
+The model can call tools. A tool that only reads runs at once, and `muagent` prints the call, such as `[add({"a":17,"b":25})]`. A tool that can change things asks first, in one line, such as `Allow save {"path": "notes.txt"}? [y/N]`; type `y` to allow it. The line is never wider than the terminal: if the arguments do not fit, the middle of their long values is left out (the start and the end stay) and the prompt ends `[y/N/?]`; type `?` to see all of it, and it asks again. The result goes back to the model, which says what it found, repeating until the model answers. A turn that grows past `MAX_CONTEXT_TOKENS` while it runs is stopped. If a call fails, the error text goes back to the model so it can correct the call. The Responses API must support function calling.
 
 Only two placeholder tools exist so far, `add` and `get_time`, which stand in until the real tools arrive. Try: *"What is 17 plus 25, and what time is it in Tokyo?"*
 
@@ -126,12 +126,12 @@ def add(a: int, b: int) -> str:
 
 Write `${NAME}` in `args`, `env`, `headers` or `cwd` to use the environment variable `NAME`, so that keys stay out of the file: `"env": { "API_KEY": "${MY_API_KEY}" }`. A server whose variable is not set is skipped, with a notice that names the variable. The server gets only the variables you list, not the rest of your environment.
 
-The names are letters, digits, `_` and `-`. A server's tools are offered to the model as `name__tool`; `/tools` lists them. The servers start at the same time, so a few slow ones do not add up. A server that fails to start is reported and left out; one that stops while you work makes its tools return an error that names it, and the others carry on. The stderr of a program goes to `~/.local/state/muagent/NAME.log` (or `$XDG_STATE_HOME/muagent/NAME.log`), where you will find why it failed.
+The names are letters, digits, `_` and `-`. A server's tools are offered to the model as `name__tool`; `/tools` lists them. The servers start at the same time, so a few slow ones do not add up. A server that starts is not announced (the first line shows how many tools there are); one that fails to start is reported and left out; one that stops while you work makes its tools return an error that names it, and the others carry on. The stderr of a program goes to `~/.local/state/muagent/NAME.log` (or `$XDG_STATE_HOME/muagent/NAME.log`), where you will find why it failed.
 
 A few things to know before you add a server:
 
 - **A server is a program that runs as you, when `muagent` starts.** Only the user-level `mcp.json` is read, never one from the directory you are in, so a project you open cannot start programs.
-- **Every MCP tool asks before it runs**, showing the full arguments, unless you set `read_only` for that server. A server's own claim that a tool is read-only is ignored: it is not something `muagent` can check.
+- **Every MCP tool asks before it runs**, showing its arguments (all of them, with `?`), unless you set `read_only` for that server. A server's own claim that a tool is read-only is ignored: it is not something `muagent` can check.
 - **A server at a URL receives what the model sends it**: the arguments of every call, which can hold file contents or other things from your conversation. Connect only to servers you trust with that. `mcp.json` holds the headers in plain text, so keep it to yourself (`chmod 600`). Redirects to another host are not followed, so the headers go only where you pointed them.
 - **Tool descriptions come from the server** and are read by the model. Add servers you trust.
 - The list of tools is read once, at start.

@@ -29,8 +29,11 @@ class Repl:
 
     def run(self) -> None:
         """Read and handle prompts until the user quits."""
-        self.console.write(f"AI coding agent | model: {self.agent.config.model}\n")
-        self.console.write("Type /help to list commands.\n\n")
+        tools = len(self.agent.tools)
+        count = f" | {tools} tool{'s' if tools != 1 else ''}" if tools else ""
+        self.console.write(
+            f"muagent | model: {self.agent.config.model}{count} | /help lists commands\n\n"
+        )
 
         self.running = True
         while self.running:

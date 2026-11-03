@@ -440,6 +440,50 @@ class TestAgentToolLoop:
             'read_file({"path": "todo.txt"})',
         ]
 
+    def test_a_call_that_is_asked_about_gets_no_line_of_its_own(
+        self, make_agent, streaming
+    ):
+        # `confirm` shows the user the call it asks about; a second line would repeat it.
+        agent = make_agent(
+            tools=[Tool.from_function(read_file, read_only=False)], STREAMING=streaming
+        )
+        notices: list[str] = []
+        asked: list[str] = []
+
+        def confirm(tool: Tool, arguments: str) -> bool:
+            asked.append(arguments)
+            return False
+
+        agent.run_turn("tool_call", on_notice=notices.append, confirm=confirm)
+
+        assert notices == []
+        assert asked == [FUNCTION_CALL["arguments"]]
+
+    def test_a_call_that_cannot_run_is_shown_even_for_a_tool_that_asks(
+        self, make_agent, streaming
+    ):
+        # It is never asked about, so nothing else would show it.
+        def read_file(path: str, mode: str) -> str:
+            """Read a text file."""
+            return "contents"
+
+        agent = make_agent(
+            tools=[Tool.from_function(read_file, read_only=False)], STREAMING=streaming
+        )
+        notices: list[str] = []
+
+        agent.run_turn("tool_call", on_notice=notices.append)
+
+        assert notices == ['read_file({"path": "notes.txt"})']
+
+    def test_a_call_to_an_unknown_tool_is_shown(self, make_agent, streaming):
+        agent = make_agent(STREAMING=streaming)
+        notices: list[str] = []
+
+        agent.run_turn("tool_call", on_notice=notices.append)
+
+        assert notices == ['read_file({"path": "notes.txt"})']
+
     def test_a_tool_that_is_not_read_only_is_denied_unless_confirmed(
         self, make_agent, fake_server, streaming
     ):

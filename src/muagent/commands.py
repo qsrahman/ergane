@@ -149,10 +149,14 @@ def effort(repl: Repl, args: str) -> str:
 
 
 @command("/tools")
-def tools_(repl: Repl, args: str) -> str:
+def tools_(repl: Repl, args: str) -> str | None:
     """List the tools offered to the model."""
-    tools = [
-        f"{tool.name}{' (read-only)' if tool.read_only else ''}"
-        for tool in repl.agent.tools.values()
-    ]
-    return f"Tools: {', '.join(tools) or 'none'}"
+    free = [tool.name for tool in repl.agent.tools.values() if tool.read_only]
+    asks = [tool.name for tool in repl.agent.tools.values() if not tool.read_only]
+    if not (free or asks):
+        return "Tools: none"
+    for label, names in (("run without asking", free), ("ask first", asks)):
+        if names:
+            repl.console.write(f"  {label:<18}  {', '.join(names)}\n")
+    repl.console.blank()
+    return None

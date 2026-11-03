@@ -277,14 +277,22 @@ SAVE = Tool.from_function(save, read_only=False)
 
 
 class TestToolsCommand:
-    def test_it_lists_the_tools_offered_and_marks_the_read_only_ones(
+    def test_it_lists_the_tools_by_whether_they_ask_first(
         self, monkeypatch, make_agent, capsys
     ):
         agent = make_agent(tools=[LOOK, SAVE])
 
         run_repl(monkeypatch, agent, ["/tools", "/exit"])
 
-        assert "[Tools: look (read-only), save]" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "  run without asking  look\n  ask first           save\n\n" in out
+
+    def test_a_group_with_no_tools_is_left_out(self, monkeypatch, make_agent, capsys):
+        run_repl(monkeypatch, make_agent(tools=[LOOK]), ["/tools", "/exit"])
+
+        out = capsys.readouterr().out
+        assert "  run without asking  look\n" in out
+        assert "ask first" not in out
 
     def test_it_says_when_there_are_none(self, monkeypatch, make_agent, capsys):
         run_repl(monkeypatch, make_agent(), ["/tools", "/exit"])

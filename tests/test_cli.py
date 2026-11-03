@@ -189,16 +189,20 @@ class TestMcpServers:
 
         assert "mcp-fake" not in threads()
 
-    def test_each_server_is_announced_before_the_banner(
+    def test_a_server_that_starts_is_not_announced_but_counted_in_the_banner(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
     ):
         write_mcp_json(tmp_path, {"fake": FAKE_SERVER})
+        monkeypatch.setenv("OPENAI_MODEL", "banner-model")
         monkeypatch.setattr("builtins.input", lambda _prompt: "/exit")
 
         main()
 
-        out = capsys.readouterr().out
-        assert out.startswith("[MCP server 'fake': 14 tools]\n\nAI coding agent")
+        first_line = capsys.readouterr().out.splitlines()[0]
+        # The 2 demo tools and the server's 14.
+        assert first_line == (
+            "muagent | model: banner-model | 16 tools | /help lists commands"
+        )
 
     def test_a_server_that_fails_does_not_stop_muagent(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
@@ -209,7 +213,10 @@ class TestMcpServers:
         main()
 
         out = capsys.readouterr().out
-        assert "[MCP server 'broken' failed to start: FileNotFoundError" in out
+        assert out.startswith("[MCP server 'broken' failed to start: FileNotFoundError")
+        # A blank line sets the failure apart from the banner under it.
+        _failure, blank, banner = out.splitlines()[:3]
+        assert blank == "" and banner.startswith("muagent | model: ")
         assert out.endswith("Bye.\n")
 
     def test_a_mistake_in_mcp_json_is_reported_and_muagent_exits(

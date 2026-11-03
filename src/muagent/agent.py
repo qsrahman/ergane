@@ -160,10 +160,12 @@ class Agent:
             on_text: Called with each piece of reply text as it arrives when
                 streaming, or once with the whole reply otherwise.
             on_notice: Called with status messages, such as old turns being
-                dropped to fit the token budget, and each tool call as it is run.
+                dropped to fit the token budget, and each tool call that runs
+                without asking.
             confirm: Called with a tool that is not read-only and the model's
                 arguments for it, before it runs; it returns whether to allow
-                the call. The default denies every such call.
+                the call. It is also what shows the user the call, so there is no
+                other line for it. The default denies every such call.
 
         Raises:
             TurnError: If the response is incomplete, failed, refused or has no
@@ -299,9 +301,10 @@ class Agent:
 
         Args:
             calls: The function calls in the model's response.
-            on_notice: Called with each call before it is run, shortened to one line.
-                The result is not shown: it goes to the model, and the reply says
-                what it found.
+            on_notice: Called with each call that runs without asking, before it is
+                run, shortened to one line. A call that is asked about is shown by
+                `confirm`, and a result is not shown at all: it goes to the model,
+                and the reply says what it found.
             confirm: Asked before each call to a tool that is not read-only.
 
         Returns:
@@ -309,18 +312,22 @@ class Agent:
         """
         outputs: ResponseInputParam = []
         for call in calls:
-            on_notice(f"{call.name}({_one_line(call.arguments)})")
             tool = self.tools.get(call.name)
+            problem = tool.check(call.arguments) if tool else None
+            # `confirm` shows the call it asks about, so such a call gets no line here.
+            asks = tool is not None and problem is None and not tool.read_only
+            if not asks:
+                on_notice(f"{call.name}({_one_line(call.arguments)})")
             if tool is None:
                 known = ", ".join(self.tools) or "none"
                 output = f"Unknown tool: {call.name}. Available tools: {known}."
-            # A call that would be rejected is not worth asking the user about.
-            elif problem := tool.check(call.arguments):
+            elif problem:
+                # A call that would be rejected is not worth asking the user about.
                 output = problem
-            elif tool.read_only or confirm(tool, call.arguments):
-                output = tool.call(call.arguments)
-            else:
+            elif asks and not confirm(tool, call.arguments):
                 output = "The user denied this call."
+            else:
+                output = tool.call(call.arguments)
             outputs.append(
                 {
                     "type": "function_call_output",

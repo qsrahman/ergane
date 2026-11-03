@@ -57,7 +57,7 @@ def main() -> None:
         )
     except KeyboardInterrupt:
         raise SystemExit(130) from None
-    if mcp_configs:
+    if console.after_status:  # a server failed, and said so
         console.blank()
 
     try:

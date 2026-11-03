@@ -685,10 +685,7 @@ class TestStartServers:
             assert "one__add" in names and "two__add" in names
             assert not names["one__add"].read_only
             assert names["two__add"].read_only
-            assert notices == [
-                "MCP server 'one': 14 tools",
-                "MCP server 'two': 14 tools",
-            ]
+            assert notices == []  # a server that starts is not announced
             assert (tmp_path / "one.log").exists()
         finally:
             for server in servers:
@@ -707,9 +704,8 @@ class TestStartServers:
         try:
             assert [server.name for server in servers] == ["good"]
             assert all(tool.name.startswith("good__") for tool in found)
-            assert len(notices) == 2
+            assert len(notices) == 1
             assert notices[0].startswith("MCP server 'broken' failed to start")
-            assert notices[1] == "MCP server 'good': 14 tools"
         finally:
             for server in servers:
                 server.close()
@@ -718,12 +714,16 @@ class TestStartServers:
         def interrupt(notice: str) -> None:
             raise KeyboardInterrupt
 
+        # The first to be waited for fails and says so, and that is where the
+        # interrupt comes; the other two are launched and not yet waited for.
+        configs = {
+            "broken": McpServerConfig(command="/no/such/server"),
+            "first": self.fake(),
+            "second": self.fake(),
+        }
         with pytest.raises(KeyboardInterrupt):
-            start_servers(
-                {"first": self.fake(), "second": self.fake()}, tmp_path, interrupt
-            )
+            start_servers(configs, tmp_path, interrupt)
 
-        # The second was still starting when the first one was reported.
         names = [t.name for t in threading.enumerate()]
         assert "mcp-first" not in names and "mcp-second" not in names
 
@@ -832,7 +832,7 @@ class TestStartServers:
         servers, _ = start_servers(configs, tmp_path, notices.append)
         try:
             assert [server.name for server in servers] == ["on"]
-            assert notices == ["MCP server 'on': 14 tools"]
+            assert notices == []
             assert not (tmp_path / "off.log").exists()
         finally:
             for server in servers:
@@ -878,9 +878,7 @@ class TestStartServers:
             for server in servers:
                 server.close()
 
-    def test_a_server_whose_variable_is_not_set_is_reported_in_its_place_and_skipped(
-        self, tmp_path
-    ):
+    def test_a_server_whose_variable_is_not_set_is_reported_and_skipped(self, tmp_path):
         notices: list[str] = []
         configs = {
             "first": self.fake(),
@@ -892,9 +890,7 @@ class TestStartServers:
         try:
             assert [server.name for server in servers] == ["first", "last"]
             assert notices == [
-                "MCP server 'first': 14 tools",
-                "MCP server 'needs': env.K uses ${NOT_SET}, which is not set",
-                "MCP server 'last': 14 tools",
+                "MCP server 'needs': env.K uses ${NOT_SET}, which is not set"
             ]
             assert not (tmp_path / "needs.log").exists()  # it was never launched
         finally:

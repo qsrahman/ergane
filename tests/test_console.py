@@ -1,4 +1,5 @@
 import io
+import json
 import sys
 
 import pytest
@@ -204,11 +205,19 @@ SAVE = Tool.from_function(save, read_only=False)
 
 class TestConfirm:
     @pytest.fixture
-    def answer(self, monkeypatch: pytest.MonkeyPatch):
-        """Ask Console().confirm with scripted input; returns its decision."""
+    def asked(self, monkeypatch: pytest.MonkeyPatch):
+        """Ask Console().confirm with scripted input.
+
+        Returns a function that gives the decision, and fills `prompts` with what
+        `input()` was asked: the question is the prompt, which is all of what the
+        user sees of it.
+        """
+        prompts: list[str] = []
+        monkeypatch.setenv("COLUMNS", "100")
 
         def ask(reply, arguments: str = '{"path": "notes.txt"}') -> bool:
-            def fake_input(_prompt: str) -> str:
+            def fake_input(prompt: str) -> str:
+                prompts.append(prompt)
                 if isinstance(reply, BaseException):
                     raise reply
                 return reply
@@ -216,48 +225,139 @@ class TestConfirm:
             monkeypatch.setattr("builtins.input", fake_input)
             return Console().confirm(SAVE, arguments)
 
+        ask.prompts = prompts  # pyright: ignore[reportFunctionMemberAccess]
         return ask
 
     @pytest.mark.parametrize("reply", ["y", " YES "])
-    def test_yes_allows_it(self, answer, reply):
-        assert answer(reply) is True
+    def test_yes_allows_it(self, asked, reply):
+        assert asked(reply) is True
 
     @pytest.mark.parametrize("reply", ["", "n", "no", "yep", "ok"])
-    def test_anything_else_denies_it(self, answer, reply):
-        assert answer(reply) is False
+    def test_anything_else_denies_it(self, asked, reply):
+        assert asked(reply) is False
 
-    def test_end_of_input_denies_it(self, answer):
-        assert answer(EOFError()) is False
+    def test_end_of_input_denies_it(self, asked):
+        assert asked(EOFError()) is False
 
-    def test_ctrl_c_is_not_swallowed(self, answer):
+    def test_ctrl_c_is_not_swallowed(self, asked):
         with pytest.raises(KeyboardInterrupt):
-            answer(KeyboardInterrupt())
+            asked(KeyboardInterrupt())
 
-    def test_the_question_shows_the_full_arguments(self, answer, capsys):
-        answer("n")
+    def test_the_question_is_one_line_with_the_tool_and_the_full_arguments(self, asked):
+        asked("n")
 
-        out = capsys.readouterr().out
-        assert 'Allow save with these arguments?\n{\n  "path": "notes.txt"\n}\n' in out
+        assert asked.prompts == ['Allow save {"path": "notes.txt"}? [y/N] ']
 
-    def test_padding_between_tokens_cannot_push_the_call_off_the_screen(
-        self, answer, capsys
+    def test_nothing_else_is_printed(self, asked, capsys):
+        asked("n")
+
+        assert capsys.readouterr().out == ""
+
+    def test_padding_between_tokens_cannot_push_the_call_off_the_screen(self, asked):
+        asked("n", '{"path": "rm -rf ~"' + "\n" * 200 + "}")
+
+        assert asked.prompts == ['Allow save {"path": "rm -rf ~"}? [y/N] ']
+
+    def test_arguments_that_are_not_json_are_shown_on_the_same_line(self, asked):
+        asked("n", "not json\n\n\n  at all")
+
+        assert asked.prompts == ["Allow save not json at all? [y/N] "]
+
+    def test_a_newline_inside_a_value_stays_on_the_line(self, asked):
+        asked("n", '{"text": "a\\nb"}')
+
+        assert asked.prompts == ['Allow save {"text": "a\\nb"}? [y/N] ']
+
+    def test_the_question_is_sanitized(self, asked):
+        asked("n", '{"path": "a\x1b]52;c;x"}')
+
+        (prompt,) = asked.prompts
+        assert "\x1b" not in prompt
+        assert "\n" not in prompt
+
+    def test_arguments_that_fit_are_shown_whole_and_the_prompt_does_not_offer_more(
+        self, asked
     ):
-        answer("n", '{"path": "rm -rf ~"' + "\n" * 200 + "}")
+        asked("n", json.dumps({"path": "a" * 40}))
 
+        (prompt,) = asked.prompts
+        assert "a" * 40 in prompt
+        assert prompt.endswith("? [y/N] ")
+
+    def test_a_long_value_is_cut_in_the_middle_to_fit_the_terminal(self, asked):
+        asked("n", json.dumps({"path": "a.py", "content": "x" * 5000}))
+
+        (prompt,) = asked.prompts
+        assert len(prompt) <= 100
+        assert '"path": "a.py"' in prompt  # a short value is left alone
+        assert "…" in prompt
+        assert prompt.endswith("? [y/N/?] ")  # and the prompt says there is more
+
+    def test_both_ends_of_a_long_command_are_kept(self, asked):
+        command = "cd /tmp && " + "a" * 500 + "; rm -rf ~"
+
+        asked("n", json.dumps({"command": command}))
+
+        (prompt,) = asked.prompts
+        assert "cd /tmp" in prompt
+        assert "rm -rf ~" in prompt
+        assert len(prompt) <= 100
+
+    def test_a_line_that_is_too_long_even_so_is_cut_at_its_end(self, asked):
+        asked("n", json.dumps({f"key{i}": i for i in range(60)}))
+
+        (prompt,) = asked.prompts
+        assert len(prompt) <= 100
+        assert "…? [y/N/?] " in prompt
+
+    def test_arguments_that_are_not_json_are_cut_at_their_end(self, asked):
+        asked("n", "word " * 100)
+
+        (prompt,) = asked.prompts
+        assert len(prompt) <= 100
+        assert "…? [y/N/?] " in prompt
+
+    def test_a_narrow_terminal_still_gets_a_line_with_some_arguments(
+        self, asked, monkeypatch
+    ):
+        monkeypatch.setenv("COLUMNS", "30")
+
+        asked("n", json.dumps({"path": "a" * 100}))
+
+        (prompt,) = asked.prompts
+        assert len(prompt) < 60  # not the whole value, and not a line of nothing
+        assert '{"path"' in prompt
+
+    def test_a_question_mark_shows_the_arguments_in_full_and_asks_again(
+        self, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("COLUMNS", "100")
+        answers = iter(["?", "y"])
+        prompts: list[str] = []
+
+        def fake_input(prompt: str) -> str:
+            prompts.append(prompt)
+            return next(answers)
+
+        monkeypatch.setattr("builtins.input", fake_input)
+        arguments = json.dumps({"content": "x" * 300 + "\x1b[2J"})
+
+        assert Console().confirm(SAVE, arguments) is True
+
+        assert len(prompts) == 2 and prompts[0] == prompts[1]
+        assert prompts[0].endswith("? [y/N/?] ")
         out = capsys.readouterr().out
-        assert out == 'Allow save with these arguments?\n{\n  "path": "rm -rf ~"\n}\n'
+        assert "x" * 300 in out  # all of it
+        assert '{\n  "content"' in out
+        assert "\x1b" not in out  # sanitized like everything else
 
-    def test_arguments_that_are_not_json_are_shown_on_one_line(self, answer, capsys):
-        answer("n", "not json\n\n\n  at all")
+    def test_a_question_mark_works_whatever_was_shown(self, monkeypatch, capsys):
+        answers = iter(["?", "n"])
+        monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
 
-        assert "arguments?\nnot json at all\n" in capsys.readouterr().out
+        assert Console().confirm(SAVE, '{"path": "a"}') is False
 
-    def test_long_arguments_are_not_shortened_and_are_sanitized(self, answer, capsys):
-        answer("n", '{"path": "' + "a" * 300 + '\x1b]52;c;x"}')
-
-        out = capsys.readouterr().out
-        assert "a" * 300 in out
-        assert "\x1b" not in out
+        assert '"path": "a"' in capsys.readouterr().out
 
     def test_it_starts_on_a_new_line_after_a_cut_off_reply(self, monkeypatch, capsys):
         monkeypatch.setattr("builtins.input", lambda _prompt: "n")
@@ -266,4 +366,43 @@ class TestConfirm:
 
         console.confirm(SAVE, "{}")
 
-        assert capsys.readouterr().out.startswith("partial\nAllow save")
+        assert capsys.readouterr().out == "partial\n"
+
+    def test_a_reply_after_the_answer_starts_after_a_blank_line(
+        self, monkeypatch, capsys
+    ):
+        monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+        console = Console()
+        console.confirm(SAVE, "{}")
+
+        console.write("Saved.")
+
+        assert capsys.readouterr().out == "\nSaved."
+
+    def test_ctrl_c_leaves_the_cursor_after_the_question(self, monkeypatch, capsys):
+        def interrupted(_prompt: str) -> str:
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr("builtins.input", interrupted)
+        console = Console()
+
+        with pytest.raises(KeyboardInterrupt):
+            console.confirm(SAVE, "{}")
+        console.notice("Cancelled")
+
+        # The notice starts a new line: the cursor was mid-line, after "^C".
+        assert capsys.readouterr().out == "\n[Cancelled]\n"
+
+    def test_end_of_input_ends_the_line_the_question_left_open(
+        self, monkeypatch, capsys
+    ):
+        def closed(_prompt: str) -> str:
+            raise EOFError
+
+        monkeypatch.setattr("builtins.input", closed)
+        console = Console()
+
+        console.confirm(SAVE, "{}")
+        console.notice("Closed")
+
+        assert capsys.readouterr().out == "\n[Closed]\n"

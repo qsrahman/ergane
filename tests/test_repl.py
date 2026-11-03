@@ -3,6 +3,8 @@ import pytest
 from fake_api import REFUSAL, STREAM_ERROR, TEXT
 from helpers import make_config, make_context, run_repl
 from muagent.agent import Agent
+from muagent.commands import COMMANDS
+from muagent.repl import Repl
 from muagent.tools import Tool
 
 
@@ -95,6 +97,11 @@ class TestRepl:
         assert repl([prompt, "/exit"]) == [prompt]
 
 
+def read_file(path: str) -> str:
+    """Read a text file (the tool the fake API calls)."""
+    return "contents"
+
+
 @pytest.mark.parametrize("streaming", [True, False])
 class TestReplRendering:
     """The Repl against a real Agent and the fake server."""
@@ -119,6 +126,79 @@ class TestReplRendering:
         run_repl(monkeypatch, make_agent(STREAMING=streaming), [prompt, "/exit"])
 
         assert f"\n{notice}\n" in capsys.readouterr().out
+
+    @staticmethod
+    def terminal(monkeypatch, answers):
+        """Stand in for input() the way a terminal looks: the prompt is shown, then
+        what was typed and the Enter that ends the line."""
+        typed = iter(answers)
+
+        def fake_input(prompt: str) -> str:
+            line = next(typed)
+            print(f"{prompt}{line}")
+            return line
+
+        monkeypatch.setattr("builtins.input", fake_input)
+
+    def run(self, agent):
+        Repl(agent, COMMANDS).run()
+
+    def test_a_call_and_the_reply_are_each_set_apart_by_a_blank_line(
+        self, monkeypatch, make_agent, capsys, streaming
+    ):
+        agent = make_agent(tools=[Tool.from_function(read_file)], STREAMING=streaming)
+        self.terminal(monkeypatch, ["tool_call", "/exit"])
+
+        self.run(agent)
+
+        out = capsys.readouterr().out
+        assert out.endswith(
+            f'> tool_call\n\n[read_file({{"path": "notes.txt"}})]\n\n{TEXT}\n\n> /exit\nBye.\n'
+        )
+
+    def test_a_call_that_asks_is_one_line_and_nothing_else(
+        self, monkeypatch, make_agent, capsys, streaming
+    ):
+        tool = Tool.from_function(read_file, read_only=False)
+        agent = make_agent(tools=[tool], STREAMING=streaming)
+        self.terminal(monkeypatch, ["tool_call", "y", "/exit"])
+
+        self.run(agent)
+
+        out = capsys.readouterr().out
+        assert out.endswith(
+            '> tool_call\n\nAllow read_file {"path": "notes.txt"}? [y/N] y\n\n'
+            f"{TEXT}\n\n> /exit\nBye.\n"
+        )
+
+    @pytest.mark.parametrize(
+        ("tools", "banner"),
+        [
+            ([], "muagent | model: gpt-4o | /help lists commands"),
+            (["one"], "muagent | model: gpt-4o | 1 tool | /help lists commands"),
+            (
+                ["one", "two"],
+                "muagent | model: gpt-4o | 2 tools | /help lists commands",
+            ),
+        ],
+    )
+    def test_the_banner_is_one_line(
+        self, monkeypatch, make_agent, capsys, streaming, tools, banner
+    ):
+        def tool_named(name: str) -> Tool:
+            def function() -> str:
+                """Do nothing."""
+                return ""
+
+            function.__name__ = name
+            return Tool.from_function(function)
+
+        agent = make_agent(tools=[tool_named(n) for n in tools], STREAMING=streaming)
+        self.terminal(monkeypatch, ["/exit"])
+
+        self.run(agent)
+
+        assert capsys.readouterr().out.startswith(f"{banner}\n\n> /exit\n")
 
     def test_a_tool_call_is_shown_as_a_notice_before_the_reply(
         self, monkeypatch, make_agent, capsys, streaming

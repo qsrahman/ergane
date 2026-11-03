@@ -3,7 +3,9 @@
 import io
 import json
 import re
+import shutil
 import sys
+from typing import Any
 
 from muagent.tools import Tool
 
@@ -31,6 +33,56 @@ def sanitize(text: str) -> str:
         bidi overrides and isolates.
     """
     return _UNSAFE.sub("", text)
+
+
+def _cut_strings(value: Any, cap: int) -> Any:
+    """The JSON value with every string longer than `cap` cut in the middle.
+
+    Both ends are kept, because a long command can be harmless at the start and
+    not at the end.
+    """
+    if isinstance(value, str):
+        if len(value) <= cap:
+            return value
+        head = (cap + 1) // 2
+        return value[:head] + "…" + value[len(value) - (cap - head) :]
+    if isinstance(value, list):
+        return [_cut_strings(item, cap) for item in value]
+    if isinstance(value, dict):
+        return {key: _cut_strings(item, cap) for key, item in value.items()}
+    return value
+
+
+def _fit(arguments: str, room: int) -> tuple[str, bool]:
+    """A tool call's arguments on one line of at most `room` characters.
+
+    The line is the JSON on one line, as it will be run. If that is too long, the
+    long strings are cut in the middle, the longest allowance that fits first;
+    failing that, the line is cut at its end.
+
+    Args:
+        arguments: The model's arguments, as JSON text.
+        room: The most characters the line may have.
+
+    Returns:
+        The line, and whether anything was left out of it.
+    """
+    try:
+        parsed = json.loads(arguments)
+    except ValueError:
+        line = " ".join(arguments.split())  # not JSON: nothing but its whitespace
+    else:
+        line = json.dumps(parsed, ensure_ascii=False)
+        if len(line) <= room:
+            return line, False
+        for cap in (64, 40, 24, 16, 8):
+            line = json.dumps(_cut_strings(parsed, cap), ensure_ascii=False)
+            if len(line) <= room:
+                return line, True
+        return line[: room - 1] + "…", True
+    if len(line) <= room:
+        return line, False
+    return line[: room - 1] + "…", True
 
 
 class Console:
@@ -97,11 +149,14 @@ class Console:
         self._emit(f"[{' '.join(sanitize(text).split())}]\n", status=True)
 
     def confirm(self, tool: Tool, arguments: str) -> bool:
-        """Ask the user whether a tool that is not read-only may run.
+        """Ask the user, on one line, whether a tool that is not read-only may run.
 
-        The arguments are shown in full, as the JSON that will be run: a shortened
-        call could hide what it does, and padding between the JSON tokens could
-        scroll it off the screen.
+        The line is as wide as the terminal at most, so the arguments are shown
+        whole if they fit and otherwise with the middle of their long strings left
+        out, which the prompt says (`[y/N/?]`). Answering `?` prints the arguments
+        in full and asks again, so nothing is hidden for good. The line is the JSON
+        that will be run, on one line: padding between its tokens cannot push the
+        call off the screen.
 
         Args:
             tool: The tool the model wants to call.
@@ -110,16 +165,31 @@ class Console:
         Returns:
             True only if the user answers y or yes; end of input is a no.
         """
-        try:
-            shown = json.dumps(json.loads(arguments), indent=2, ensure_ascii=False)
-        except ValueError:
-            shown = " ".join(arguments.split())
-        self._emit(f"Allow {tool.name} with these arguments?\n{shown}\n", status=True)
-        try:
-            answer = input("[y/N] ")
-        except EOFError:
-            answer = ""
-        return answer.strip().lower() in ("y", "yes")
+        before = f"Allow {tool.name} "
+        room = shutil.get_terminal_size().columns - len(before) - len("? [y/N/?] ") - 1
+        shown, shortened = _fit(arguments, max(room, 20))
+        prompt = f"{before}{shown}? [y/N{'/?' if shortened else ''}] "
+        while True:
+            self.end_line()
+            self.at_line_start = False  # the prompt leaves the cursor after it
+            try:
+                answer = input(sanitize(prompt)).strip().lower()
+            except EOFError:
+                print()  # no Enter ended the line
+                answer = ""
+            self.at_line_start = True
+            if answer != "?":
+                break
+            try:
+                everything = json.dumps(
+                    json.loads(arguments), indent=2, ensure_ascii=False
+                )
+            except ValueError:
+                everything = " ".join(arguments.split())
+            self._emit(everything + "\n", status=True)
+        # A reply to what was typed stands apart from it, as from a status line.
+        self.after_status = True
+        return answer in ("y", "yes")
 
     def clear(self) -> None:
         """Clear the screen and scrollback, like `clear`; the history is kept."""

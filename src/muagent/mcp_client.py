@@ -546,12 +546,13 @@ def start_servers(
     """Start the servers, all at once, and collect their tools.
 
     A server that fails is reported and left out: it must not stop muagent. One
-    that is switched off (`enable` false) is left out without a word.
+    that is switched off (`enable` false) is left out without a word, and so is
+    one that starts: the banner counts its tools.
 
     Args:
         configs: The servers to start, by name.
         log_dir: Where each server's stderr goes, in a file named after it.
-        on_notice: Called with a line about each server, once it is up or has failed.
+        on_notice: Called with a line about each server that fails.
         environ: Where the `${NAME}` placeholders of the servers are filled in from.
 
     Returns:
@@ -592,7 +593,6 @@ def start_servers(
                 continue
             running.append(entry)
             tools += found
-            on_notice(f"MCP server {name!r}: {len(found)} tools")
     except BaseException:
         for _, entry in entries:
             if not isinstance(entry, str):
