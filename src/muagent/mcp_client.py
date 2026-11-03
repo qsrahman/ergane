@@ -16,7 +16,7 @@ import json
 import os
 import re
 import threading
-from collections.abc import Callable, Coroutine, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Mapping
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Self, TextIO
@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from muagent.tools import Tool
+from muagent.tools import Tool, invalid_arguments
 
 if TYPE_CHECKING:
     from mcp import ClientSession
@@ -32,8 +32,10 @@ if TYPE_CHECKING:
     from mcp_types import Tool as ToolDefinition
 
 # OpenAI rejects the whole request, not just the tool, for a name outside this.
-_NAME_PATTERN = r"^[a-zA-Z0-9_-]+$"  # anchored: pydantic searches, not matches
-_NAME_CHARS = re.compile(_NAME_PATTERN)
+_ALLOWED = "a-zA-Z0-9_-"
+_NAME_PATTERN = rf"^[{_ALLOWED}]+$"  # anchored: pydantic searches, not matches
+_NAME = re.compile(_NAME_PATTERN)
+_DISALLOWED = re.compile(rf"[^{_ALLOWED}]")
 _MAX_NAME_CHARS = 128
 
 # How long a server gets to stop on its own before it is cancelled.
@@ -51,7 +53,7 @@ def _tool_name(server: str, tool: str, taken: set[str]) -> str:
     muagent's own tools; characters the API rejects become underscores, and names
     that collide after that get a number.
     """
-    base = re.sub(r"[^a-zA-Z0-9_-]", "_", f"{server}__{tool}")[:_MAX_NAME_CHARS]
+    base = _DISALLOWED.sub("_", f"{server}__{tool}")[:_MAX_NAME_CHARS]
     name, number = base, 1
     while name in taken:
         number += 1
@@ -79,7 +81,7 @@ def _text(result: CallToolResult) -> str:
     return f"Error: {text}" if result.is_error else text
 
 
-def _validator(schema: Mapping[str, Any]) -> Callable[[str], str | None]:
+def _required_keys_check(schema: Mapping[str, Any]) -> Callable[[str], str | None]:
     """Check what a call cannot work without: a JSON object with the required keys.
 
     Types are left to the server. A JSON Schema check would be stricter than the
@@ -87,21 +89,21 @@ def _validator(schema: Mapping[str, Any]) -> Callable[[str], str | None]:
     """
     required = schema.get("required", [])
 
-    def validate(arguments: str) -> str | None:
+    def check(arguments: str) -> str | None:
         try:
             given = json.loads(arguments)
         except ValueError as exc:
-            return f"Invalid arguments: Invalid JSON: {exc}"
+            return invalid_arguments([f"Invalid JSON: {exc}"])
         if not isinstance(given, dict):
-            return "Invalid arguments: expected a JSON object"
+            return invalid_arguments(["expected a JSON object"])
         missing = [key for key in required if key not in given]
         if missing:
-            return "Invalid arguments: " + "; ".join(
+            return invalid_arguments(
                 f"{key}: Missing required argument" for key in missing
             )
         return None
 
-    return validate
+    return check
 
 
 async def _list_tools(session: ClientSession) -> list[ToolDefinition]:
@@ -217,7 +219,7 @@ def load_servers(path: Path) -> dict[str, McpServerConfig]:
         ValidationError: If the file is not valid JSON or has other contents.
     """
     try:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return {}
     return _McpFile.model_validate_json(text).mcpServers
@@ -230,66 +232,30 @@ class McpServer:
     spoken to over streamable HTTP; exactly one of them.
     """
 
-    def __init__(
-        self,
-        name: str,
-        command: str | None = None,
-        args: Sequence[str] = (),
-        env: Mapping[str, str] | None = None,
-        *,
-        cwd: str | None = None,
-        url: str | None = None,
-        headers: Mapping[str, str] | None = None,
-        log: Path | None = None,
-        read_only: bool = False,
-        startup_timeout: float = 20,
-        call_timeout: float = 60,
-    ) -> None:
+    def __init__(self, name: str, config: McpServerConfig, log: Path) -> None:
         """Describe a server; `start()` connects to it.
+
+        A McpServer is used once: after `close()` it cannot be started again.
 
         Args:
             name: Prefixes the names of its tools. Letters, digits, `_` and `-`.
-            command: The program that runs the server, for stdio.
-            args: Its arguments.
-            env: Environment variables for it, added to a short allow-list (PATH,
-                HOME and the like): it does not inherit the rest, so it does not
-                see this program's API key.
-            cwd: The directory the program runs in; muagent's own if omitted.
-            url: The server's endpoint, for streamable HTTP. Not checked here: the
-                rules for which URLs are allowed are those of `McpServerConfig`.
-            headers: Sent with every request to the url (an Authorization, say).
-            log: For a program: the file for its stderr, so that its log lines do
-                not land in the terminal. Opened (and emptied) by `launch()`,
-                closed by `close()`.
-            read_only: Whether to treat its tools as read-only, so they run without
-                asking. The server's own claim is never used: it is unverified.
-            startup_timeout: Seconds to connect, and to list the tools.
-            call_timeout: Seconds a call may take.
+            config: What to run or where to connect, and how far to trust it. Its
+                `${NAME}` placeholders must be filled in already (see `_expand`).
+            log: For a program, the file for its stderr, so that its log lines do not
+                land in the terminal. Opened (and emptied) by `launch()`, closed by
+                `close()`. A url has no stderr, and the file is not touched.
 
         Raises:
-            ValueError: If the name has other characters, or there is not exactly one
-                of command and url, or a command has no log.
+            ValueError: If the name has other characters.
         """
-        if not _NAME_CHARS.fullmatch(name):
+        if not _NAME.fullmatch(name):
             raise ValueError(
                 f"MCP server name {name!r} must be letters, digits, _ and - only"
             )
-        if (command is None) == (url is None):
-            raise ValueError("an MCP server needs either a command or a url")
-        if command is not None and log is None:
-            raise ValueError("a command needs a log for its stderr")
         self.name = name
-        self._command = command
-        self._args = list(args)
-        self._env = dict(env) if env else None
-        self._cwd = cwd
-        self._url = url
-        self._headers = dict(headers) if headers else None
+        self._config = config
         self._log_path = log
         self._log: TextIO | None = None
-        self._read_only = read_only
-        self._startup_timeout = startup_timeout
-        self._call_timeout = call_timeout
 
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -324,7 +290,7 @@ class McpServer:
                 "install muagent with its mcp extra"
             )
         log = None
-        if self._log_path is not None:
+        if self._config.command is not None:
             try:
                 self._log_path.parent.mkdir(parents=True, exist_ok=True)
                 self._log = log = self._log_path.open("w")
@@ -356,13 +322,13 @@ class McpServer:
         if self._ready is None:
             raise McpServerError(f"MCP server {self.name!r} was not launched")
         try:
-            self._session = self._ready.result(self._startup_timeout)
+            self._session = self._ready.result(self._config.startup_timeout)
         except BaseException as exc:
             self._close(cancel=True)
             if not isinstance(exc, Exception):
                 raise  # Ctrl-C
             if isinstance(exc, TimeoutError):
-                reason = f"did not answer within {self._startup_timeout:g} s"
+                reason = f"did not answer within {self._config.startup_timeout:g} s"
             else:
                 leaf = _leaf(exc)
                 reason = f"failed to start: {type(leaf).__name__}: {leaf}"
@@ -388,36 +354,38 @@ class McpServer:
         One task enters and leaves all of it: the SDK's task groups must be left by
         the task that entered them.
         """
-        import httpx2
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
         from mcp.client.streamable_http import streamable_http_client
 
+        config = self._config
         try:
             async with AsyncExitStack() as stack:
-                if self._url is None:
-                    assert self._command is not None and log is not None
+                if config.url is None:
+                    assert config.command is not None and log is not None
                     params = StdioServerParameters(
-                        command=self._command,
-                        args=self._args,
-                        env=self._env,
-                        cwd=self._cwd,
+                        command=config.command,
+                        args=config.args,
+                        env=config.env,
+                        cwd=config.cwd,
                     )
                     read, write = await stack.enter_async_context(
                         stdio_client(params, errlog=log)
                     )
                 else:
+                    import httpx2
+
                     # Redirects are followed only within the url's origin, so
                     # the headers go nowhere else.
                     # The SDK's own timeouts: a server may hold a response open.
                     http = await stack.enter_async_context(
                         httpx2.AsyncClient(
-                            headers=self._headers,
+                            headers=config.headers,
                             timeout=httpx2.Timeout(30.0, read=300.0),
                         )
                     )
                     read, write = await stack.enter_async_context(
-                        streamable_http_client(self._url, http_client=http)
+                        streamable_http_client(config.url, http_client=http)
                     )
                 session = await stack.enter_async_context(ClientSession(read, write))
                 await session.initialize()
@@ -454,6 +422,8 @@ class McpServer:
             self._finished.wait(_STOP_SECONDS)
         loop.call_soon_threadsafe(loop.stop)
         thread.join(_STOP_SECONDS)
+        if not thread.is_alive():
+            loop.close()  # or its selector and sockets stay open
         self._task = self._ready = None
         if self._log is not None:
             self._log.close()
@@ -465,7 +435,7 @@ class McpServer:
         Raises:
             McpServerError: If the server is not running.
         """
-        definitions = self._submit(_list_tools, self._startup_timeout)
+        definitions = self._submit(_list_tools, self._config.startup_timeout)
         taken: set[str] = set()
         return [
             self._make_tool(_tool_name(self.name, d.name, taken), d)
@@ -473,25 +443,23 @@ class McpServer:
         ]
 
     def _make_tool(self, name: str, definition: ToolDefinition) -> Tool:
-        def function(**arguments: Any) -> str:
+        def runner(arguments: str) -> str:
             return _text(
                 self._submit(
-                    lambda session: session.call_tool(definition.name, arguments),
-                    self._call_timeout,
+                    lambda session: session.call_tool(
+                        definition.name, json.loads(arguments)
+                    ),
+                    self._config.call_timeout,
                 )
             )
-
-        def runner(arguments: str) -> str:
-            return function(**json.loads(arguments))
 
         return Tool(
             name,
             definition.description or definition.title or "",
-            function,
             definition.input_schema,
-            _validator(definition.input_schema),
+            _required_keys_check(definition.input_schema),
             runner,
-            self._read_only,
+            self._config.read_only,
         )
 
     def _submit[T](
@@ -596,20 +564,8 @@ def start_servers(
             if not config.enable:
                 continue
             try:
-                config = _expand(name, config, environ)
                 server = McpServer(
-                    name,
-                    config.command,
-                    config.args,
-                    config.env,
-                    cwd=config.cwd,
-                    url=config.url,
-                    headers=config.headers,
-                    # Only a program has a stderr to keep.
-                    log=log_dir / f"{name}.log" if config.command else None,
-                    read_only=config.read_only,
-                    startup_timeout=config.startup_timeout,
-                    call_timeout=config.call_timeout,
+                    name, _expand(name, config, environ), log_dir / f"{name}.log"
                 )
                 server.launch()  # they all start at once; connect() waits below
             except McpServerError as exc:

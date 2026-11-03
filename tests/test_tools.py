@@ -229,13 +229,12 @@ ECHO_SCHEMA = {
 class TestToolFromParts:
     """A tool that is not made from a function, as an MCP server's tool will be."""
 
-    def make(self, runner, validator=lambda arguments: None) -> Tool:
+    def make(self, runner, check=lambda arguments: None) -> Tool:
         return Tool(
             "remote__echo",
             "Echo some text.",
-            lambda **kwargs: "",
             ECHO_SCHEMA,
-            validator,
+            check,
             runner,
             read_only=False,
         )
@@ -249,7 +248,7 @@ class TestToolFromParts:
             "strict": False,
         }
 
-    def test_check_asks_its_validator(self):
+    def test_check_is_the_check_it_was_given(self):
         tool = self.make(lambda arguments: "", lambda arguments: f"bad: {arguments}")
 
         assert tool.check("{}") == "bad: {}"
@@ -285,7 +284,7 @@ class TestDecorator:
             return "pong"
 
         assert isinstance(ping, Tool)
-        assert ping.function() == "pong"
+        assert ping.call("{}") == "pong"
 
     def test_the_decorator_can_declare_a_tool_not_read_only(self):
         @tool

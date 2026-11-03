@@ -13,7 +13,7 @@ MCP server, say) fills in the same parts.
 
 import functools
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, get_type_hints, overload
 
@@ -32,10 +32,15 @@ class _NoTitles(GenerateJsonSchema):
         return False
 
 
-def _validator(checker: TypeAdapter[str]) -> Callable[[str], str | None]:
+def invalid_arguments(problems: Iterable[str]) -> str:
+    """The text that tells the model its arguments were wrong, and how."""
+    return "Invalid arguments: " + "; ".join(problems)
+
+
+def _make_check(checker: TypeAdapter[str]) -> Callable[[str], str | None]:
     """Make a check of the model's arguments out of an adapter that runs nothing."""
 
-    def validate(arguments: str) -> str | None:
+    def check(arguments: str) -> str | None:
         try:
             checker.validate_json(arguments)
         except ValidationError as exc:
@@ -43,10 +48,10 @@ def _validator(checker: TypeAdapter[str]) -> Callable[[str], str | None]:
             for error in exc.errors():
                 where = ".".join(str(part) for part in error["loc"])
                 problems.append(f"{where}: {error['msg']}" if where else error["msg"])
-            return "Invalid arguments: " + "; ".join(problems)
+            return invalid_arguments(problems)
         return None
 
-    return validate
+    return check
 
 
 @dataclass(frozen=True)
@@ -55,9 +60,10 @@ class Tool:
 
     name: str
     description: str  # the function's docstring
-    function: Callable[..., str]
     parameters: dict[str, Any]  # JSON schema of the arguments
-    validator: Callable[[str], str | None]  # arguments as JSON text -> problem or None
+    # Checks the model's arguments, given as JSON text, without running the tool:
+    # a description of what is wrong with them, or None if they are valid.
+    check: Callable[[str], str | None]
     runner: Callable[[str], str]  # arguments as JSON text -> result; may raise
     read_only: bool  # False if it may change anything outside the program
 
@@ -117,9 +123,8 @@ class Tool:
         return cls(
             name,
             description,
-            function,
             parameters,
-            _validator(checker),
+            _make_check(checker),
             arguments.validate_json,
             read_only,
         )
@@ -133,17 +138,6 @@ class Tool:
             "parameters": self.parameters,
             "strict": False,
         }
-
-    def check(self, arguments: str) -> str | None:
-        """Check the model's arguments without running the tool.
-
-        Args:
-            arguments: The model's arguments, as the JSON text it produced.
-
-        Returns:
-            A description of what is wrong with them, or None if they are valid.
-        """
-        return self.validator(arguments)
 
     def call(self, arguments: str) -> str:
         """Run the tool for a model's call.
@@ -179,7 +173,7 @@ def tool(
 ) -> Tool | Callable[[Callable[..., str]], Tool]:
     """Make a function a tool: `@tool`, or `@tool(read_only=False)`.
 
-    The decorated name becomes the Tool, so a test calls `add.function(...)` and a
+    The decorated name becomes the Tool, so a test calls `add.call('{"a": 1}')` and a
     list of tools is `[add, get_time]`. Nothing is registered: whoever builds the
     agent lists the tools to offer.
 

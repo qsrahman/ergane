@@ -37,7 +37,9 @@ FAKE = str(Path(__file__).parent / "fake_mcp_server.py")
 def tools(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, Tool]]:
     """The fake server's tools, from one server shared by the tests that only call it."""
     log = tmp_path_factory.mktemp("mcp") / "log"
-    server = McpServer("fake", sys.executable, [FAKE], log=log)
+    server = McpServer(
+        "fake", McpServerConfig(command=sys.executable, args=[FAKE]), log
+    )
     server.start()
     yield {tool.name: tool for tool in server.tools()}
     server.close()
@@ -83,15 +85,11 @@ def make_server(tmp_path: Path) -> Iterator[Callable[..., McpServer]]:
     """
     started: list[McpServer] = []
 
-    def make(*, start: bool = True, **values) -> McpServer:
-        values = {
-            "name": "fake",
-            "command": sys.executable,
-            "args": [FAKE],
-            "log": tmp_path / "mcp.log",
-            **values,
-        }
-        server = McpServer(**values)
+    def make(
+        *, start: bool = True, name: str = "fake", log: Path | None = None, **values
+    ) -> McpServer:
+        values = {"command": sys.executable, "args": [FAKE], **values}
+        server = McpServer(name, McpServerConfig(**values), log or tmp_path / "mcp.log")
         started.append(server)
         if start:
             server.start()
@@ -276,6 +274,21 @@ class TestServer:
 
         assert "mcp-closing" not in [thread.name for thread in threading.enumerate()]
 
+    @pytest.mark.skipif(not os.path.isdir("/dev/fd"), reason="counts open descriptors")
+    def test_close_releases_what_the_event_loop_held(self, make_server):
+        def open_descriptors() -> int:
+            return len(os.listdir("/dev/fd"))
+
+        make_server(name="warmup").close()  # whatever is opened once, like imports
+        before = open_descriptors()
+
+        for _ in range(4):
+            make_server(name="cycle").close()
+
+        # The servers are still referenced by the fixture, so this is not the
+        # garbage collector tidying up: a loop that is not closed keeps three each.
+        assert open_descriptors() == before
+
     @pytest.mark.parametrize("name", ["", "a.b", "a b", "é", "a/b"])
     def test_a_name_the_api_would_reject_is_refused(self, make_server, name):
         with pytest.raises(ValueError, match="letters, digits"):
@@ -321,14 +334,16 @@ class TestLog:
         assert log.read_text() == "fake server log line\n"
 
     def test_a_log_that_cannot_be_written_is_a_start_failure(self, tmp_path):
-        server = McpServer("fake", sys.executable, [FAKE], log=tmp_path)  # a directory
+        config = McpServerConfig(command=sys.executable, args=[FAKE])
+        server = McpServer("fake", config, tmp_path)  # a directory
 
         with pytest.raises(McpServerError, match="cannot write its log"):
             server.start()
 
     def test_a_missing_mcp_package_is_explained(self, tmp_path, monkeypatch):
         monkeypatch.setattr("importlib.util.find_spec", lambda name: None)
-        server = McpServer("fake", sys.executable, [FAKE], log=tmp_path / "log")
+        config = McpServerConfig(command=sys.executable, args=[FAKE])
+        server = McpServer("fake", config, tmp_path / "log")
 
         with pytest.raises(McpServerError, match="needs the mcp package"):
             server.start()
@@ -579,10 +594,7 @@ class TestPlaceholders:
 
 class TestHttp:
     def make(self, make_server, url, **values) -> McpServer:
-        # No command, so no stderr to log.
-        return make_server(
-            name="web", command=None, args=[], log=None, url=url, **values
-        )
+        return make_server(name="web", command=None, args=[], url=url, **values)
 
     def test_the_tools_of_a_server_at_a_url_can_be_called(self, make_server, http_url):
         server = self.make(make_server, http_url)
@@ -655,24 +667,6 @@ class TestHttp:
         server.close()
 
         assert "mcp-web" not in [thread.name for thread in threading.enumerate()]
-
-
-class TestTransportChoice:
-    @pytest.mark.parametrize(
-        "values",
-        [
-            {},
-            {"command": "x", "url": "https://example.com/mcp", "log": Path("log")},
-        ],
-        ids=["neither", "both"],
-    )
-    def test_there_must_be_one_of_command_and_url(self, values):
-        with pytest.raises(ValueError, match="either a command or a url"):
-            McpServer("web", **values)
-
-    def test_a_command_needs_a_log(self):
-        with pytest.raises(ValueError, match="needs a log"):
-            McpServer("web", "x")
 
 
 class TestStartServers:
