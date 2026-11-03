@@ -1,5 +1,3 @@
-"""Terminal output: everything the program prints goes through Console."""
-
 import io
 import json
 import re

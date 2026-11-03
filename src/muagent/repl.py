@@ -1,5 +1,3 @@
-"""The interactive terminal loop: reads input, runs commands, shows replies."""
-
 from collections.abc import Mapping
 
 from muagent.agent import Agent, TurnError

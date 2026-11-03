@@ -1,5 +1,3 @@
-"""The conversation history, and how it is trimmed to fit a token budget."""
-
 import json
 from collections.abc import Mapping
 

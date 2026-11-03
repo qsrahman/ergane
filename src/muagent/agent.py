@@ -329,6 +329,11 @@ class Agent:
             "input": draft,
             "model": self.config.model,
             "instructions": self._instructions(),
+            # store=False means the server keeps no history, so reasoning items are
+            # resent by muagent in the input; their encrypted content is requested
+            # here, otherwise a reasoning model cannot use it (and may fail the
+            # request) when turning back to a tool to answer.
+            "include": ["reasoning.encrypted_content"],
         }
         # Non-reasoning models reject a reasoning setting, so leave it out if unset.
         if self.config.reasoning_effort is not None:
