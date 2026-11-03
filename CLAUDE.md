@@ -50,6 +50,8 @@ MCP servers are not settings: they are listed in `$XDG_CONFIG_HOME/muagent/mcp.j
 
 ## Architecture
 
+[TURN.md](TURN.md) walks one turn through these modules, with the request, the outcomes and what the user and the model each see. Keep it in step when the turn flow changes: the rounds and their stops in `Agent.run_turn`, what `_run_tools` shows and sends, what `save_turn` keeps, or a new way for a turn to end.
+
 The modules, in dependency order (each imports only from those above it):
 
 - `tools.py`: the `@tool` decorator and `Tool`.

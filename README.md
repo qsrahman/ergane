@@ -149,3 +149,5 @@ The tests run against a local fake of the Responses API. They ignore your `.env`
 - Requests are sent with `store=False`, so the server keeps no conversation state. The full history is resent on each turn.
 - A turn, tool calls and their results included, is added to the history once the final response completes with text. An incomplete response keeps the partial reply you already saw; failed or empty responses leave the history unchanged.
 - When the history exceeds `MAX_CONTEXT_TOKENS`, the oldest turns are dropped first. Tokens are estimated at about 4 bytes of UTF-8 per token, which works with any backend's tokenizer.
+
+[TURN.md](TURN.md) follows one turn through the code: what is sent, what is kept, what you see, and every way a turn can end.
