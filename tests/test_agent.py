@@ -1,4 +1,5 @@
 import re
+from datetime import date
 
 import pytest
 from openai.types.responses import Response, ResponseInputParam
@@ -13,13 +14,34 @@ from fake_api import (
     make_response,
 )
 from helpers import make_context
-from muagent.agent import NOTICE_CHARS, Agent, TurnError, _one_line
+from muagent.agent import (
+    NOTICE_CHARS,
+    SYSTEM_PROMPT,
+    SYSTEM_PROMPT_NO_TOOLS,
+    Agent,
+    TurnError,
+    _one_line,
+)
 from muagent.context import estimate_tokens
 from muagent.tools import MAX_OUTPUT_CHARS, Tool
 
 
 @pytest.mark.parametrize("streaming", [True, False])
 class TestAgentRunTurn:
+    @pytest.mark.parametrize("with_tools", [False, True])
+    def test_the_instructions_are_the_prompt_then_the_environment(
+        self, make_agent, fake_server, streaming, with_tools
+    ):
+        tools = [READ_FILE] if with_tools else []
+        make_agent(tools=tools, STREAMING=streaming).run_turn("hi")
+
+        instructions = fake_server.requests[0]["instructions"]
+        prompt = SYSTEM_PROMPT if with_tools else SYSTEM_PROMPT_NO_TOOLS
+        # The prompt first, so the part that never changes can be cached.
+        assert instructions.startswith(prompt)
+        assert "- Operating system: " in instructions
+        assert instructions.endswith(f"- Current date: {date.today().isoformat()}\n")
+
     def test_completed_response_is_saved(self, make_agent, streaming):
         agent = make_agent(STREAMING=streaming)
 
@@ -606,6 +628,27 @@ class TestAgentToolLoop:
 
         assert agent.context.undo()
         assert agent.context.items == []
+
+
+@pytest.mark.parametrize("prompt", [SYSTEM_PROMPT, SYSTEM_PROMPT_NO_TOOLS])
+def test_the_prompt_keeps_what_the_terminal_depends_on(prompt):
+    # The terminal shows LaTeX and Markdown as they are.
+    assert "LaTeX" in prompt
+    assert "Markdown" in prompt
+
+
+def test_the_prompt_with_tools_says_what_the_program_does_with_them():
+    # The user is not shown what a tool returns, and a denied call comes back as text.
+    assert "cannot see tool results" in SYSTEM_PROMPT
+    assert "denied" in SYSTEM_PROMPT
+
+
+def test_the_prompt_without_tools_says_there_are_none_and_does_not_talk_about_calls():
+    # Models trained to call tools try to when told about them, with none offered:
+    # gpt-5.5 types a call as text, gemma4 returns nothing. So it only says what is true.
+    assert "You have no tools" in SYSTEM_PROMPT_NO_TOOLS
+    for priming in ("approve", "denied", "make independent calls", "tool call"):
+        assert priming not in SYSTEM_PROMPT_NO_TOOLS
 
 
 def test_a_long_call_is_flattened_and_cut_to_one_line_for_its_notice():
