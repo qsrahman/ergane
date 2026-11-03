@@ -183,6 +183,7 @@ class TestAgentRunTurn:
 
         request = fake_server.requests[-1]
         assert request["store"] is False
+        assert request["include"] == ["reasoning.encrypted_content"]
         assert request.get("stream", False) is streaming
         assert [item["content"] for item in request["input"]] == [
             "first",
