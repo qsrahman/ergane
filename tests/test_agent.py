@@ -724,11 +724,37 @@ def test_the_prompt_with_tools_says_what_the_program_does_with_them():
     assert "denied" in SYSTEM_PROMPT
 
 
+def test_the_prompt_with_tools_asks_for_scratch_scripts_to_be_cleaned_up():
+    # "A new temporary directory" alone made gemma4 create one in the project, so
+    # it names the system's temporary location; and it says the project is no place.
+    assert "scratch script" in SYSTEM_PROMPT
+    assert "system's temporary location" in SYSTEM_PROMPT
+    assert "never in the user's project" in SYSTEM_PROMPT
+    assert "delete that directory when you are done, also when the script fails" in (
+        SYSTEM_PROMPT
+    )
+
+
+def test_the_prompt_does_not_forbid_the_cleanup_it_asks_for():
+    # Deleting the scratch directory is `rm -rf`, so that cannot be named as
+    # forbidden; what is forbidden is deleting what the model did not create.
+    for prompt in (SYSTEM_PROMPT, SYSTEM_PROMPT_NO_TOOLS):
+        assert "rm -rf" not in prompt
+        assert "do not delete anything you did not create" in prompt
+
+
 def test_the_prompt_without_tools_says_there_are_none_and_does_not_talk_about_calls():
     # Models trained to call tools try to when told about them, with none offered:
     # gpt-5.5 types a call as text, gemma4 returns nothing. So it only says what is true.
     assert "You have no tools" in SYSTEM_PROMPT_NO_TOOLS
-    for priming in ("approve", "denied", "make independent calls", "tool call"):
+    for priming in (
+        "approve",
+        "denied",
+        "make independent calls",
+        "tool call",
+        "scratch script",
+        "mktemp",
+    ):
         assert priming not in SYSTEM_PROMPT_NO_TOOLS
 
 
