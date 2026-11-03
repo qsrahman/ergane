@@ -3,7 +3,7 @@ import socket
 from datetime import date
 
 import pytest
-from openai import APIConnectionError, OpenAI
+from openai import APIConnectionError, BadRequestError, OpenAI
 from openai.types.responses import Response, ResponseInputParam
 
 from fake_api import (
@@ -678,6 +678,87 @@ class TestAgentToolLoop:
             "content": "[Stopped after 2 model calls without a final answer]",
         }
 
+    @pytest.mark.parametrize(
+        "scenario, reason",
+        [
+            ("failed", "Response failed: server_error: boom"),
+            ("empty", "No text in response"),
+            ("refusal", f"Refused: {REFUSAL}"),
+            ("cancelled", "Response not completed: cancelled"),
+        ],
+    )
+    def test_a_response_with_a_problem_after_a_round_keeps_the_work(
+        self, make_agent, fake_server, streaming, scenario, reason
+    ):
+        agent = make_agent(tools=[READ_FILE], STREAMING=streaming)
+
+        with pytest.raises(TurnError, match=re.escape(reason)):
+            agent.run_turn(f"tool_then_{scenario}")
+
+        assert agent.context.items == [
+            {"role": "user", "content": f"tool_then_{scenario}"},
+            FUNCTION_CALL,
+            FIRST_OUTPUT,
+            {
+                "role": "assistant",
+                "content": f"[Stopped after 1 model calls: {reason}]",
+            },
+        ]
+
+    def test_an_api_error_after_a_round_keeps_the_work(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = make_agent(tools=[READ_FILE], STREAMING=streaming)
+
+        with pytest.raises(BadRequestError):
+            agent.run_turn("tool_then_http_error")
+
+        assert agent.context.items[-1] == {
+            "role": "assistant",
+            "content": "[Stopped after 1 model calls: BadRequestError]",
+        }
+        assert agent.context.items[1:3] == [FUNCTION_CALL, FIRST_OUTPUT]
+
+    def test_an_api_error_in_the_first_round_saves_nothing(self, make_agent, streaming):
+        agent = make_agent(tools=[READ_FILE], STREAMING=streaming)
+
+        with pytest.raises(BadRequestError):
+            agent.run_turn("http_error")
+
+        assert agent.context.items == []
+
+    def test_a_turn_kept_after_a_failure_can_be_continued_or_retried(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = make_agent(tools=[READ_FILE], STREAMING=streaming)
+        with pytest.raises(TurnError):
+            agent.run_turn("tool_then_failed")
+
+        agent.run_turn("go on")
+        sent = fake_server.requests[-1]["input"]
+        assert sent[:3] == [
+            {"role": "user", "content": "tool_then_failed"},
+            FUNCTION_CALL,
+            FIRST_OUTPUT,
+        ]
+        assert sent[3]["content"].startswith("[Stopped after 1 model calls: ")
+
+        # /retry drops only the last turn; the one kept after the failure stays.
+        assert agent.context.rewind() == "go on"
+        assert agent.context.items[-1]["content"].startswith("[Stopped after 1")
+
+    def test_ctrl_c_in_a_later_round_saves_nothing(self, make_agent, streaming):
+        agent = make_agent(tools=[READ_FILE], STREAMING=streaming)
+
+        def interrupt(text: str) -> None:
+            if text:
+                raise KeyboardInterrupt
+
+        with pytest.raises(KeyboardInterrupt):
+            agent.run_turn("tool_call", on_text=interrupt)  # the reply is round 2
+
+        assert agent.context.items == []
+
     def test_ctrl_c_while_a_tool_runs_saves_nothing(self, make_agent, streaming):
         def interrupted(path: str) -> str:
             """Read a text file."""
@@ -875,6 +956,31 @@ class TestStreamRetry:
         ]
         kinds = [item.get("type") or item.get("role") for item in agent.context.items]
         assert kinds == ["user", "function_call", "function_call_output", "assistant"]
+
+    @pytest.mark.parametrize(
+        "scenario, reason",
+        [
+            ("truncated", EARLY),
+            ("reset", CUT),
+            ("error_event", f"Stream error: server_error: {STREAM_ERROR}"),
+        ],
+    )
+    def test_a_stream_that_keeps_breaking_after_a_round_keeps_the_work(
+        self, make_agent, fake_server, scenario, reason
+    ):
+        agent = make_agent(tools=[READ_FILE], STREAMING=True)
+
+        with pytest.raises(TurnError):
+            agent.run_turn(f"tool_then_{scenario}")
+
+        assert agent.context.items[1:] == [
+            FUNCTION_CALL,
+            FIRST_OUTPUT,
+            {
+                "role": "assistant",
+                "content": f"[Stopped after 1 model calls: {reason}]",
+            },
+        ]
 
     def test_a_connection_that_never_started_is_left_to_the_sdk(self, make_agent):
         # The SDK already retried it; trying again here would multiply the waiting.

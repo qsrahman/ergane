@@ -156,7 +156,9 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     ends), "tool_call" (calls a tool until its output is in the input, then
     replies with text), "tool_call_reasoning" (the same, with a reasoning item
     before each call), "tool_call_parallel" (two calls in one response),
-    "tool_loop" (calls a tool every time), or anything else for a completed
+    "tool_loop" (calls a tool every time), "http_error" (a 400 response),
+    "tool_then_X" (a tool call, then the scenario X once the tool's output is
+    in the input, such as "tool_then_failed"), or anything else for a completed
     response.
     """
 
@@ -168,6 +170,19 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
         self.server.requests.append(body)  # pyright: ignore[reportAttributeAccessIssue]
         scenario = last_user_prompt(body["input"])
         tool_output_sent = has_tool_output(body["input"])
+        if scenario.startswith("tool_then_"):
+            # A tool call first, then whatever follows the prefix.
+            scenario = (
+                scenario.removeprefix("tool_then_") if tool_output_sent else "tool_call"
+            )
+        if scenario == "http_error":
+            data = json.dumps({"error": {"message": "bad request"}}).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         event_type, response = final_event(scenario, tool_output_sent)
         # How often this exact request came before: a retry sends the same input.
         attempt = sum(

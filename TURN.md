@@ -197,7 +197,7 @@ tool calls (the answer).
 
 ## 7. Saving the turn (`Context.save_turn`)
 
-Apart from the cap (§6), a turn is saved only when its last response has text and
+Apart from the cap (§6) and a failure after a completed round (§8), a turn is saved only when its last response has text and
 either nothing is wrong or the response was cut off (`incomplete`, so you saw the
 partial reply it ends with). What is saved is the items, followed by the final reply as a plain
 `{"role": "assistant", "content": text}` message. A turn with no reply is dropped:
@@ -214,20 +214,35 @@ only the replies. Calls and outputs are removed together, for the same reason as
 |-------------------------------------------------------|-------------------------|---------------------------------------------------------------|
 | the model answers                                     | yes, the whole turn     | the reply                                                     |
 | the reply is cut off after some text                  | yes, the partial reply  | the text, then `[Response incomplete: REASON]`                |
-| incomplete with no text, `failed`, other status       | no                      | the matching notice from §4                                   |
-| refused, or no text                                   | no                      | `[Refused: …]`, `[No text in response]`                       |
+| incomplete with no text, `failed`, other status       | no, unless a round already ran (see below) | the matching notice from §4                |
+| refused, or no text                                   | no, unless a round already ran | `[Refused: …]`, `[No text in response]`                |
 | the stream breaks before any text: tried again, twice at most | if a try works, as usual | `[… trying again (1 of 2)]`, then the reply |
-| the stream keeps breaking, or breaks after some text, or ends with an `error` event | no | `[Stream ended without a final response]`, `[Stream cut off: …]` or `[Stream error: …]` |
+| the stream keeps breaking, or breaks after some text, or ends with an `error` event | no, unless a round already ran | `[Stream ended without a final response]`, `[Stream cut off: …]` or `[Stream error: …]` |
 | `MAX_TURNS` rounds of tool calls                      | yes, with a closing note| `[Stopped after N model calls without a final answer]`        |
 | the turn outgrows `MAX_CONTEXT_TOKENS`                | no                      | `[This turn grew past the context budget …]`                  |
 | Ctrl-C at any point                                   | no                      | `[Cancelled]`                                                 |
-| the API or the network fails (after the SDK's retries)| no                      | `[Agent error: Type: message]`                                |
+| the API or the network fails (after the SDK's retries)| no, unless a round already ran | `[Agent error: Type: message]`                         |
 
-Two of these are worth knowing about:
+"Unless a round already ran": once at least one round has completed (the model called
+tools and they ran), these endings save the turn, closed with an assistant note
+`[Stopped after N model calls: REASON]`, N being the rounds that completed and REASON
+the notice you see (`Response failed: …`, `Stream error: …`) or, for an exception the
+API client raised, its type (`APIConnectionError`). Every call has its output at that
+point, so the history stays valid, and the model still knows the question and the work
+done (some of it may have had effects). Say "continue" to go on; `/retry` drops this
+turn like any saved one and starts the prompt over, so the model forgets that work.
+A failure in the first round saves nothing, as before: there is no work to keep, and a
+prompt with no reply would put two user messages in a row.
 
-- **Ctrl-C and side effects.** A tool that already ran has done its work, but the turn
-  is not saved, so the model never learns that it ran. Cancel a turn that was changing
-  things, and tell the model.
+Three of these are worth knowing about:
+
+- **Ctrl-C and side effects.** Ctrl-C is the one ending that never saves, even after
+  completed rounds: the user chose to stop, and when it lands in a tool, that round has
+  calls without outputs, which cannot be sent. A tool that already ran has done its
+  work, but the model never learns that it ran. Cancel a turn that was changing things,
+  and tell the model.
+- **Failures save, the budget does not.** A turn that fails after a completed round is
+  kept with a note, like the cap, for the same reason.
 - **The cap saves, the budget does not.** A turn stopped at the cap is coherent (every
   call has its output) and may have had effects, so it is kept; a turn over the budget
   no longer fits in a request, so it cannot be.

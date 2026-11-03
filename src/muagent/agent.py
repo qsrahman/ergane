@@ -173,7 +173,8 @@ class Agent:
         (the calls and their outputs included) is added to the conversation if the
         final response completes with text, or ends incomplete after some text,
         which the user has seen, or if the model hits the max_turns cap (closed with
-        a note saying so).
+        a note saying so), or if a round after the first fails (closed with a note
+        saying why). Ctrl-C saves nothing.
 
         Args:
             prompt: The user's input prompt.
@@ -192,6 +193,9 @@ class Agent:
                 text, if a stream ends without a final response, if the model
                 is still calling tools after max_turns calls, or if the tool
                 results grow the turn past the context budget.
+            Exception: Whatever the API client raises, such as an
+                `openai.APIError`. Once a round has completed, the turn is kept
+                (see above) before any of these is raised, except the budget one.
         """
         # The budget is for the whole request, so the history gets what is left of it
         # after the instructions and the tool definitions, which every request has.
@@ -200,9 +204,20 @@ class Agent:
         if trimmed:
             on_notice("Context trimmed: oldest turns dropped")
 
+        rounds = 0  # rounds that got a response and ran its tools
         for _ in range(self.config.max_turns):
             sent = len(items)
-            response = self._send_response(items, on_text, on_notice)
+            try:
+                response = self._send_response(items, on_text, on_notice)
+            except Exception as exc:
+                # Not KeyboardInterrupt: the user chose to stop, and a tool they
+                # interrupted may have a call without its output.
+                if rounds:
+                    reason = (
+                        str(exc) if isinstance(exc, TurnError) else type(exc).__name__
+                    )
+                    self._keep_stopped_turn(items, rounds, reason)
+                raise
             problem = self._response_status(response)
             calls = [item for item in response.output if item.type == "function_call"]
             if problem or not calls:
@@ -212,6 +227,7 @@ class Agent:
                 [item.model_dump(exclude_none=True) for item in response.output],
             )
             items += self._run_tools(calls, on_notice, confirm)
+            rounds += 1
             used = self._next_request_tokens(response, items, sent)
             if used > self.config.max_context_tokens:
                 raise TurnError(
@@ -227,21 +243,36 @@ class Agent:
                 f"Stopped after {self.config.max_turns} model calls without a "
                 "final answer"
             )
-            self.context.save_turn(
-                [*items, {"role": "assistant", "content": f"[{message}]"}]
-            )
+            self._save_with_note(items, message)
             raise TurnError(message)
 
         # Keep the turn if it worked, or was cut off after text the user has already
-        # seen. Any other turn is dropped: saving a prompt with no reply would leave
-        # two user messages in a row.
+        # seen. A turn whose first response has a problem is dropped: saving a prompt
+        # with no reply would leave two user messages in a row. After a completed
+        # round it is kept with a note, like the stop at the cap.
         cut_off = response.status == "incomplete"
         if response.output_text and (problem is None or cut_off):
             self.context.save_turn(
                 [*items, {"role": "assistant", "content": response.output_text}]
             )
+        elif problem and rounds:
+            self._keep_stopped_turn(items, rounds, problem)
         if problem:
             raise TurnError(problem)
+
+    def _keep_stopped_turn(
+        self, items: ResponseInputParam, rounds: int, reason: str
+    ) -> None:
+        """Save a turn that failed after `rounds` completed rounds, closed with a
+        note, so the model still knows the work already done."""
+        self._save_with_note(items, f"Stopped after {rounds} model calls: {reason}")
+
+    def _save_with_note(self, items: ResponseInputParam, message: str) -> None:
+        """Save a turn that has no final answer, closed with an assistant note.
+        Every call in `items` must have its output."""
+        self.context.save_turn(
+            [*items, {"role": "assistant", "content": f"[{message}]"}]
+        )
 
     def _instructions(self) -> str:
         """What every request carries as `instructions`: the system prompt, then the
