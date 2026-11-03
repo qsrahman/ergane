@@ -472,7 +472,7 @@ class TestUrls:
 
 
 class TestMcpJsonKeys:
-    """`type`, `enable` and `cwd`, as other tools' mcp.json files have them."""
+    """`type` and `enable`, as other tools' mcp.json files have them."""
 
     def load(self, tmp_path: Path, entry: dict):
         path = tmp_path / "mcp.json"
@@ -483,8 +483,19 @@ class TestMcpJsonKeys:
         assert self.load(tmp_path, {"command": "x"}).enable is True
         assert self.load(tmp_path, {"command": "x", "enable": False}).enable is False
 
-    def test_a_program_can_have_a_working_directory(self, tmp_path):
-        assert self.load(tmp_path, {"command": "x", "cwd": "/srv"}).cwd == "/srv"
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            {"command": "x", "cwd": "/srv"},
+            {"url": "https://example.com", "cwd": "/srv"},
+        ],
+        ids=["program", "url"],
+    )
+    def test_there_is_no_working_directory_setting(self, tmp_path, entry):
+        # A server starts where muagent does; a file that still has the key is
+        # refused, and the message names it.
+        with pytest.raises(ValidationError, match=r"mcpServers\.s\.cwd"):
+            self.load(tmp_path, entry)
 
     @pytest.mark.parametrize(
         "entry",
@@ -508,8 +519,6 @@ class TestMcpJsonKeys:
                 "type is 'local', but a server with a url",
             ),
             ({"type": "stdio", "command": "x"}, "local"),
-            ({"url": "https://example.com", "cwd": "/srv"}, "go with command"),
-            ({"command": "x", "cwd": ""}, "cwd"),
             ({"command": "x", "enable": "maybe"}, "enable"),
         ],
     )
@@ -534,7 +543,6 @@ class TestMcpJsonKeys:
                             "command": "npx",
                             "args": ["-y", "files-server@1.2.3"],
                             "env": {"TOKEN": "${FILES_TOKEN}"},
-                            "cwd": "${HOME}",
                             "enable": False,
                         },
                     }
@@ -545,7 +553,8 @@ class TestMcpJsonKeys:
         servers = load_servers(path)
 
         assert list(servers) == ["docs", "files"]
-        assert servers["files"].cwd == "${HOME}"  # filled in when it starts
+        assert servers["files"].env == {"TOKEN": "${FILES_TOKEN}"}  # filled in at start
+        assert servers["files"].enable is False
 
 
 class TestPlaceholders:
@@ -557,12 +566,10 @@ class TestPlaceholders:
         config = self.expand(
             args=["--n=${A}", "${B}-${A}"],
             env={"K": "v${B}"},
-            cwd="/${B}",
         )
 
         assert config.args == ["--n=1", "two-1"]
         assert config.env == {"K": "vtwo"}
-        assert config.cwd == "/two"
 
     def test_headers_too(self):
         config = McpServerConfig(
@@ -839,12 +846,8 @@ class TestStartServers:
                 server.close()
 
     def test_placeholders_are_filled_in_from_the_environment(self, tmp_path):
-        work = tmp_path / "work"
-        work.mkdir()
-        configs = {
-            "local": self.fake(env={"GIVEN": "${SOURCE}"}, cwd="${WHERE}"),
-        }
-        environ = {"SOURCE": "from-the-environment", "WHERE": str(work)}
+        configs = {"local": self.fake(env={"GIVEN": "${SOURCE}"})}
+        environ = {"SOURCE": "from-the-environment"}
 
         servers, found = start_servers(
             configs, tmp_path, lambda notice: None, environ=environ
@@ -856,7 +859,24 @@ class TestStartServers:
             )
             # Only what the file names is passed on, not the variable it came from.
             assert by_name["local__getenv"].call('{"name": "SOURCE"}') == "unset"
-            assert Path(by_name["local__getcwd"].call("{}")).resolve() == work.resolve()
+        finally:
+            for server in servers:
+                server.close()
+
+    def test_a_program_starts_in_the_directory_muagent_runs_in(
+        self, tmp_path, monkeypatch
+    ):
+        project = tmp_path / "project"
+        project.mkdir()
+        monkeypatch.chdir(project)
+
+        servers, found = start_servers(
+            {"local": self.fake()}, tmp_path, lambda notice: None
+        )
+        try:
+            by_name = {tool.name: tool for tool in found}
+            result = by_name["local__getcwd"].call("{}")
+            assert Path(result).resolve() == project.resolve()
         finally:
             for server in servers:
                 server.close()

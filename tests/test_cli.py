@@ -125,11 +125,10 @@ class TestMcpServers:
         assert RecordingRepl.agent is not None
         assert "web__add" in RecordingRepl.agent.tools
 
-    def test_a_file_with_type_enable_cwd_and_placeholders_works(
+    def test_a_file_with_type_enable_and_placeholders_works(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ):
         monkeypatch.setenv("FAKE_KEY", "the-key")
-        monkeypatch.setenv("WORK", str(tmp_path))
 
         class CallingRepl(RecordingRepl):
             key = None
@@ -147,7 +146,6 @@ class TestMcpServers:
                     **FAKE_SERVER,
                     "type": "local",
                     "enable": True,
-                    "cwd": "${WORK}",
                     "env": {"KEY": "${FAKE_KEY}"},
                 },
                 "off": {**FAKE_SERVER, "type": "local", "enable": False},

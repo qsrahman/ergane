@@ -165,7 +165,6 @@ class McpServerConfig(BaseModel):
     command: str | None = Field(default=None, min_length=1)
     args: list[str] = []
     env: dict[str, str] = {}
-    cwd: str | None = Field(default=None, min_length=1)  # where the program runs
     url: str | None = None
     headers: dict[str, str] = {}  # e.g. Authorization, for a url
     # Trust the server's tools to run without asking. Off unless the user says so.
@@ -189,8 +188,8 @@ class McpServerConfig(BaseModel):
             if self.headers:
                 raise ValueError("headers go with url")
         else:
-            if self.args or self.env or self.cwd:
-                raise ValueError("args, env and cwd go with command")
+            if self.args or self.env:
+                raise ValueError("args and env go with command")
             _check_url(self.url)
         return self
 
@@ -367,7 +366,6 @@ class McpServer:
                         command=config.command,
                         args=config.args,
                         env=config.env,
-                        cwd=config.cwd,
                     )
                     read, write = await stack.enter_async_context(
                         stdio_client(params, errlog=log)
@@ -505,7 +503,7 @@ def _expand(
 ) -> McpServerConfig:
     """Fill in the `${NAME}` placeholders of a server from the environment.
 
-    Only in what a server is given to run with: `args`, `env`, `headers` and `cwd`.
+    Only in what a server is given to run with: `args`, `env` and `headers`.
     This keeps keys out of the file, and a server gets only the variables the file
     names. The text a variable holds is not looked at again for placeholders.
 
@@ -531,7 +529,6 @@ def _expand(
             "args": [fill(arg, "args") for arg in config.args],
             "env": {k: fill(v, f"env.{k}") for k, v in config.env.items()},
             "headers": {k: fill(v, f"headers.{k}") for k, v in config.headers.items()},
-            "cwd": fill(config.cwd, "cwd") if config.cwd else None,
         }
     )
 
