@@ -169,6 +169,10 @@ class McpServerConfig(BaseModel):
     headers: dict[str, str] = {}  # e.g. Authorization, for a url
     # Trust the server's tools to run without asking. Off unless the user says so.
     read_only: bool = False
+    # Offer only these tools of the server (by the server's own names). Every tool's
+    # definition is sent with every request, so a server with many tools costs a
+    # good part of the context budget whether or not the model uses them.
+    tools: list[str] | None = Field(default=None, min_length=1)
     startup_timeout: float = Field(default=20, gt=0)  # seconds
     call_timeout: float = Field(default=60, gt=0)  # seconds
 
@@ -428,12 +432,23 @@ class McpServer:
             self._log = None
 
     def tools(self) -> list[Tool]:
-        """The server's tools, as tools for the agent.
+        """The server's tools, as tools for the agent: all of them, or the ones the
+        config lists.
 
         Raises:
-            McpServerError: If the server is not running.
+            McpServerError: If the server is not running, or the config lists a
+                tool it does not have (a typo would otherwise offer nothing, silently).
         """
         definitions = self._submit(_list_tools, self._config.startup_timeout)
+        if self._config.tools is not None:
+            have = {d.name for d in definitions}
+            unknown = [name for name in self._config.tools if name not in have]
+            if unknown:
+                raise McpServerError(
+                    f"MCP server {self.name!r} has no tool {', '.join(unknown)} "
+                    f"(it has: {', '.join(sorted(have))})"
+                )
+            definitions = [d for d in definitions if d.name in self._config.tools]
         taken: set[str] = set()
         return [
             self._make_tool(_tool_name(self.name, d.name, taken), d)

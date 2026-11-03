@@ -70,11 +70,11 @@ Type a prompt at `>` and press Enter. To quit, use `/exit`, `/quit`, Ctrl-D, or 
 | `/clear`          | Clear the terminal screen; the history is kept                                   |
 | `/exit`, `/quit`  | Quit                                                                             |
 
-Command names are case-insensitive. A mistyped command such as `/rest` is reported instead of being sent to the model. Pressing Ctrl-C while a response is generating cancels only that turn.
+Command names are case-insensitive. A mistyped command such as `/rest` is reported instead of being sent to the model. Pressing Ctrl-C while a response is generating cancels only that turn; if tools had already run, the turn is kept with a note saying you stopped it, so the model knows what was done.
 
 ## Tools
 
-The model can call tools. A tool that only reads runs at once, and `muagent` prints the call, such as `[add({"a":17,"b":25})]`. A tool that can change things asks first, in one line, such as `Allow save {"path": "notes.txt"}? [y/N]`; type `y` to allow it. The line is never wider than the terminal: if the arguments do not fit, the middle of their long values is left out (the start and the end stay) and the prompt ends `[y/N/?]`; type `?` to see all of it, and it asks again. The result goes back to the model, which says what it found, repeating until the model answers. A turn that grows past `MAX_CONTEXT_TOKENS` while it runs is stopped. If a call fails, the error text goes back to the model so it can correct the call. The Responses API must support function calling.
+The model can call tools. A tool that only reads runs at once, and `muagent` prints the call, such as `[add({"a":17,"b":25})]`. A tool that can change things asks first, in one line, such as `Allow save {"path": "notes.txt"}? [y/N]`; type `y` to allow it. The line is never wider than the terminal: if the arguments do not fit, the middle of their long values is left out (the start and the end stay) and the prompt ends `[y/N/?]`; type `?` to see all of it, and it asks again. The result goes back to the model, which says what it found, repeating until the model answers. When a turn grows past `MAX_CONTEXT_TOKENS` while it runs, the oldest tool results are replaced by a short placeholder (the calls stay) so that it can go on; only if the latest results alone are over, it is stopped. If a call fails, the error text goes back to the model so it can correct the call. The Responses API must support function calling.
 
 `muagent` has no tools of its own: they come from the MCP servers you list in `mcp.json` (see below). With none, it is a plain chat, and `/tools` says so.
 
@@ -119,6 +119,7 @@ def add(a: int, b: int) -> str:
 | `url`       | The address of a server to connect to, instead of a `command`. `https://`, or `http://` for `localhost`, `127.0.0.1` and `[::1]` only. |
 | `headers`   | Sent with every request to the `url`, for an `Authorization` or an API key. Not in the URL itself: a user name or password there is refused. |
 | `read_only` | `true` lets the server's tools run without asking. Default `false`.                                          |
+| `tools`     | Offer only these tools of the server, by the server's own names (see `/tools` for what a server has). The definition of every tool is sent with every request, so a server with many tools you do not use costs context and money. A name the server does not have fails the server, with a notice. Default: all. |
 | `startup_timeout` | Seconds to wait for the server to start and list its tools. Default `20`.                              |
 | `call_timeout` | Seconds a call to one of its tools may take before it is given up on. Default `60`.                       |
 

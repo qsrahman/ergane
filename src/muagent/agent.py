@@ -1,7 +1,7 @@
 import platform
 from collections.abc import Callable, Sequence
 from datetime import date
-from typing import cast
+from typing import Any, cast
 
 from openai import APIConnectionError, OpenAI
 from openai.types.responses import (
@@ -106,6 +106,12 @@ def _one_line(text: str) -> str:
     return line if len(line) <= NOTICE_CHARS else line[: NOTICE_CHARS - 1] + "…"
 
 
+# What stands in for a tool result that was dropped to make room (see _drop_outputs).
+DROPPED_OUTPUT = "[output dropped to fit the context]"
+
+# The reason in the note that closes a turn the user stopped.
+INTERRUPTED = "interrupted by the user"
+
 # How many times a round is sent again when its stream breaks before any text of the
 # reply has reached the user. The SDK retries a request that fails to start, but not
 # one that breaks halfway, and a turn of many rounds should not be lost to one dropped
@@ -173,8 +179,9 @@ class Agent:
         (the calls and their outputs included) is added to the conversation if the
         final response completes with text, or ends incomplete after some text,
         which the user has seen, or if the model hits the max_turns cap (closed with
-        a note saying so), or if a round after the first fails (closed with a note
-        saying why). Ctrl-C saves nothing.
+        a note saying so), or if a round after the first fails or the user presses
+        Ctrl-C (closed with a note saying why). Ctrl-C during the first model call
+        saves nothing.
 
         Args:
             prompt: The user's input prompt.
@@ -196,6 +203,7 @@ class Agent:
             Exception: Whatever the API client raises, such as an
                 `openai.APIError`. Once a round has completed, the turn is kept
                 (see above) before any of these is raised, except the budget one.
+            KeyboardInterrupt: On Ctrl-C, after the turn is kept (see above).
         """
         # The budget is for the whole request, so the history gets what is left of it
         # after the instructions and the tool definitions, which every request has.
@@ -209,26 +217,45 @@ class Agent:
             sent = len(items)
             try:
                 response = self._send_response(items, on_text, on_notice)
-            except Exception as exc:
-                # Not KeyboardInterrupt: the user chose to stop, and a tool they
-                # interrupted may have a call without its output.
+            except (Exception, KeyboardInterrupt) as exc:
+                # Here every call has its output, so what the earlier rounds did
+                # (it may have had effects) is kept, and the model knows it.
                 if rounds:
-                    reason = (
-                        str(exc) if isinstance(exc, TurnError) else type(exc).__name__
-                    )
+                    if isinstance(exc, KeyboardInterrupt):
+                        reason = INTERRUPTED
+                    elif isinstance(exc, TurnError):
+                        reason = str(exc)
+                    else:
+                        reason = type(exc).__name__
                     self._keep_stopped_turn(items, rounds, reason)
                 raise
             problem = self._response_status(response)
             calls = [item for item in response.output if item.type == "function_call"]
             if problem or not calls:
                 break
-            items += cast(
-                ResponseInputParam,
-                [item.model_dump(exclude_none=True) for item in response.output],
-            )
-            items += self._run_tools(calls, on_notice, confirm)
             rounds += 1
+            try:
+                items += cast(
+                    ResponseInputParam,
+                    [item.model_dump(exclude_none=True) for item in response.output],
+                )
+                self._run_tools(calls, items, on_notice, confirm)
+            except KeyboardInterrupt:
+                # A call that was running, or had not run yet, has no output: say so,
+                # or the API rejects the history. The call may have done part of its
+                # work, and the model should know the user stopped it.
+                self._answer_open_calls(items)
+                self._keep_stopped_turn(items, rounds, INTERRUPTED)
+                raise
             used = self._next_request_tokens(response, items, sent)
+            if used > self.config.max_context_tokens:
+                # Results of earlier rounds go first, so the work goes on; the
+                # latest ones are what the model needs to read next.
+                over = used - self.config.max_context_tokens
+                freed = self._drop_outputs(items, sent, over)
+                if freed:
+                    on_notice("Context full: older tool results dropped")
+                used -= freed
             if used > self.config.max_context_tokens:
                 raise TurnError(
                     f"This turn grew past the context budget (about {used} of "
@@ -273,6 +300,51 @@ class Agent:
         self.context.save_turn(
             [*items, {"role": "assistant", "content": f"[{message}]"}]
         )
+
+    @staticmethod
+    def _answer_open_calls(items: ResponseInputParam) -> None:
+        """Give every function call in `items` that has no output one that says the
+        user interrupted it."""
+        plain = cast(list[dict[str, Any]], items)
+        answered = {
+            i["call_id"] for i in plain if i.get("type") == "function_call_output"
+        }
+        for item in list(plain):
+            if item.get("type") == "function_call" and item["call_id"] not in answered:
+                plain.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": item["call_id"],
+                        "output": "The user interrupted this call: it did not "
+                        "finish, or did not run.",
+                    }
+                )
+
+    @staticmethod
+    def _drop_outputs(items: ResponseInputParam, upto: int, needed: int) -> int:
+        """Replace tool results among the first `upto` items with a placeholder,
+        oldest first, until `needed` tokens (estimated) are freed or none is left.
+
+        The calls stay, so the model still sees what it did and every call keeps its
+        output, which the API requires. An item is replaced, not edited: the items
+        of earlier turns are shared with the history.
+
+        Returns:
+            The estimated number of tokens freed.
+        """
+        plain = cast(list[dict[str, Any]], items)
+        freed = 0
+        for i in range(upto):
+            item = plain[i]
+            if freed >= needed:
+                break
+            if item.get("type") == "function_call_output" and (
+                item["output"] != DROPPED_OUTPUT
+            ):
+                dropped = {**item, "output": DROPPED_OUTPUT}
+                freed += estimate_tokens(item) - estimate_tokens(dropped)
+                plain[i] = dropped
+        return freed
 
     def _instructions(self) -> str:
         """What every request carries as `instructions`: the system prompt, then the
@@ -415,10 +487,11 @@ class Agent:
     def _run_tools(
         self,
         calls: Sequence[ResponseFunctionToolCall],
+        items: ResponseInputParam,
         on_notice: Callable[[str], None],
         confirm: Callable[[Tool, str], bool],
-    ) -> ResponseInputParam:
-        """Run the model's tool calls and build the outputs to send back.
+    ) -> None:
+        """Run the model's tool calls, adding each output to `items` as it is done.
 
         Every call gets an output, even a failed, unknown or denied one: the output
         is text for the model, which can read the error and correct its call. A
@@ -426,16 +499,14 @@ class Agent:
 
         Args:
             calls: The function calls in the model's response.
+            items: The turn's items; the outputs are added at the end, in order. If
+                Ctrl-C interrupts, the outputs made so far are already there.
             on_notice: Called with each call that runs without asking, before it is
                 run, shortened to one line. A call that is asked about is shown by
                 `confirm`, and a result is not shown at all: it goes to the model,
                 and the reply says what it found.
             confirm: Asked before each call to a tool that is not read-only.
-
-        Returns:
-            One function_call_output item per call, in order.
         """
-        outputs: ResponseInputParam = []
         for call in calls:
             tool = self.tools.get(call.name)
             problem = tool.check(call.arguments) if tool else None
@@ -453,14 +524,13 @@ class Agent:
                 output = "The user denied this call."
             else:
                 output = tool.call(call.arguments)
-            outputs.append(
+            items.append(
                 {
                     "type": "function_call_output",
                     "call_id": call.call_id,
                     "output": output,
                 }
             )
-        return outputs
 
     @staticmethod
     def _next_request_tokens(

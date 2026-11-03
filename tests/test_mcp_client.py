@@ -921,6 +921,37 @@ class TestStartServers:
         assert start_servers({}, tmp_path, print) == ([], [])
 
 
+class TestToolFilter:
+    def test_only_the_listed_tools_are_offered(self, make_server):
+        server = make_server(tools=["add", "read_file"])
+
+        assert {t.name for t in server.tools()} == {"fake__add", "fake__read_file"}
+
+    def test_without_the_key_every_tool_is_offered(self, make_server):
+        assert len(make_server().tools()) > 5
+
+    def test_a_tool_the_server_does_not_have_fails_the_server_and_names_it(
+        self, tmp_path
+    ):
+        notices: list[str] = []
+        config = McpServerConfig(
+            command=sys.executable, args=[FAKE], tools=["add", "ad"]
+        )
+
+        servers, found = start_servers({"s": config}, tmp_path, notices.append)
+
+        assert (servers, found) == ([], [])
+        assert len(notices) == 1
+        assert "no tool ad " in notices[0] and "add" in notices[0]
+
+    def test_an_empty_list_is_refused(self, tmp_path):
+        path = tmp_path / "mcp.json"
+        path.write_text('{"mcpServers": {"s": {"command": "x", "tools": []}}}')
+
+        with pytest.raises(ValidationError, match=r"mcpServers\.s\.tools"):
+            load_servers(path)
+
+
 class TestListTools:
     def test_every_page_is_read(self):
         pages = {

@@ -17,6 +17,7 @@ from fake_api import (
 )
 from helpers import make_config, make_context
 from muagent.agent import (
+    DROPPED_OUTPUT,
     NOTICE_CHARS,
     STREAM_RETRIES,
     SYSTEM_PROMPT,
@@ -618,7 +619,7 @@ class TestAgentToolLoop:
 
         assert agent.context.items[2] == FIRST_OUTPUT
 
-    def test_a_turn_that_outgrows_the_context_budget_is_stopped_and_not_saved(
+    def test_older_tool_results_are_dropped_to_make_room_and_the_turn_goes_on(
         self, make_agent, fake_server, streaming
     ):
         def huge(path: str) -> str:
@@ -626,14 +627,49 @@ class TestAgentToolLoop:
             return "x" * MAX_OUTPUT_CHARS  # about 5,000 estimated tokens
 
         agent = make_agent(
-            tools=[tool_with(huge)], STREAMING=streaming, MAX_CONTEXT_TOKENS=6000
+            tools=[tool_with(huge)],
+            STREAMING=streaming,
+            MAX_CONTEXT_TOKENS=6000,
+            MAX_TURNS=4,
+        )
+        notices: list[str] = []
+
+        with pytest.raises(TurnError, match="^Stopped after 4 model calls"):
+            agent.run_turn("tool_loop", on_notice=notices.append)
+
+        def outputs(request: dict) -> list[str]:
+            return [
+                item["output"]
+                for item in request["input"]
+                if item.get("type") == "function_call_output"
+            ]
+
+        # Each request has the latest result in full and the earlier ones dropped.
+        assert len(fake_server.requests) == 4
+        last = outputs(fake_server.requests[3])
+        assert last[:2] == [DROPPED_OUTPUT, DROPPED_OUTPUT]
+        assert last[2] == "x" * MAX_OUTPUT_CHARS
+        assert notices.count("Context full: older tool results dropped") == 3
+        # Every call still has an output, so the kept turn is valid history.
+        kept = [i for i in agent.context.items if i.get("type") == "function_call"]
+        assert len(kept) == len(outputs({"input": agent.context.items})) == 4
+
+    def test_a_result_that_alone_outgrows_the_context_budget_stops_the_turn(
+        self, make_agent, fake_server, streaming
+    ):
+        def huge(path: str) -> str:
+            """Read a text file."""
+            return "x" * MAX_OUTPUT_CHARS  # about 5,000 estimated tokens
+
+        agent = make_agent(
+            tools=[tool_with(huge)], STREAMING=streaming, MAX_CONTEXT_TOKENS=3000
         )
 
         with pytest.raises(TurnError, match="grew past the context budget"):
             agent.run_turn("tool_loop")
 
-        # The first result fits; the second pushes the turn over, so no third request.
-        assert len(fake_server.requests) == 2
+        # Nothing older to drop, and the latest result is what the model must read.
+        assert len(fake_server.requests) == 1
         assert agent.context.items == []
 
     def test_a_model_that_never_stops_calling_tools_is_stopped_and_the_turn_kept(
@@ -748,7 +784,21 @@ class TestAgentToolLoop:
         assert agent.context.rewind() == "go on"
         assert agent.context.items[-1]["content"].startswith("[Stopped after 1")
 
-    def test_ctrl_c_in_a_later_round_saves_nothing(self, make_agent, streaming):
+    def test_ctrl_c_in_the_first_model_call_saves_nothing(self, make_agent, streaming):
+        agent = make_agent(tools=[READ_FILE], STREAMING=streaming)
+
+        def interrupt(text: str) -> None:
+            if text:
+                raise KeyboardInterrupt
+
+        with pytest.raises(KeyboardInterrupt):
+            agent.run_turn("hello", on_text=interrupt)
+
+        assert agent.context.items == []
+
+    def test_ctrl_c_in_a_later_round_keeps_the_work_already_done(
+        self, make_agent, fake_server, streaming
+    ):
         agent = make_agent(tools=[READ_FILE], STREAMING=streaming)
 
         def interrupt(text: str) -> None:
@@ -758,9 +808,21 @@ class TestAgentToolLoop:
         with pytest.raises(KeyboardInterrupt):
             agent.run_turn("tool_call", on_text=interrupt)  # the reply is round 2
 
-        assert agent.context.items == []
+        assert agent.context.items == [
+            USER_TURN,
+            FUNCTION_CALL,
+            FIRST_OUTPUT,
+            {
+                "role": "assistant",
+                "content": "[Stopped after 1 model calls: interrupted by the user]",
+            },
+        ]
+        agent.run_turn("go on")  # the history is valid: the API takes it
+        assert fake_server.requests[-1]["input"][2] == FIRST_OUTPUT
 
-    def test_ctrl_c_while_a_tool_runs_saves_nothing(self, make_agent, streaming):
+    def test_ctrl_c_while_a_tool_runs_keeps_the_call_with_an_output_that_says_so(
+        self, make_agent, fake_server, streaming
+    ):
         def interrupted(path: str) -> str:
             """Read a text file."""
             raise KeyboardInterrupt
@@ -770,7 +832,44 @@ class TestAgentToolLoop:
         with pytest.raises(KeyboardInterrupt):
             agent.run_turn("tool_call")
 
-        assert agent.context.items == []
+        items = agent.context.items
+        assert [i.get("type") or i["role"] for i in items] == [
+            "user",
+            "function_call",
+            "function_call_output",
+            "assistant",
+        ]
+        assert items[2]["output"].startswith("The user interrupted this call")
+        assert items[3]["content"].endswith("interrupted by the user]")
+        agent.run_turn("go on")
+        assert fake_server.requests[-1]["input"][-1]["content"] == "go on"
+
+    def test_ctrl_c_in_one_of_two_calls_keeps_the_finished_output(
+        self, make_agent, streaming
+    ):
+        calls = []
+
+        def second_is_interrupted(path: str) -> str:
+            """Read a text file."""
+            calls.append(path)
+            if len(calls) == 2:
+                raise KeyboardInterrupt
+            return f"contents of {path}"
+
+        agent = make_agent(
+            tools=[tool_with(second_is_interrupted)], STREAMING=streaming
+        )
+
+        with pytest.raises(KeyboardInterrupt):
+            agent.run_turn("tool_call_parallel")
+
+        outputs = [
+            i["output"]
+            for i in agent.context.items
+            if i.get("type") == "function_call_output"
+        ]
+        assert outputs[0] == "contents of notes.txt"
+        assert outputs[1].startswith("The user interrupted this call")
 
     def test_a_finished_tool_turn_is_sent_again_in_the_next_turn(
         self, make_agent, fake_server, streaming

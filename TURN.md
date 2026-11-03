@@ -28,7 +28,7 @@ line, because lines move. Everything is in [`src/muagent/`](src/muagent/).
                        │  _response_status  failed, incomplete or empty? ──► stop and report it
                        │  tool calls?       none ──► stop: this was the answer
                        │  _run_tools        one output per call (asks you first when it must)
-                       │  budget check      turn too big? ──► stop and report it
+                       │  budget check      turn too big? ──► drop older results; still too big? stop
                        └──────────────────────────────────┤
                                                           ▼
                        Context.save_turn (or nothing), then a TurnError becomes one notice line
@@ -150,7 +150,7 @@ no output (400) and an output with no call:
 - The arguments in the `[…]` line are made one line and cut at 80 characters. The permission
   line shows the arguments in full if they fit the terminal, otherwise with the middle
   of long values left out and `[y/N/?]`; `?` prints everything and asks again. End of
-  input counts as no; Ctrl-C cancels the whole turn.
+  input counts as no; Ctrl-C stops the turn (§8).
 - **A result is never shown to you.** It goes to the model, whose reply is meant to
   say what it found.
 - After the calls, the items grow by the model's own output (its reasoning and its
@@ -161,7 +161,7 @@ no output (400) and an output with no call:
 
 `check` the arguments, `runner` runs the tool, and any exception becomes the text
 `Error: Type: message` for the model to read and correct (Ctrl-C is the exception to
-that: it is not caught). A result over 20,480 characters is cut with
+that: it is not caught here, but `run_turn` keeps the turn, §8). A result over 20,480 characters is cut with
 `[output truncated: N more characters]`.
 
 For an MCP tool the runner hands the request to that server's own thread, where the
@@ -179,9 +179,14 @@ After each round with tool calls the loop checks, in this order:
 1. **The budget.** `_next_request_tokens` takes the `usage.input_tokens` the server
    reported for the request it just answered, which is exact, plus an estimate of the
    items added since (everything is estimated if the server sent no usage). Over
-   `MAX_CONTEXT_TOKENS` ends the turn with `This turn grew past the context budget
-   (about X of Y tokens). Ask for less, or raise MAX_CONTEXT_TOKENS`. Nothing is
-   saved, because the turn no longer fits.
+   `MAX_CONTEXT_TOKENS` first drops tool results: those of the rounds before the one
+   that just ran, oldest first, each replaced by `[output dropped to fit the context]`
+   until the estimate fits, with the notice `[Context full: older tool results
+   dropped]`. The calls stay, so the model sees what it did and every call keeps an
+   output, and the turn goes on (the model may call again for what it needs). If the
+   latest round's results alone are over, nothing older is left to drop and the turn
+   ends with `This turn grew past the context budget (about X of Y tokens). Ask for
+   less, or raise MAX_CONTEXT_TOKENS`, saving nothing.
 
    The server's count includes the instructions and the tool definitions, so it
    measures the same thing as the trimming in §2, the whole request, but exactly. A
@@ -219,8 +224,8 @@ only the replies. Calls and outputs are removed together, for the same reason as
 | the stream breaks before any text: tried again, twice at most | if a try works, as usual | `[… trying again (1 of 2)]`, then the reply |
 | the stream keeps breaking, or breaks after some text, or ends with an `error` event | no, unless a round already ran | `[Stream ended without a final response]`, `[Stream cut off: …]` or `[Stream error: …]` |
 | `MAX_TURNS` rounds of tool calls                      | yes, with a closing note| `[Stopped after N model calls without a final answer]`        |
-| the turn outgrows `MAX_CONTEXT_TOKENS`                | no                      | `[This turn grew past the context budget …]`                  |
-| Ctrl-C at any point                                   | no                      | `[Cancelled]`                                                 |
+| the turn outgrows `MAX_CONTEXT_TOKENS`                | older results are dropped and the turn goes on; no if the latest round alone is over | `[Context full: older tool results dropped]`, or `[This turn grew past the context budget …]` |
+| Ctrl-C                                                | yes after a completed round or while tools run; no in the first model call | `[Cancelled]`                           |
 | the API or the network fails (after the SDK's retries)| no, unless a round already ran | `[Agent error: Type: message]`                         |
 
 "Unless a round already ran": once at least one round has completed (the model called
@@ -236,16 +241,19 @@ prompt with no reply would put two user messages in a row.
 
 Three of these are worth knowing about:
 
-- **Ctrl-C and side effects.** Ctrl-C is the one ending that never saves, even after
-  completed rounds: the user chose to stop, and when it lands in a tool, that round has
-  calls without outputs, which cannot be sent. A tool that already ran has done its
-  work, but the model never learns that it ran. Cancel a turn that was changing things,
-  and tell the model.
-- **Failures save, the budget does not.** A turn that fails after a completed round is
-  kept with a note, like the cap, for the same reason.
-- **The cap saves, the budget does not.** A turn stopped at the cap is coherent (every
-  call has its output) and may have had effects, so it is kept; a turn over the budget
-  no longer fits in a request, so it cannot be.
+- **Ctrl-C keeps the work.** Tools may already have changed things, so the model must
+  know. Ctrl-C while waiting for a later round's response keeps the turn as it stands.
+  Ctrl-C inside a round's tools gives every call without an output (the one that was
+  running, which may have done part of its work, and those not yet run) the output
+  `The user interrupted this call: it did not finish, or did not run.`, so the history
+  stays valid. Either way the turn is closed with `[Stopped after N model calls:
+  interrupted by the user]`. In the first round's model call nothing has run, and
+  nothing is saved.
+- **Failures and the cap save.** A turn that fails after a completed round is kept with
+  a note, like the cap, for the same reason.
+- **The budget drops results first.** A result is worth less than the work around it,
+  so old results go before a turn is given up on; a turn is lost to the budget only
+  when one round's results alone are over it.
 
 ## 9. Who sees what
 
