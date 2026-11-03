@@ -174,8 +174,8 @@ def tool(
     """Make a function a tool: `@tool`, or `@tool(read_only=False)`.
 
     The decorated name becomes the Tool, so a test calls `add.call('{"a": 1}')` and a
-    list of tools is `[add, get_time]`. Nothing is registered: whoever builds the
-    agent lists the tools to offer.
+    list of tools is `[add, look]`. Nothing is registered: whoever builds the agent
+    lists the tools to offer.
 
     Args:
         function: The function, when used as a bare `@tool`.

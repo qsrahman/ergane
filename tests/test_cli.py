@@ -66,14 +66,14 @@ class RecordingRepl:
         pass
 
 
-def test_main_gives_the_agent_the_demo_tools(monkeypatch: pytest.MonkeyPatch):
+def test_without_an_mcp_json_the_agent_has_no_tools(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test")
     monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
 
     main()
 
     assert RecordingRepl.agent is not None
-    assert list(RecordingRepl.agent.tools) == ["add", "get_time"]
+    assert RecordingRepl.agent.tools == {}
 
 
 FAKE_SERVER = {
@@ -107,7 +107,7 @@ class TestMcpServers:
 
         assert RecordingRepl.agent is not None
         names = list(RecordingRepl.agent.tools)
-        assert names[:2] == ["add", "get_time"]
+        assert len(names) == 14  # the fake server's
         assert "fake__add" in names
         assert (tmp_path / "muagent" / "fake.log").exists()
 
@@ -199,9 +199,9 @@ class TestMcpServers:
         main()
 
         first_line = capsys.readouterr().out.splitlines()[0]
-        # The 2 demo tools and the server's 14.
+        # The server's 14.
         assert first_line == (
-            "muagent | model: banner-model | 16 tools | /help lists commands"
+            "muagent | model: banner-model | 14 tools | /help lists commands"
         )
 
     def test_a_server_that_fails_does_not_stop_muagent(

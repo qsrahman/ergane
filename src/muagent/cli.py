@@ -7,9 +7,6 @@ from muagent.agent import Agent
 from muagent.commands import COMMANDS
 from muagent.config import load_config, user_config_dir, user_state_dir
 from muagent.console import Console
-
-# Remove demo_tools when the real tools arrive.
-from muagent.demo_tools import add, get_time
 from muagent.mcp_client import load_servers, start_servers
 from muagent.repl import Repl
 
@@ -61,7 +58,7 @@ def main() -> None:
         console.blank()
 
     try:
-        Repl(Agent(config, tools=[add, get_time, *mcp_tools]), COMMANDS).run()
+        Repl(Agent(config, tools=mcp_tools), COMMANDS).run()
     finally:
         for server in servers:
             server.close()

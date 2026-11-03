@@ -8,7 +8,7 @@ A minimal terminal chat agent built on the OpenAI [Responses API](https://platfo
 - Streaming output, which can be turned off
 - Client-side conversation history with token-based trimming, so long sessions stay within a configurable context budget
 - Works with any OpenAI-compatible base URL
-- Tool calling: the model can call tools, sees their errors, and can correct itself (only two demo tools so far)
+- Tool calling: the model can call the tools of your [MCP servers](#mcp-servers), sees their errors, and can correct itself
 
 ## Requirements
 
@@ -76,9 +76,9 @@ Command names are case-insensitive. A mistyped command such as `/rest` is report
 
 The model can call tools. A tool that only reads runs at once, and `muagent` prints the call, such as `[add({"a":17,"b":25})]`. A tool that can change things asks first, in one line, such as `Allow save {"path": "notes.txt"}? [y/N]`; type `y` to allow it. The line is never wider than the terminal: if the arguments do not fit, the middle of their long values is left out (the start and the end stay) and the prompt ends `[y/N/?]`; type `?` to see all of it, and it asks again. The result goes back to the model, which says what it found, repeating until the model answers. A turn that grows past `MAX_CONTEXT_TOKENS` while it runs is stopped. If a call fails, the error text goes back to the model so it can correct the call. The Responses API must support function calling.
 
-Only two placeholder tools exist so far, `add` and `get_time`, which stand in until the real tools arrive. Try: *"What is 17 plus 25, and what time is it in Tokyo?"*
+`muagent` has no tools of its own: they come from the MCP servers you list in `mcp.json` (see below). With none, it is a plain chat, and `/tools` says so.
 
-A tool is a plain function with a docstring (its description, written for the model), type hints (its parameters) and `@tool`:
+To give it a tool written in Python, make a function with a docstring (its description, written for the model), type hints (its parameters) and `@tool`, and list it in `main()` in `cli.py`, next to the tools of the MCP servers (`Agent(config, tools=[add, *mcp_tools])`):
 
 ```python
 @tool
