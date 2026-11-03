@@ -77,14 +77,15 @@ def user_env_file() -> Path:
 def load_config() -> Config:
     """Load the settings.
 
-    Environment variables take precedence, then a `.env` in the current directory,
-    then the user-level file (see user_env_file()). Missing files are skipped.
+    Environment variables take precedence over the user-level file (see
+    user_env_file()), which may be missing. A `.env` in the current directory is not
+    read: whoever controls a project could set the base URL, and the API key and
+    every prompt would go wherever they chose.
 
     Raises:
         ValidationError: If a setting is missing or invalid.
     """
-    # Later files override earlier ones.
-    return Config(_env_file=(user_env_file(), ".env"))  # pyright: ignore[reportCallIssue]
+    return Config(_env_file=user_env_file())  # pyright: ignore[reportCallIssue]
 
 
 # ReasoningEffort is Optional[Literal[...]]; these are the Literal's values.

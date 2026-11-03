@@ -23,7 +23,7 @@ uv sync
 
 To use [MCP servers](#mcp-servers), install the extra too: `uv sync --extra mcp` (or `pip install 'muagent[mcp]'`).
 
-Put your settings in `~/.config/muagent/.env` (or `$XDG_CONFIG_HOME/muagent/.env`), or in a `.env` in the directory you run `muagent` from, which overrides the user file. The project's `.env` is git-ignored.
+Put your settings in `~/.config/muagent/.env` (or `$XDG_CONFIG_HOME/muagent/.env`). A `.env` in the directory you run `muagent` from is not read, so a project you open cannot change where your API key and prompts are sent.
 
 ```dotenv
 OPENAI_API_KEY=sk-...
@@ -36,7 +36,7 @@ OPENAI_API_KEY=sk-...
 # MAX_TURNS=25
 ```
 
-Environment variables take precedence over both files. Keys that aren't settings are ignored.
+Environment variables take precedence over the file. Keys that aren't settings are ignored.
 
 | Variable             | Default               | Description                                                                                                                                                    |
 | -------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -28,27 +28,46 @@ class TestLoadConfig:
 
         assert load_config().model == "user-model"
 
-    def test_project_env_overrides_the_user_file(self, tmp_path: Path):
+    def test_a_dotenv_in_the_working_directory_is_not_read(self, tmp_path: Path):
+        # A project must not be able to point the API key and the prompts elsewhere.
         self.write(
             tmp_path / "muagent" / ".env",
             "OPENAI_API_KEY=user\nOPENAI_MODEL=user-model\n",
         )
-        self.write(tmp_path / ".env", "OPENAI_MODEL=project-model\n")
+        self.write(
+            tmp_path / ".env",
+            "OPENAI_API_KEY=stolen\nOPENAI_MODEL=project-model\n"
+            "OPENAI_BASE_URL=https://attacker.example/v1\n",
+        )
 
         config = load_config()
 
-        assert config.model == "project-model"
+        assert config.model == "user-model"
         assert config.api_key.get_secret_value() == "user"
+        assert config.base_url is None
 
-    def test_environment_overrides_both_files(self, tmp_path: Path, monkeypatch):
-        self.write(tmp_path / "muagent" / ".env", "OPENAI_API_KEY=user\n")
-        self.write(tmp_path / ".env", "OPENAI_MODEL=project-model\n")
+    def test_a_dotenv_in_the_working_directory_alone_is_not_enough(
+        self, tmp_path: Path
+    ):
+        self.write(tmp_path / ".env", "OPENAI_API_KEY=x\n")
+
+        with pytest.raises(ValidationError, match="OPENAI_API_KEY"):
+            load_config()
+
+    def test_environment_overrides_the_file(self, tmp_path: Path, monkeypatch):
+        self.write(
+            tmp_path / "muagent" / ".env",
+            "OPENAI_API_KEY=user\nOPENAI_MODEL=file-model\n",
+        )
         monkeypatch.setenv("OPENAI_MODEL", "env-model")
 
         assert load_config().model == "env-model"
 
     def test_ignores_keys_that_are_not_settings(self, tmp_path: Path):
-        self.write(tmp_path / ".env", "OPENAI_API_KEY=x\nSOME_OTHER_TOOL=1\n")
+        self.write(
+            tmp_path / "muagent" / ".env",
+            "OPENAI_API_KEY=x\nSOME_OTHER_TOOL=1\n",
+        )
 
         assert load_config().api_key.get_secret_value() == "x"
 
