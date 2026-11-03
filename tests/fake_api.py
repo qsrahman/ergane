@@ -1,6 +1,9 @@
 """A minimal fake of the OpenAI Responses API for tests."""
 
 import json
+import socket
+import struct
+import time
 from http.server import BaseHTTPRequestHandler
 
 TEXT = "Hello world"
@@ -63,6 +66,7 @@ TOOL_CALLS = {
     "tool_call": [FUNCTION_CALL],
     "tool_call_reasoning": [REASONING_ITEM, FUNCTION_CALL],
     "tool_call_parallel": [FUNCTION_CALL, SECOND_FUNCTION_CALL],
+    "tool_call_flaky": [FUNCTION_CALL],
 }
 
 
@@ -86,6 +90,27 @@ def has_tool_output(items: list[dict]) -> bool:
         if item.get("role") == "user":
             return False
     return False
+
+
+def how_it_dies(scenario: str, attempt: int, tool_output_sent: bool) -> str | None:
+    """How a streamed response ends badly, if it does: "truncated" (the stream ends
+    after its first event with no terminal event), "reset" (the connection is reset
+    then) or "after_text" (the stream ends after its first piece of text).
+
+    `attempt` counts how often this exact request was sent before, so that a
+    scenario can break once and work when it is sent again.
+    """
+    if scenario in ("truncated", "reset"):
+        return scenario
+    if scenario == "cut_after_text":
+        return "after_text"
+    if scenario == "flaky" and attempt == 0:
+        return "truncated"
+    if scenario == "flaky_reset" and attempt == 0:
+        return "reset"
+    if scenario == "tool_call_flaky" and tool_output_sent and attempt == 0:
+        return "truncated"
+    return None
 
 
 def final_event(scenario: str, tool_output_sent: bool = False) -> tuple[str, dict]:
@@ -122,7 +147,11 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     "empty" (completed with no output), "refusal", "cancelled" (text, but a
     status other than completed or incomplete), "nostatus" (a reply without a
     status, as some compatible servers send), "truncated" (a stream that ends
-    without a terminal event), "error_event" or "error_event_nocode" (a stream
+    without a terminal event), "reset" (the connection is reset instead),
+    "flaky" and "flaky_reset" (the first stream breaks that way, the same request
+    sent again works), "cut_after_text" (the stream ends after some text),
+    "tool_call_flaky" (like "tool_call", but the stream after the tool's output
+    breaks once), "error_event" or "error_event_nocode" (a stream
     `error` event, with or without a code, after the first delta, then the stream
     ends), "tool_call" (calls a tool until its output is in the input, then
     replies with text), "tool_call_reasoning" (the same, with a reasoning item
@@ -138,7 +167,14 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         self.server.requests.append(body)  # pyright: ignore[reportAttributeAccessIssue]
         scenario = last_user_prompt(body["input"])
-        event_type, response = final_event(scenario, has_tool_output(body["input"]))
+        tool_output_sent = has_tool_output(body["input"])
+        event_type, response = final_event(scenario, tool_output_sent)
+        # How often this exact request came before: a retry sends the same input.
+        attempt = sum(
+            1
+            for earlier in self.server.requests[:-1]  # pyright: ignore[reportAttributeAccessIssue]
+            if earlier["input"] == body["input"]
+        )
 
         if not body.get("stream"):
             data = json.dumps(response).encode()
@@ -152,9 +188,24 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
-        self.stream(scenario, event_type, response)
+        self.stream(
+            scenario,
+            event_type,
+            response,
+            how_it_dies(scenario, attempt, tool_output_sent),
+        )
 
-    def stream(self, scenario: str, event_type: str, response: dict) -> None:
+    def reset(self) -> None:
+        """Reset the connection (a TCP RST) instead of closing it."""
+        time.sleep(0.2)  # let the client read what was sent before the reset
+        self.connection.setsockopt(
+            socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+        )
+        self.connection.close()
+
+    def stream(
+        self, scenario: str, event_type: str, response: dict, dies: str | None
+    ) -> None:
         """Write a response as server-sent events, item by item."""
         sequence = 0
 
@@ -165,7 +216,10 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
             self.wfile.write(f"event: {type_}\ndata: {json.dumps(event)}\n\n".encode())
 
         send("response.created", response=make_response("in_progress"))
-        if scenario == "truncated":
+        if dies == "truncated":
+            return
+        if dies == "reset":
+            self.reset()
             return
         for index, item in enumerate(response["output"]):
             ids = {"item_id": item["id"], "output_index": index}
@@ -209,6 +263,8 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
                             delta=delta,
                             logprobs=[],
                         )
+                        if dies == "after_text":
+                            return
                         if scenario.startswith("error_event"):
                             code = (
                                 None

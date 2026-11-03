@@ -1,7 +1,9 @@
 import re
+import socket
 from datetime import date
 
 import pytest
+from openai import APIConnectionError, OpenAI
 from openai.types.responses import Response, ResponseInputParam
 
 from fake_api import (
@@ -13,9 +15,10 @@ from fake_api import (
     TEXT,
     make_response,
 )
-from helpers import make_context
+from helpers import make_config, make_context
 from muagent.agent import (
     NOTICE_CHARS,
+    STREAM_RETRIES,
     SYSTEM_PROMPT,
     SYSTEM_PROMPT_NO_TOOLS,
     Agent,
@@ -764,3 +767,134 @@ def test_a_long_call_is_flattened_and_cut_to_one_line_for_its_notice():
     assert "\n" not in line
     assert line.endswith("…")
     assert len(line) == NOTICE_CHARS
+
+
+class TestStreamRetry:
+    """A stream that breaks before any text is shown is sent again."""
+
+    EARLY = "Stream ended without a final response"
+    CUT = "Stream cut off: Connection error"
+
+    def test_a_stream_that_ends_early_is_sent_again(self, make_agent, fake_server):
+        agent = make_agent(STREAMING=True)
+        pieces: list[str] = []
+        notices: list[str] = []
+
+        agent.run_turn("flaky", on_text=pieces.append, on_notice=notices.append)
+
+        assert len(fake_server.requests) == 2
+        assert notices == [f"{self.EARLY}; trying again (1 of 2)"]
+        # The reply is there once: nothing of the first try had been shown.
+        assert pieces == ["Hello", " world"]
+        assert agent.context.items[-1] == {"role": "assistant", "content": TEXT}
+
+    def test_a_reset_connection_is_sent_again(self, make_agent, fake_server):
+        agent = make_agent(STREAMING=True)
+        notices: list[str] = []
+
+        agent.run_turn("flaky_reset", on_notice=notices.append)
+
+        assert len(fake_server.requests) == 2
+        assert notices == [f"{self.CUT}; trying again (1 of 2)"]
+        assert agent.context.items[-1] == {"role": "assistant", "content": TEXT}
+
+    def test_it_gives_up_after_the_retries(self, make_agent, fake_server):
+        agent = make_agent(STREAMING=True)
+        notices: list[str] = []
+
+        with pytest.raises(TurnError, match=f"^{self.EARLY}$"):
+            agent.run_turn("truncated", on_notice=notices.append)
+
+        assert len(fake_server.requests) == 1 + STREAM_RETRIES
+        assert notices == [
+            f"{self.EARLY}; trying again (1 of 2)",
+            f"{self.EARLY}; trying again (2 of 2)",
+        ]
+        assert agent.context.items == []  # a turn that fails is not kept
+
+    def test_a_connection_that_keeps_resetting_ends_the_turn_as_a_cut_stream(
+        self, make_agent, fake_server
+    ):
+        agent = make_agent(STREAMING=True)
+
+        with pytest.raises(TurnError, match=f"^{self.CUT}$"):
+            agent.run_turn("reset")
+
+        assert len(fake_server.requests) == 1 + STREAM_RETRIES
+
+    def test_a_stream_that_breaks_after_some_text_is_not_sent_again(
+        self, make_agent, fake_server
+    ):
+        # The reply would appear twice, the second time perhaps different.
+        agent = make_agent(STREAMING=True)
+        pieces: list[str] = []
+        notices: list[str] = []
+
+        with pytest.raises(TurnError, match=f"^{self.EARLY}$"):
+            agent.run_turn(
+                "cut_after_text", on_text=pieces.append, on_notice=notices.append
+            )
+
+        assert len(fake_server.requests) == 1
+        assert pieces == ["Hello"]
+        assert notices == []
+
+    def test_a_stream_the_server_ended_with_an_error_is_not_sent_again(
+        self, make_agent, fake_server
+    ):
+        # The server said why; the same request would get the same answer.
+        agent = make_agent(STREAMING=True)
+
+        with pytest.raises(TurnError, match="^Stream error: server_error: "):
+            agent.run_turn("error_event")
+
+        assert len(fake_server.requests) == 1
+
+    def test_a_round_after_tool_calls_is_sent_again_and_the_tool_runs_once(
+        self, make_agent, fake_server
+    ):
+        # The case that lost a whole turn of reading: the request after the tool's
+        # output broke. The tool had run, so only the request may be repeated.
+        ran: list[str] = []
+
+        def read_file(path: str) -> str:
+            """Read a text file."""
+            ran.append(path)
+            return "contents"
+
+        agent = make_agent(tools=[Tool.from_function(read_file)], STREAMING=True)
+        notices: list[str] = []
+
+        agent.run_turn("tool_call_flaky", on_notice=notices.append)
+
+        assert ran == ["notes.txt"]
+        assert len(fake_server.requests) == 3  # the call, the broken try, the retry
+        assert notices == [
+            'read_file({"path": "notes.txt"})',
+            f"{self.EARLY}; trying again (1 of 2)",
+        ]
+        kinds = [item.get("type") or item.get("role") for item in agent.context.items]
+        assert kinds == ["user", "function_call", "function_call_output", "assistant"]
+
+    def test_a_connection_that_never_started_is_left_to_the_sdk(self, make_agent):
+        # The SDK already retried it; trying again here would multiply the waiting.
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            closed = probe.getsockname()[1]
+        client = OpenAI(
+            api_key="test", base_url=f"http://127.0.0.1:{closed}/v1", max_retries=0
+        )
+        agent = Agent(make_config(STREAMING=True), client)
+        notices: list[str] = []
+
+        with pytest.raises(APIConnectionError):
+            agent.run_turn("hi", on_notice=notices.append)
+
+        assert notices == []
+
+    def test_without_streaming_the_sdk_does_the_retrying(self, make_agent, fake_server):
+        agent = make_agent(STREAMING=False)
+
+        agent.run_turn("truncated")  # a plain response: nothing to break
+
+        assert len(fake_server.requests) == 1

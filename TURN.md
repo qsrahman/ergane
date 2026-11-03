@@ -104,8 +104,19 @@ response is taken from the stream's last event (`completed`, `incomplete` or
 server's last `error` event (`Stream error: CODE: MESSAGE`) or `Stream ended without
 a final response`. With `STREAMING=false` the whole text goes to `on_text` once. In
 both modes the text is shown **before** the status is checked, so a partial reply is
-never hidden. The SDK itself retries transient failures (connection errors, 408, 409, 429 and
-5xx) twice before anything reaches muagent.
+never hidden.
+
+Two layers retry a request. The SDK retries one that fails to start (connection
+errors, 408, 409, 429 and 5xx, twice), but not one that breaks halfway. muagent does
+that: if a stream **ends with no final event and no `error` event**, or **loses its
+connection after it began**, and **no reply text has been shown yet**, the same
+request is sent again, up to twice, with a notice such as `[Stream ended without a
+final response; trying again (1 of 2)]`. This is safe because a tool runs only after
+a complete response, so a retry repeats a request, never an action, and nothing was
+on the screen to appear twice. It does not happen once text has been shown (the reply
+would appear twice, perhaps differently), when the server ended the stream with an
+`error` event (the same request would get the same answer), or when the request
+never started (the SDK already tried).
 
 ## 4. Judging the response (`_response_status`)
 
@@ -205,7 +216,8 @@ only the replies. Calls and outputs are removed together, for the same reason as
 | the reply is cut off after some text                  | yes, the partial reply  | the text, then `[Response incomplete: REASON]`                |
 | incomplete with no text, `failed`, other status       | no                      | the matching notice from §4                                   |
 | refused, or no text                                   | no                      | `[Refused: …]`, `[No text in response]`                       |
-| the stream ends with no final response                | no                      | `[Stream error: …]` or `[Stream ended without a final response]` |
+| the stream breaks before any text: tried again, twice at most | if a try works, as usual | `[… trying again (1 of 2)]`, then the reply |
+| the stream keeps breaking, or breaks after some text, or ends with an `error` event | no | `[Stream ended without a final response]`, `[Stream cut off: …]` or `[Stream error: …]` |
 | `MAX_TURNS` rounds of tool calls                      | yes, with a closing note| `[Stopped after N model calls without a final answer]`        |
 | the turn outgrows `MAX_CONTEXT_TOKENS`                | no                      | `[This turn grew past the context budget …]`                  |
 | Ctrl-C at any point                                   | no                      | `[Cancelled]`                                                 |

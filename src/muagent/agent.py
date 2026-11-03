@@ -3,7 +3,7 @@ from collections.abc import Callable, Sequence
 from datetime import date
 from typing import cast
 
-from openai import OpenAI
+from openai import APIConnectionError, OpenAI
 from openai.types.responses import (
     Response,
     ResponseFunctionToolCall,
@@ -106,12 +106,26 @@ def _one_line(text: str) -> str:
     return line if len(line) <= NOTICE_CHARS else line[: NOTICE_CHARS - 1] + "…"
 
 
+# How many times a round is sent again when its stream breaks before any text of the
+# reply has reached the user. The SDK retries a request that fails to start, but not
+# one that breaks halfway, and a turn of many rounds should not be lost to one dropped
+# connection: it happened, 25 rounds into reading a codebase.
+STREAM_RETRIES = 2
+
+
 class TurnError(Exception):
     """A turn that ended without a normal reply.
 
     History is left untouched, with two exceptions: an incomplete response after
     some text keeps the partial reply the user has already seen, and hitting the
     max_turns cap keeps the whole turn plus a closing note.
+    """
+
+
+class StreamCut(TurnError):
+    """A stream that stopped before its final response, with no reason from the server.
+
+    A second try can get past it, as long as nothing of the reply has been shown.
     """
 
 
@@ -188,7 +202,7 @@ class Agent:
 
         for _ in range(self.config.max_turns):
             sent = len(items)
-            response = self._send_response(items, on_text)
+            response = self._send_response(items, on_text, on_notice)
             problem = self._response_status(response)
             calls = [item for item in response.output if item.type == "function_call"]
             if problem or not calls:
@@ -252,22 +266,32 @@ class Agent:
         )
 
     def _send_response(
-        self, draft: ResponseInputParam, on_text: Callable[[str], None]
+        self,
+        draft: ResponseInputParam,
+        on_text: Callable[[str], None],
+        on_notice: Callable[[str], None],
     ) -> Response:
         """Get the model's final response, passing its text to on_text as it arrives.
+
+        A stream that breaks (see `StreamCut`) before any text has been shown is
+        sent again, up to STREAM_RETRIES times, and each time `on_notice` says so.
+        Nothing of the round has run yet, so the same request is safe to repeat; once
+        text has been shown it is not, because the reply would appear twice.
 
         Args:
             draft: The input for this turn.
             on_text: Called with each piece of reply text when streaming, or once
                 with the whole reply otherwise (before any status check, so
                 partial text is always shown).
+            on_notice: Called with a line when a round is sent again.
 
         Returns:
             The final response, whatever its status.
 
         Raises:
-            TurnError: If a stream ends without a final response; the message is the
-                reason the server gave in an `error` event, if it sent one.
+            StreamCut: If the stream keeps breaking, or breaks after text was shown.
+            TurnError: If the server ends a stream with an `error` event; the message
+                is the reason it gave.
         """
         params: ResponseCreateParamsBase = {
             "store": False,
@@ -286,31 +310,70 @@ class Agent:
             on_text(response.output_text)
             return response
 
+        shown = False
+
+        def show(text: str) -> None:
+            nonlocal shown
+            shown = shown or bool(text)
+            on_text(text)
+
+        retries = 0
+        while True:
+            try:
+                return self._stream(params, show)
+            except StreamCut as cut:
+                retries += 1
+                if shown or retries > STREAM_RETRIES:
+                    raise
+                on_notice(f"{cut}; trying again ({retries} of {STREAM_RETRIES})")
+
+    def _stream(
+        self, params: ResponseCreateParamsBase, on_text: Callable[[str], None]
+    ) -> Response:
+        """Stream one request and return its final response.
+
+        Raises:
+            StreamCut: If the stream ends without a final response and the server
+                said nothing about why, or the connection drops after the stream
+                had begun. (One that fails before it begins was already retried by
+                the SDK.)
+            TurnError: If the server ends the stream with an `error` event.
+        """
         final = None
-        reason = "Stream ended without a final response"
-        with self.client.responses.stream(**params) as stream:
-            for event in stream:
-                if event.type == "response.output_text.delta":
-                    on_text(event.delta)
-                elif event.type == "error":
-                    detail = (
-                        f"{event.code}: {event.message}"
-                        if event.code
-                        else event.message
-                    )
-                    reason = f"Stream error: {detail}"
-                # Take the final response from the terminal event:
-                # get_final_response() raises unless the stream ends with
-                # response.completed. Keep the == chain: pyright narrows the event
-                # type through it but not through `in (...)`.
-                elif (
-                    event.type == "response.completed"
-                    or event.type == "response.incomplete"
-                    or event.type == "response.failed"
-                ):
-                    final = event.response
+        reason = None
+        started = False
+        try:
+            with self.client.responses.stream(**params) as stream:
+                for event in stream:
+                    started = True
+                    if event.type == "response.output_text.delta":
+                        on_text(event.delta)
+                    elif event.type == "error":
+                        detail = (
+                            f"{event.code}: {event.message}"
+                            if event.code
+                            else event.message
+                        )
+                        reason = f"Stream error: {detail}"
+                    # Take the final response from the terminal event:
+                    # get_final_response() raises unless the stream ends with
+                    # response.completed. Keep the == chain: pyright narrows the
+                    # event type through it but not through `in (...)`.
+                    elif (
+                        event.type == "response.completed"
+                        or event.type == "response.incomplete"
+                        or event.type == "response.failed"
+                    ):
+                        final = event.response
+        except APIConnectionError as exc:
+            if not started:
+                raise
+            raise StreamCut(f"Stream cut off: {str(exc).rstrip('.')}") from exc
         if final is None:
-            raise TurnError(reason)
+            if reason:
+                # The server said why; the same request would get the same answer.
+                raise TurnError(reason)
+            raise StreamCut("Stream ended without a final response")
         return final
 
     def _run_tools(
