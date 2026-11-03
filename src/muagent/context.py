@@ -1,15 +1,16 @@
 """The conversation history, and how it is trimmed to fit a token budget."""
 
 import json
+from collections.abc import Mapping
 
-from openai.types.responses import ResponseInputItemParam, ResponseInputParam
+from openai.types.responses import ResponseInputParam
 
 # Item types that only matter while a turn runs, and for the turn after it.
 _TOOL_WORK = ("reasoning", "function_call", "function_call_output")
 
 
-def estimate_tokens(item: ResponseInputItemParam) -> int:
-    """Estimate the number of tokens in one history item.
+def estimate_tokens(item: Mapping[str, object]) -> int:
+    """Estimate the number of tokens in one history item, or any JSON-like mapping.
 
     About 4 bytes of UTF-8 per token on average: tokenizer-agnostic, so it suits
     any backend, and counting bytes keeps non-Latin text from being undercounted.

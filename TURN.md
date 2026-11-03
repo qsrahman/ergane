@@ -73,8 +73,13 @@ If the items are over `MAX_CONTEXT_TOKENS`, whole turns are dropped from the fro
 `[Context trimmed: oldest turns dropped]`. The size is an estimate: the UTF-8 bytes
 of an item's JSON divided by four, with a reasoning item's opaque
 `encrypted_content` left out. The newest turn is never dropped, so one enormous
-prompt can still be over the limit. This estimate counts the items only, not the
-instructions, the tool definitions or the reply; §6 has a second, stricter count.
+prompt can still be over the limit.
+
+`MAX_CONTEXT_TOKENS` is a budget for the whole request, not only the history, so the
+items are given what is left of it after the part every request carries: the
+instructions and the definitions of the tools (`Agent._fixed_tokens`, estimated the
+same way). A long tool list therefore leaves less room for the history. The reply is
+not counted.
 
 ## 3. A round: the request (`_send_response`)
 
@@ -167,12 +172,11 @@ After each round with tool calls the loop checks, in this order:
    (about X of Y tokens). Ask for less, or raise MAX_CONTEXT_TOKENS`. Nothing is
    saved, because the turn no longer fits.
 
-   The server's count includes the instructions and the tool definitions, which the
-   trimming in §2 does not. A one-word prompt is about 9 tokens to the trimming and
-   about 600 to the server, with no tools. The 42 small tools of the example below add
-   about 3,000 more (by the estimate); real servers describe their tools at more
-   length. So this check is stricter than the setting reads, and a large tool list
-   uses up budget the history never sees.
+   The server's count includes the instructions and the tool definitions, so it
+   measures the same thing as the trimming in §2, the whole request, but exactly. A
+   one-word prompt is about 9 tokens of history and about 600 to the server with no
+   tools, and the 42 small tools of the example below add about 3,000 more (by the
+   estimate); real servers describe their tools at more length.
 2. **The cap.** After `MAX_TURNS` rounds (25 by default) that all ended in tool calls,
    the turn is saved with a closing assistant note and ends with
    `Stopped after N model calls without a final answer`.

@@ -42,6 +42,43 @@ class TestAgentRunTurn:
         assert "- Operating system: " in instructions
         assert instructions.endswith(f"- Current date: {date.today().isoformat()}\n")
 
+    def test_what_every_request_carries_counts_the_instructions_and_the_tools(
+        self, make_agent, streaming
+    ):
+        one = make_agent(tools=[READ_FILE], STREAMING=streaming)
+        two = make_agent(
+            tools=[READ_FILE, Tool.from_function(other)], STREAMING=streaming
+        )
+
+        assert make_agent(STREAMING=streaming)._fixed_tokens() >= estimate_tokens(
+            {"instructions": SYSTEM_PROMPT_NO_TOOLS}
+        )
+        assert (
+            two._fixed_tokens()
+            > one._fixed_tokens()
+            > estimate_tokens({"instructions": SYSTEM_PROMPT})
+        )
+
+    def test_the_history_gets_what_the_instructions_leave_of_the_budget(
+        self, make_agent, streaming
+    ):
+        history = make_context(4)
+        prompt = {"role": "user", "content": "hi"}
+        size = sum(estimate_tokens(item) for item in [*history, prompt])
+
+        def trimmed_with(budget: int) -> bool:
+            agent = make_agent(STREAMING=streaming, MAX_CONTEXT_TOKENS=budget)
+            agent.context.items = list(history)
+            notices: list[str] = []
+            agent.run_turn("hi", on_notice=notices.append)
+            return "Context trimmed: oldest turns dropped" in notices
+
+        fixed = make_agent(STREAMING=streaming)._fixed_tokens()
+        # The history and the prompt fit the budget alone, but the instructions
+        # have to fit in it as well.
+        assert trimmed_with(size + fixed - 1)
+        assert not trimmed_with(size + fixed)
+
     def test_completed_response_is_saved(self, make_agent, streaming):
         agent = make_agent(STREAMING=streaming)
 

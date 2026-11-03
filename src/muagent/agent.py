@@ -173,7 +173,10 @@ class Agent:
                 is still calling tools after max_turns calls, or if the tool
                 results grow the turn past the context budget.
         """
-        items, trimmed = self.context.begin_turn(prompt, self.config.max_context_tokens)
+        # The budget is for the whole request, so the history gets what is left of it
+        # after the instructions and the tool definitions, which every request has.
+        room = self.config.max_context_tokens - self._fixed_tokens()
+        items, trimmed = self.context.begin_turn(prompt, room)
         if trimmed:
             on_notice("Context trimmed: oldest turns dropped")
 
@@ -220,6 +223,28 @@ class Agent:
         if problem:
             raise TurnError(problem)
 
+    def _instructions(self) -> str:
+        """What every request carries as `instructions`: the system prompt, then the
+        environment, so that the part that never changes comes first and can be
+        cached."""
+        prompt = SYSTEM_PROMPT if self.tools else SYSTEM_PROMPT_NO_TOOLS
+        return (
+            f"{prompt}\n"
+            "Environment:\n"
+            f"- Operating system: {platform.platform()}\n"
+            f"- Current date: {date.today().isoformat()}\n"
+        )
+
+    def _fixed_tokens(self) -> int:
+        """Estimate the tokens that every request carries whatever the conversation:
+        the instructions and the definitions of the tools."""
+        return estimate_tokens(
+            {
+                "instructions": self._instructions(),
+                "tools": [tool.param() for tool in self.tools.values()],
+            }
+        )
+
     def _send_response(
         self, draft: ResponseInputParam, on_text: Callable[[str], None]
     ) -> Response:
@@ -242,12 +267,7 @@ class Agent:
             "store": False,
             "input": draft,
             "model": self.config.model,
-            "instructions": (
-                f"{SYSTEM_PROMPT if self.tools else SYSTEM_PROMPT_NO_TOOLS}\n"
-                "Environment:\n"
-                f"- Operating system: {platform.platform()}\n"
-                f"- Current date: {date.today().isoformat()}\n"
-            ),
+            "instructions": self._instructions(),
         }
         # Non-reasoning models reject a reasoning setting, so leave it out if unset.
         if self.config.reasoning_effort is not None:

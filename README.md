@@ -44,7 +44,7 @@ Environment variables take precedence over the file. Keys that aren't settings a
 | `OPENAI_BASE_URL`    | OpenAI default        | Base URL for an OpenAI-compatible API                                                                                                                          |
 | `OPENAI_MODEL`       | `gpt-5.4-mini`        | Model name                                                                                                                                                     |
 | `STREAMING`          | `true`                | Stream tokens as they arrive                                                                                                                                   |
-| `MAX_CONTEXT_TOKENS` | `65536`               | Token budget for the conversation history sent each turn. It excludes the system instructions and the reply, so keep it well below the model's context window. |
+| `MAX_CONTEXT_TOKENS` | `65536`               | Token budget for one request: the system instructions, the definitions of the tools and the conversation history together (not the reply). Old turns are dropped to fit it, so many or long tool definitions leave less room for the history. Keep it well below the model's context window. |
 | `REASONING_EFFORT`   | unset (model default) | `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. Leave unset for non-reasoning models, which reject it.                                           |
 | `MAX_TURNS`          | `25`                  | Most model calls for one prompt: the cap on the tool loop.                                                                        |
 
@@ -148,6 +148,6 @@ The tests run against a local fake of the Responses API. They ignore your `.env`
 
 - Requests are sent with `store=False`, so the server keeps no conversation state. The full history is resent on each turn.
 - A turn, tool calls and their results included, is added to the history once the final response completes with text. An incomplete response keeps the partial reply you already saw; failed or empty responses leave the history unchanged.
-- When the history exceeds `MAX_CONTEXT_TOKENS`, the oldest turns are dropped first. Tokens are estimated at about 4 bytes of UTF-8 per token, which works with any backend's tokenizer.
+- When the instructions, the tool definitions and the history together exceed `MAX_CONTEXT_TOKENS`, the oldest turns are dropped first. Tokens are estimated at about 4 bytes of UTF-8 per token, which works with any backend's tokenizer.
 
 [TURN.md](TURN.md) follows one turn through the code: what is sent, what is kept, what you see, and every way a turn can end.
