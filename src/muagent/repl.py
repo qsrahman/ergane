@@ -13,7 +13,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.output import Output
 
-from muagent.agent import Agent, TurnError
+from muagent.agent import Agent, TurnError, describe_error
 from muagent.commands import Command
 from muagent.console import Console
 
@@ -135,8 +135,11 @@ class Repl:
         """Read and handle prompts until the user quits."""
         tools = len(self.agent.tools)
         count = f" | {tools} tool{'s' if tools != 1 else ''}" if tools else ""
+        effort = self.agent.config.reasoning_effort
+        shown = f" | effort: {effort}" if effort else ""
         self.console.write(
-            f"muagent | model: {self.agent.config.model}{count} | /help lists commands\n\n"
+            f"muagent | model: {self.agent.config.model}{shown}{count}"
+            " | /help lists commands\n\n"
         )
 
         self.running = True
@@ -199,6 +202,6 @@ class Repl:
         except KeyboardInterrupt:
             console.notice("Cancelled")
         except Exception as exc:  # noqa: BLE001
-            console.notice(f"Agent error: {type(exc).__name__}: {exc}")
+            console.notice(describe_error(exc))
         console.end_line()
         console.blank()

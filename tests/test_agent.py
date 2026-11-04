@@ -25,6 +25,7 @@ from muagent.agent import (
     Agent,
     TurnError,
     _one_line,
+    describe_error,
 )
 from muagent.context import estimate_tokens
 from muagent.tools import MAX_OUTPUT_CHARS, Tool
@@ -1104,3 +1105,118 @@ class TestStreamRetry:
         agent.run_turn("truncated")  # a plain response: nothing to break
 
         assert len(fake_server.requests) == 1
+
+
+class TestDescribeError:
+    @pytest.mark.parametrize(
+        ("status", "text"),
+        [
+            (429, "API error 429 (code_429): message 429 The account is out of quota"),
+            (401, "API error 401 (code_401): message 401 Check OPENAI_API_KEY."),
+            (
+                404,
+                "API error 404 (code_404): message 404 Check OPENAI_MODEL and OPENAI_BASE_URL.",
+            ),
+            (500, "API error 500 (code_500): message 500"),
+        ],
+    )
+    def test_an_api_error_gives_its_status_code_and_message_and_a_hint(
+        self, make_agent, status, text
+    ):
+        agent = make_agent(STREAMING=False)
+
+        with pytest.raises(Exception) as caught:
+            agent.run_turn(f"status_{status}")
+
+        assert describe_error(caught.value).startswith(text)
+        assert "{" not in describe_error(caught.value)  # not the SDK's dict
+
+    def test_a_connection_error_names_the_address_to_check(self):
+        import httpx2
+
+        exc = APIConnectionError(request=httpx2.Request("POST", "http://x"))
+
+        assert (
+            describe_error(exc)
+            == "Connection error. Check OPENAI_BASE_URL and the network."
+        )
+
+    def test_anything_else_gives_its_type_and_message(self):
+        assert describe_error(ValueError("boom")) == "Agent error: ValueError: boom"
+
+
+@pytest.mark.parametrize("streaming", [True, False])
+class TestAlwaysAllow:
+    def agent(self, make_agent, streaming, ran, **config):
+        def read_file(path: str) -> str:
+            """Read a text file."""
+            ran.append(path)
+            return "contents"
+
+        return make_agent(
+            tools=[Tool.from_function(read_file, read_only=False)],
+            STREAMING=streaming,
+            **config,
+        )
+
+    def test_always_allows_the_call_and_the_later_ones_of_that_tool(
+        self, make_agent, streaming
+    ):
+        ran: list[str] = []
+        agent = self.agent(make_agent, streaming, ran, MAX_TURNS=3)
+        asked: list[str] = []
+        notices: list[str] = []
+
+        def confirm(tool: Tool, arguments: str):
+            asked.append(tool.name)
+            return "always"
+
+        with pytest.raises(TurnError):
+            agent.run_turn("tool_loop", on_notice=notices.append, confirm=confirm)
+
+        assert asked == ["read_file"] and len(ran) == 3
+        assert agent.always_allowed == {"read_file"}
+        # A call that runs without asking is shown as a line, like a read-only one.
+        assert notices == ['read_file({"path": "notes.txt"})'] * 2
+
+    def test_it_lasts_for_the_session_not_just_the_turn(self, make_agent, streaming):
+        ran: list[str] = []
+        agent = self.agent(make_agent, streaming, ran)
+        agent.run_turn("tool_call", confirm=lambda tool, arguments: "always")
+
+        agent.run_turn("tool_call")  # the default confirm denies; it is not asked
+
+        assert len(ran) == 2
+
+    def test_yes_allows_this_call_only(self, make_agent, streaming):
+        ran: list[str] = []
+        agent = self.agent(make_agent, streaming, ran)
+        asked: list[str] = []
+
+        def confirm(tool: Tool, arguments: str) -> bool:
+            asked.append(tool.name)
+            return True
+
+        agent.run_turn("tool_call", confirm=confirm)
+        agent.run_turn("tool_call", confirm=confirm)
+
+        assert asked == ["read_file", "read_file"] and agent.always_allowed == set()
+
+    def test_a_call_that_cannot_run_does_not_make_the_tool_allowed(
+        self, make_agent, streaming
+    ):
+        ran: list[str] = []
+        agent = self.agent(make_agent, streaming, ran)
+        # The arguments are invalid (the fake sends "path"), so nothing is asked.
+        agent.tools["read_file"] = Tool(
+            "read_file",
+            "d",
+            {},
+            lambda arguments: "Invalid arguments: x",
+            lambda arguments: "",
+            False,
+        )
+
+        agent.run_turn("tool_call", confirm=lambda tool, arguments: "always")
+
+        assert agent.always_allowed == set()

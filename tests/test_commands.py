@@ -294,6 +294,18 @@ class TestToolsCommand:
         assert "  run without asking  look\n" in out
         assert "ask first" not in out
 
+    def test_a_tool_allowed_for_the_session_is_listed_on_its_own(
+        self, monkeypatch, make_agent, capsys
+    ):
+        agent = make_agent(tools=[LOOK, SAVE])
+        agent.always_allowed.add("save")
+
+        run_repl(monkeypatch, agent, ["/tools", "/exit"])
+
+        out = capsys.readouterr().out
+        assert "  run without asking    look\n  allowed this session  save\n\n" in out
+        assert "ask first" not in out
+
     def test_it_says_when_there_are_none(self, monkeypatch, make_agent, capsys):
         run_repl(monkeypatch, make_agent(), ["/tools", "/exit"])
 

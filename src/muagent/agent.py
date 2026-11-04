@@ -1,9 +1,9 @@
 import platform
 from collections.abc import Callable, Sequence
 from datetime import date
-from typing import Any, cast
+from typing import Any, Literal, cast
 
-from openai import APIConnectionError, OpenAI
+from openai import APIConnectionError, APIError, APIStatusError, OpenAI
 from openai.types.responses import (
     Response,
     ResponseFunctionToolCall,
@@ -119,6 +119,36 @@ INTERRUPTED = "interrupted by the user"
 STREAM_RETRIES = 2
 
 
+# What to check, by the status of an API error that has a usual cause.
+_STATUS_HINTS = {
+    401: "Check OPENAI_API_KEY.",
+    403: "Check OPENAI_API_KEY and that it may use this model.",
+    404: "Check OPENAI_MODEL and OPENAI_BASE_URL.",
+    429: "The account is out of quota, or rate limited.",
+}
+
+
+def describe_error(exc: Exception) -> str:
+    """One line for an exception that ended a turn, for the user.
+
+    The SDK's own text ends in a Python dict, and the usual causes of an API error
+    (a wrong key or model, no quota, a wrong address) are worth naming.
+    """
+    if isinstance(exc, APIStatusError):
+        body = exc.body if isinstance(exc.body, dict) else {}
+        message = body.get("message") or exc.message
+        code = f" ({exc.code})" if exc.code else ""
+        hint = _STATUS_HINTS.get(exc.status_code)
+        return f"API error {exc.status_code}{code}: {message}" + (
+            f" {hint}" if hint else ""
+        )
+    if isinstance(exc, APIConnectionError):
+        return f"{exc} Check OPENAI_BASE_URL and the network."
+    if isinstance(exc, APIError):
+        return f"API error: {exc.message}"
+    return f"Agent error: {type(exc).__name__}: {exc}"
+
+
 class TurnError(Exception):
     """A turn that ended without a normal reply.
 
@@ -161,6 +191,8 @@ class Agent:
             base_url=config.base_url,
         )
         self.context = Context()
+        # Tools the user allowed for the rest of the session, by name.
+        self.always_allowed: set[str] = set()
         self.tools = {tool.name: tool for tool in tools}
         if len(self.tools) < len(tools):
             raise ValueError("Tool names must be unique")
@@ -170,7 +202,9 @@ class Agent:
         prompt: str,
         on_text: Callable[[str], None] = lambda text: None,
         on_notice: Callable[[str], None] = lambda text: None,
-        confirm: Callable[[Tool, str], bool] = lambda tool, arguments: False,
+        confirm: Callable[
+            [Tool, str], bool | Literal["always"]
+        ] = lambda tool, arguments: False,
     ) -> None:
         """Send one user message, passing the reply text to on_text.
 
@@ -192,8 +226,9 @@ class Agent:
                 without asking.
             confirm: Called with a tool that is not read-only and the model's
                 arguments for it, before it runs; it returns whether to allow
-                the call. It is also what shows the user the call, so there is no
-                other line for it. The default denies every such call.
+                the call (or "always", which allows it and every later call to that
+                tool in this session). It is also what shows the user the call, so
+                there is no other line for it. The default denies every such call.
 
         Raises:
             TurnError: If the response is incomplete, failed, refused or has no
@@ -489,7 +524,7 @@ class Agent:
         calls: Sequence[ResponseFunctionToolCall],
         items: ResponseInputParam,
         on_notice: Callable[[str], None],
-        confirm: Callable[[Tool, str], bool],
+        confirm: Callable[[Tool, str], bool | Literal["always"]],
     ) -> None:
         """Run the model's tool calls, adding each output to `items` as it is done.
 
@@ -511,7 +546,12 @@ class Agent:
             tool = self.tools.get(call.name)
             problem = tool.check(call.arguments) if tool else None
             # `confirm` shows the call it asks about, so such a call gets no line here.
-            asks = tool is not None and problem is None and not tool.read_only
+            asks = (
+                tool is not None
+                and problem is None
+                and not tool.read_only
+                and tool.name not in self.always_allowed
+            )
             if not asks:
                 on_notice(f"{call.name}({_one_line(call.arguments)})")
             if tool is None:
@@ -520,10 +560,15 @@ class Agent:
             elif problem:
                 # A call that would be rejected is not worth asking the user about.
                 output = problem
-            elif asks and not confirm(tool, call.arguments):
-                output = "The user denied this call."
             else:
-                output = tool.call(call.arguments)
+                answer = confirm(tool, call.arguments) if asks else True
+                if answer == "always":
+                    self.always_allowed.add(tool.name)
+                output = (
+                    tool.call(call.arguments)
+                    if answer
+                    else "The user denied this call."
+                )
             items.append(
                 {
                     "type": "function_call_output",

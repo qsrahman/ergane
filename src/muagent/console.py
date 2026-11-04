@@ -4,7 +4,7 @@ import re
 import shutil
 import sys
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 from muagent.tools import Tool
 
@@ -153,12 +153,12 @@ class Console:
         """
         self._emit(f"[{' '.join(text.split())}]\n", status=True)
 
-    def confirm(self, tool: Tool, arguments: str) -> bool:
+    def confirm(self, tool: Tool, arguments: str) -> bool | Literal["always"]:
         """Ask the user, on one line, whether a tool that is not read-only may run.
 
         The line is as wide as the terminal at most, so the arguments are shown
         whole if they fit and otherwise with the middle of their long strings left
-        out, which the prompt says (`[y/N/?]`). Answering `?` prints the arguments
+        out, which the prompt says (`[y/N/a/?]`). Answering `?` prints the arguments
         in full and asks again, so nothing is hidden for good. The line is the JSON
         that will be run, on one line: padding between its tokens cannot push the
         call off the screen.
@@ -168,12 +168,16 @@ class Console:
             arguments: The model's arguments, as JSON text.
 
         Returns:
-            True only if the user answers y or yes; end of input is a no.
+            True if the user answers y or yes, "always" for a or always (allow this
+            tool for the rest of the session), and False otherwise; end of input is
+            a no.
         """
         before = f"Allow {tool.name} "
-        room = shutil.get_terminal_size().columns - len(before) - len("? [y/N/?] ") - 1
+        room = (
+            shutil.get_terminal_size().columns - len(before) - len("? [y/N/a/?] ") - 1
+        )
         shown, shortened = _fit(arguments, max(room, 20))
-        prompt = f"{before}{shown}? [y/N{'/?' if shortened else ''}] "
+        prompt = f"{before}{shown}? [y/N/a{'/?' if shortened else ''}] "
         while True:
             self.end_line()
             self.at_line_start = False  # the prompt leaves the cursor after it
@@ -194,6 +198,8 @@ class Console:
             self._emit(everything + "\n", status=True)
         # A reply to what was typed stands apart from it, as from a status line.
         self.after_status = True
+        if answer in ("a", "always"):
+            return "always"
         return answer in ("y", "yes")
 
     def clear(self) -> None:

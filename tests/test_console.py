@@ -215,7 +215,7 @@ class TestConfirm:
         prompts: list[str] = []
         monkeypatch.setenv("COLUMNS", "100")
 
-        def ask(reply, arguments: str = '{"path": "notes.txt"}') -> bool:
+        def ask(reply, arguments: str = '{"path": "notes.txt"}') -> bool | str:
             def fake_input(prompt: str) -> str:
                 prompts.append(prompt)
                 if isinstance(reply, BaseException):
@@ -232,6 +232,10 @@ class TestConfirm:
     def test_yes_allows_it(self, asked, reply):
         assert asked(reply) is True
 
+    @pytest.mark.parametrize("reply", ["a", " Always "])
+    def test_a_allows_this_tool_for_the_session(self, asked, reply):
+        assert asked(reply) == "always"
+
     @pytest.mark.parametrize("reply", ["", "n", "no", "yep", "ok"])
     def test_anything_else_denies_it(self, asked, reply):
         assert asked(reply) is False
@@ -246,7 +250,7 @@ class TestConfirm:
     def test_the_question_is_one_line_with_the_tool_and_the_full_arguments(self, asked):
         asked("n")
 
-        assert asked.prompts == ['Allow save {"path": "notes.txt"}? [y/N] ']
+        assert asked.prompts == ['Allow save {"path": "notes.txt"}? [y/N/a] ']
 
     def test_nothing_else_is_printed(self, asked, capsys):
         asked("n")
@@ -256,17 +260,17 @@ class TestConfirm:
     def test_padding_between_tokens_cannot_push_the_call_off_the_screen(self, asked):
         asked("n", '{"path": "rm -rf ~"' + "\n" * 200 + "}")
 
-        assert asked.prompts == ['Allow save {"path": "rm -rf ~"}? [y/N] ']
+        assert asked.prompts == ['Allow save {"path": "rm -rf ~"}? [y/N/a] ']
 
     def test_arguments_that_are_not_json_are_shown_on_the_same_line(self, asked):
         asked("n", "not json\n\n\n  at all")
 
-        assert asked.prompts == ["Allow save not json at all? [y/N] "]
+        assert asked.prompts == ["Allow save not json at all? [y/N/a] "]
 
     def test_a_newline_inside_a_value_stays_on_the_line(self, asked):
         asked("n", '{"text": "a\\nb"}')
 
-        assert asked.prompts == ['Allow save {"text": "a\\nb"}? [y/N] ']
+        assert asked.prompts == ['Allow save {"text": "a\\nb"}? [y/N/a] ']
 
     def test_the_question_is_sanitized(self, asked):
         asked("n", '{"path": "a\x1b]52;c;x"}')
@@ -282,7 +286,7 @@ class TestConfirm:
 
         (prompt,) = asked.prompts
         assert "a" * 40 in prompt
-        assert prompt.endswith("? [y/N] ")
+        assert prompt.endswith("? [y/N/a] ")
 
     def test_a_long_value_is_cut_in_the_middle_to_fit_the_terminal(self, asked):
         asked("n", json.dumps({"path": "a.py", "content": "x" * 5000}))
@@ -291,7 +295,7 @@ class TestConfirm:
         assert len(prompt) <= 100
         assert '"path": "a.py"' in prompt  # a short value is left alone
         assert "…" in prompt
-        assert prompt.endswith("? [y/N/?] ")  # and the prompt says there is more
+        assert prompt.endswith("? [y/N/a/?] ")  # and the prompt says there is more
 
     def test_both_ends_of_a_long_command_are_kept(self, asked):
         command = "cd /tmp && " + "a" * 500 + "; rm -rf ~"
@@ -308,14 +312,14 @@ class TestConfirm:
 
         (prompt,) = asked.prompts
         assert len(prompt) <= 100
-        assert "…? [y/N/?] " in prompt
+        assert "…? [y/N/a/?] " in prompt
 
     def test_arguments_that_are_not_json_are_cut_at_their_end(self, asked):
         asked("n", "word " * 100)
 
         (prompt,) = asked.prompts
         assert len(prompt) <= 100
-        assert "…? [y/N/?] " in prompt
+        assert "…? [y/N/a/?] " in prompt
 
     def test_a_narrow_terminal_still_gets_a_line_with_some_arguments(
         self, asked, monkeypatch
@@ -345,7 +349,7 @@ class TestConfirm:
         assert Console().confirm(SAVE, arguments) is True
 
         assert len(prompts) == 2 and prompts[0] == prompts[1]
-        assert prompts[0].endswith("? [y/N/?] ")
+        assert prompts[0].endswith("? [y/N/a/?] ")
         out = capsys.readouterr().out
         assert "x" * 300 in out  # all of it
         assert '{\n  "content"' in out

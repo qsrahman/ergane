@@ -171,7 +171,7 @@ class TestReplRendering:
 
         out = capsys.readouterr().out
         assert out.endswith(
-            '> tool_call\n\nAllow read_file {"path": "notes.txt"}? [y/N] y\n\n'
+            '> tool_call\n\nAllow read_file {"path": "notes.txt"}? [y/N/a] y\n\n'
             f"{TEXT}\n\n> /exit\nBye.\n"
         )
 
@@ -203,6 +203,31 @@ class TestReplRendering:
         self.run(agent)
 
         assert capsys.readouterr().out.startswith(f"{banner}\n\n> /exit\n")
+
+    def test_the_banner_names_the_effort_when_it_is_set(
+        self, monkeypatch, make_agent, capsys, streaming
+    ):
+        agent = make_agent(STREAMING=streaming, REASONING_EFFORT="high")
+        self.terminal(monkeypatch, ["/exit"])
+
+        self.run(agent)
+
+        assert capsys.readouterr().out.startswith(
+            "muagent | model: gpt-4o | effort: high | /help lists commands\n\n"
+        )
+
+    def test_an_api_error_is_one_line_with_what_to_check(
+        self, monkeypatch, make_agent, capsys, streaming
+    ):
+        agent = make_agent(STREAMING=streaming)
+        self.terminal(monkeypatch, ["status_429", "/exit"])
+
+        self.run(agent)
+
+        assert (
+            "[API error 429 (code_429): message 429 The account is out of quota, "
+            "or rate limited.]"
+        ) in capsys.readouterr().out
 
     def test_a_tool_call_is_shown_as_a_notice_before_the_reply(
         self, monkeypatch, make_agent, capsys, streaming

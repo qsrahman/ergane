@@ -156,7 +156,8 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     ends), "tool_call" (calls a tool until its output is in the input, then
     replies with text), "tool_call_reasoning" (the same, with a reasoning item
     before each call), "tool_call_parallel" (two calls in one response),
-    "tool_loop" (calls a tool every time), "http_error" (a 400 response),
+    "tool_loop" (calls a tool every time), "http_error" (a 400 response), "status_N" (an error response with
+    status N and an OpenAI-style body),
     "tool_then_X" (a tool call, then the scenario X once the tool's output is
     in the input, such as "tool_then_failed"), or anything else for a completed
     response.
@@ -175,6 +176,17 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
             scenario = (
                 scenario.removeprefix("tool_then_") if tool_output_sent else "tool_call"
             )
+        if scenario.startswith("status_"):
+            code = int(scenario.removeprefix("status_"))
+            data = json.dumps(
+                {"error": {"message": f"message {code}", "code": f"code_{code}"}}
+            ).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if scenario == "http_error":
             data = json.dumps({"error": {"message": "bad request"}}).encode()
             self.send_response(400)

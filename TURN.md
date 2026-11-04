@@ -58,6 +58,7 @@ that `Repl.ask` hands it, which are methods of `Console`:
   |----------------------|------------------------------------|
   | `TurnError`          | its message                        |
   | `KeyboardInterrupt`  | `[Cancelled]`                      |
+  | an `openai.APIError`  | `[API error 429 (code): message. hint]` (`describe_error`) |
   | any other exception  | `[Agent error: Type: message]`     |
 
   It then ends the line and prints a blank line, whatever happened.
@@ -145,12 +146,15 @@ no output (400) and an output with no call:
 | names a tool that does not exist           | `[name(args)]`                  | `Unknown tool: NAME. Available tools: …`          |
 | has arguments that fail `Tool.check`       | `[name(args)]`                  | `Invalid arguments: …` (you are never asked)       |
 | is to a read-only tool                     | `[name(args)]`                  | its result                                         |
-| is to a tool that asks, and you say yes    | `Allow name {args}? [y/N] y`    | its result                                         |
-| is to a tool that asks, and you say no     | `Allow name {args}? [y/N] n`    | `The user denied this call.`                       |
+| is to a tool that asks, and you say yes    | `Allow name {args}? [y/N/a] y`  | its result                                         |
+| is to a tool that asks, and you say no     | `Allow name {args}? [y/N/a] n`  | `The user denied this call.`                       |
+| is to a tool you answered `a` to earlier   | `[name(args)]`                  | its result                                         |
 
 - The arguments in the `[…]` line are made one line and cut at 80 characters. The permission
   line shows the arguments in full if they fit the terminal, otherwise with the middle
-  of long values left out and `[y/N/?]`; `?` prints everything and asks again. End of
+  of long values left out and `[y/N/a/?]`; `?` prints everything and asks again; `a`
+  allows the call and every later call to that tool until muagent ends (`Agent.always_allowed`,
+  by tool name). End of
   input counts as no; Ctrl-C stops the turn (§8).
 - **A result is never shown to you.** It goes to the model, whose reply is meant to
   say what it found.
@@ -227,7 +231,7 @@ only the replies. Calls and outputs are removed together, for the same reason as
 | `MAX_TURNS` rounds of tool calls                      | yes, with a closing note| `[Stopped after N model calls without a final answer]`        |
 | the turn outgrows `MAX_CONTEXT_TOKENS`                | older results are dropped and the turn goes on; no if the latest round alone is over | `[Context full: older tool results dropped]`, or `[This turn grew past the context budget …]` |
 | Ctrl-C                                                | yes after a completed round or while tools run; no in the first model call | `[Cancelled]`                           |
-| the API or the network fails (after the SDK's retries)| no, unless a round already ran | `[Agent error: Type: message]`                         |
+| the API or the network fails (after the SDK's retries)| no, unless a round already ran | `[API error …]` or `[Agent error: Type: message]`                         |
 
 "Unless a round already ran": once at least one round has completed (the model called
 tools and they ran), these endings save the turn, closed with an assistant note
@@ -314,13 +318,13 @@ muagent | model: gemma4:cloud | 42 tools | /help lists commands
 
 > Now add 40 and 2 with the files__add tool. Answer in one short sentence.
 
-Allow files__add {"a": 40, "b": 2}? [y/N] y
+Allow files__add {"a": 40, "b": 2}? [y/N/a] y
 
 40 plus 2 is 42.
 
 > Add 5 and 6 with the notes__add tool. Answer in one short sentence.
 
-Allow notes__add {"a": 5, "b": 6}? [y/N] n
+Allow notes__add {"a": 5, "b": 6}? [y/N/a] n
 
 The tool call was denied, but 5 plus 6 is 11.
 ```

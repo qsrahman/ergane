@@ -153,12 +153,28 @@ def effort(repl: Repl, args: str) -> str:
 @command("/tools")
 def tools_(repl: Repl, args: str) -> str | None:
     """List the tools offered to the model."""
-    free = [tool.name for tool in repl.agent.tools.values() if tool.read_only]
-    asks = [tool.name for tool in repl.agent.tools.values() if not tool.read_only]
-    if not (free or asks):
+    agent = repl.agent
+    free = [tool.name for tool in agent.tools.values() if tool.read_only]
+    allowed = [
+        name
+        for name in agent.tools
+        if name in agent.always_allowed and name not in free
+    ]
+    asks = [name for name, tool in agent.tools.items() if not tool.read_only]
+    asks = [name for name in asks if name not in allowed]
+    if not (free or allowed or asks):
         return "Tools: none"
-    for label, names in (("run without asking", free), ("ask first", asks)):
-        if names:
-            repl.console.write(f"  {label:<18}  {', '.join(names)}\n")
+    groups = [
+        (label, names)
+        for label, names in (
+            ("run without asking", free),
+            ("allowed this session", allowed),
+            ("ask first", asks),
+        )
+        if names
+    ]
+    width = max(len(label) for label, _ in groups)
+    for label, names in groups:
+        repl.console.write(f"  {label:<{width}}  {', '.join(names)}\n")
     repl.console.blank()
     return None
