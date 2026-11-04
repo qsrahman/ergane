@@ -1,10 +1,13 @@
 import pytest
+from prompt_toolkit.document import Document
+from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.output import DummyOutput
 
 from fake_api import REFUSAL, STREAM_ERROR, TEXT
 from helpers import make_config, make_context, run_repl
 from muagent.agent import Agent
 from muagent.commands import COMMANDS
-from muagent.repl import Repl
+from muagent.repl import Repl, terminal_session
 from muagent.tools import Tool
 
 
@@ -268,3 +271,49 @@ class TestReplConfirm:
     def test_ctrl_c_at_the_question_cancels_the_turn(self, run, capsys):
         assert run(KeyboardInterrupt()) == []
         assert "[Cancelled]" in capsys.readouterr().out
+
+
+class TestTerminalSession:
+    """The line editor, driven through a pipe the way prompt_toolkit's docs test it."""
+
+    @staticmethod
+    def read(tmp_path, typed: str) -> tuple[list[str], str]:
+        """Run a Repl whose session reads `typed`; return the prompts and the history."""
+        agent = Agent(make_config())
+        prompts: list[str] = []
+        agent.run_turn = lambda prompt, **_: prompts.append(prompt)  # pyright: ignore[reportAttributeAccessIssue]
+        history = tmp_path / "state" / "history"
+        with create_pipe_input() as pipe:
+            pipe.send_text(typed)
+            session = terminal_session(
+                COMMANDS, history, input=pipe, output=DummyOutput()
+            )
+            Repl(agent, COMMANDS, session).run()
+        return prompts, history.read_text() if history.exists() else ""
+
+    def test_a_pasted_block_is_one_prompt(self, tmp_path):
+        paste = "\x1b[200~line one\nline two\x1b[201~\r"
+
+        prompts, _ = self.read(tmp_path, paste + "/exit\r")
+
+        assert prompts == ["line one\nline two"]
+
+    def test_prompts_are_kept_in_the_history_file(self, tmp_path):
+        _, history = self.read(tmp_path, "first\rsecond\r/exit\r")
+
+        assert "+first" in history and "+second" in history
+
+    def test_the_slash_commands_are_completed(self, tmp_path):
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, tmp_path / "history", input=pipe, output=DummyOutput()
+            )
+            assert session is not None and session.completer is not None
+            found = session.completer.get_completions(Document("/re"), None)  # pyright: ignore[reportArgumentType]
+
+            assert sorted(c.text for c in found) == ["/reset", "/retry"]
+
+    def test_redirected_input_is_read_with_plain_input(self, tmp_path):
+        # Under pytest stdin is not a terminal.
+        assert terminal_session(COMMANDS, tmp_path / "state" / "history") is None
+        assert not (tmp_path / "state").exists()

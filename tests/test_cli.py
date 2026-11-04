@@ -59,7 +59,7 @@ class RecordingRepl:
 
     agent = None
 
-    def __init__(self, agent, commands):
+    def __init__(self, agent, commands, session=None):
         RecordingRepl.agent = agent
 
     def run(self):

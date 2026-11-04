@@ -14,7 +14,7 @@ line, because lines move. Everything is in [`src/muagent/`](src/muagent/).
  you type a line
       │
       ▼
- Repl.run ── input("> ") ──► Repl.handle
+ Repl.run ── session.prompt("> ") ──► Repl.handle
                                 │
               /command ─────────┼──► the command's handler (no model call; /retry sends a prompt again)
                                 │
@@ -45,8 +45,9 @@ that `Repl.ask` hands it, which are methods of `Console`:
 
 ## 1. The prompt (`Repl`)
 
-- `Repl.run` reads a line with `input("> ")` and strips it. A blank line is skipped.
-  Ctrl-C or end of input at this prompt ends muagent.
+- `Repl.run` reads a prompt with the prompt_toolkit session (plain `input("> ")` when input or
+  output is redirected) and strips it. A pasted block arrives as one prompt, newlines
+  included. A blank line is skipped. Ctrl-C or end of input at this prompt ends muagent.
 - `Repl.handle` lowercases the first word and looks it up among the slash commands.
   A lone word that starts with `/` and is not a command gives `[Unknown command: …]`.
   Anything else, including `/usr/bin is missing`, goes to the model.

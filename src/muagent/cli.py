@@ -8,7 +8,7 @@ from muagent.commands import COMMANDS
 from muagent.config import load_config, user_config_dir, user_state_dir
 from muagent.console import Console
 from muagent.mcp_client import load_servers, start_servers
-from muagent.repl import Repl
+from muagent.repl import Repl, terminal_session
 
 
 def _exit_with(title: str, exc: ValidationError, *, upper: bool = False) -> NoReturn:
@@ -58,7 +58,8 @@ def main() -> None:
         console.blank()
 
     try:
-        Repl(Agent(config, tools=mcp_tools), COMMANDS).run()
+        session = terminal_session(COMMANDS, user_state_dir() / "history")
+        Repl(Agent(config, tools=mcp_tools), COMMANDS, session).run()
     finally:
         for server in servers:
             server.close()

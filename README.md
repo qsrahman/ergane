@@ -4,7 +4,7 @@ A minimal terminal chat agent built on the OpenAI [Responses API](https://platfo
 
 ## Features
 
-- Interactive REPL with line editing and history (via `readline`, where available)
+- Interactive REPL built on [prompt_toolkit](https://python-prompt-toolkit.readthedocs.io/): line editing, a history that is kept between sessions, Tab completion of the slash commands, and a pasted block (a stack trace, a function) is one prompt
 - Streaming output, which can be turned off
 - Client-side conversation history with token-based trimming, so long sessions stay within a configurable context budget
 - Works with any OpenAI-compatible base URL
@@ -56,7 +56,7 @@ uv run muagent
 
 `uv run python -m muagent` also works.
 
-Type a prompt at `>` and press Enter. To quit, use `/exit`, `/quit`, Ctrl-D, or Ctrl-C at the prompt.
+Type a prompt at `>` and press Enter. Up and Down recall earlier prompts, which are kept in `~/.local/state/muagent/history` (or `$XDG_STATE_HOME/muagent/history`) in plain text; delete the file to forget them. Paste several lines and they stay one prompt; press Enter to send it. When input or output is redirected (`echo hi | muagent`), plain `input()` reads the prompts instead. To quit, use `/exit`, `/quit`, Ctrl-D, or Ctrl-C at the prompt.
 
 | Command           | Effect                                                                           |
 | ----------------- | -------------------------------------------------------------------------------- |
