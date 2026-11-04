@@ -29,12 +29,13 @@ class Command:
 
     handler: Handler
     description: str
+    arguments: tuple[str, ...] = ()  # what the line editor completes after the name
 
 
 COMMANDS: dict[str, Command] = {}
 
 
-def command(name: str) -> Callable[[Handler], Handler]:
+def command(name: str, arguments: tuple[str, ...] = ()) -> Callable[[Handler], Handler]:
     """Register a handler as a slash command. Stack it to give a command aliases.
 
     The first line of the handler's docstring is the description that /help shows.
@@ -42,6 +43,7 @@ def command(name: str) -> Callable[[Handler], Handler]:
     Args:
         name: The command as typed: a slash, then lowercase letters, digits and
             hyphens.
+        arguments: The words the line editor offers after the name.
 
     Returns:
         A decorator that registers the handler and returns it unchanged.
@@ -65,7 +67,7 @@ def command(name: str) -> Callable[[Handler], Handler]:
                 f"Command {name} needs a docstring: its first line is the "
                 "description /help shows"
             )
-        COMMANDS[name] = Command(handler, docstring.splitlines()[0])
+        COMMANDS[name] = Command(handler, docstring.splitlines()[0], arguments)
         return handler
 
     return register
@@ -128,7 +130,7 @@ def model(repl: Repl, args: str) -> str:
     return f"Model: {repl.agent.config.model}"
 
 
-@command("/effort")
+@command("/effort", (*EFFORTS, "default"))
 def effort(repl: Repl, args: str) -> str:
     """Show the reasoning effort, or set it with /effort LEVEL.
 

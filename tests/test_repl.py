@@ -7,6 +7,7 @@ from fake_api import REFUSAL, STREAM_ERROR, TEXT
 from helpers import make_config, make_context, run_repl
 from muagent.agent import Agent
 from muagent.commands import COMMANDS
+from muagent.config import private_state_dir
 from muagent.repl import Repl, terminal_session
 from muagent.tools import Tool
 
@@ -317,3 +318,102 @@ class TestTerminalSession:
         # Under pytest stdin is not a terminal.
         assert terminal_session(COMMANDS, tmp_path / "state" / "history") is None
         assert not (tmp_path / "state").exists()
+
+    @pytest.mark.parametrize(
+        ("typed", "prompt"),
+        [
+            ("one\x1b\rtwo\r", "one\ntwo"),  # Alt-Enter: Esc, then Enter
+            ("one\ntwo\r", "one\ntwo"),  # Ctrl-J, a line feed
+            ("one\x1b[13;2utwo\r", "one\ntwo"),  # Shift-Enter, kitty protocol
+            ("one\x1b[27;2;13~two\r", "one\ntwo"),  # Shift-Enter, modifyOtherKeys
+        ],
+        ids=["alt-enter", "ctrl-j", "shift-enter-csi-u", "shift-enter-xterm"],
+    )
+    def test_a_line_can_be_added_by_hand_and_enter_sends(self, tmp_path, typed, prompt):
+        prompts, _ = self.read(tmp_path, typed + "/exit\r")
+
+        assert prompts == [prompt]
+
+    def complete(self, tmp_path, text: str) -> list[str]:
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, tmp_path / "history", input=pipe, output=DummyOutput()
+            )
+            assert session is not None and session.completer is not None
+            found = session.completer.get_completions(Document(text), None)  # pyright: ignore[reportArgumentType]
+            return sorted(c.text for c in found)
+
+    def test_the_levels_are_completed_after_effort(self, tmp_path):
+        assert self.complete(tmp_path, "/effort h") == ["high"]
+        assert "default" in self.complete(tmp_path, "/effort ")
+
+    def test_a_command_that_lists_no_arguments_completes_none(self, tmp_path):
+        assert self.complete(tmp_path, "/model ") == []
+        assert self.complete(tmp_path, "hello") == []
+
+    def test_an_earlier_prompt_is_suggested(self, tmp_path):
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, tmp_path / "history", input=pipe, output=DummyOutput()
+            )
+            assert session is not None and session.auto_suggest is not None
+            session.default_buffer.history.append_string("hello there")
+
+            suggestion = session.auto_suggest.get_suggestion(
+                session.default_buffer, Document("hel")
+            )
+
+            assert suggestion is not None and suggestion.text == "lo there"
+
+    def test_the_history_is_for_this_user_only(self, tmp_path):
+        history = tmp_path / "history"
+        with create_pipe_input() as pipe:
+            terminal_session(COMMANDS, history, input=pipe, output=DummyOutput())
+
+        assert history.stat().st_mode & 0o777 == 0o600
+
+    def test_a_history_file_that_cannot_be_made_is_not_an_error(self, tmp_path):
+        blocked = tmp_path / "a-file"
+        blocked.write_text("")
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, blocked / "history", input=pipe, output=DummyOutput()
+            )
+
+        assert session is not None  # the prompts are kept in memory instead
+
+    def test_an_answer_to_a_question_is_not_a_prompt(self, tmp_path):
+        history = tmp_path / "history"
+        agent = Agent(make_config())
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, history, input=pipe, output=DummyOutput()
+            )
+            repl = Repl(agent, COMMANDS, session)
+            pipe.send_text("y\r")
+
+            def danger(path: str) -> str:
+                """Do something."""
+                return ""
+
+            answer = repl.console.confirm(
+                Tool.from_function(danger, read_only=False), "{}"
+            )
+
+        assert answer is True
+        assert history.read_text() == ""  # "y" is not a prompt to recall
+
+
+def test_the_state_directory_is_closed_to_other_users(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    state.mkdir(mode=0o755)
+    state.chmod(0o755)
+    monkeypatch.setenv("XDG_STATE_HOME", str(state))
+
+    path = private_state_dir()
+
+    assert path == state / "muagent"
+    assert path.stat().st_mode & 0o777 == 0o700
+    path.chmod(0o755)
+    private_state_dir()  # an existing one is closed too
+    assert path.stat().st_mode & 0o777 == 0o700

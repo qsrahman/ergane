@@ -69,6 +69,22 @@ def user_state_dir() -> Path:
     return _xdg_dir("XDG_STATE_HOME", ".local/state")
 
 
+def private_state_dir() -> Path:
+    """Return `user_state_dir()`, made if needed and closed to other users.
+
+    It holds the prompt history and the server logs, which can contain whatever was
+    pasted or logged. A directory that cannot be made or changed is left as it is:
+    whoever writes there reports it.
+    """
+    path = user_state_dir()
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        path.chmod(0o700)
+    except OSError:
+        pass
+    return path
+
+
 def user_env_file() -> Path:
     """Return the user-level settings file, `$XDG_CONFIG_HOME/muagent/.env`."""
     return user_config_dir() / ".env"

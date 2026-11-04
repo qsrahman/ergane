@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from muagent.agent import Agent
 from muagent.commands import COMMANDS
-from muagent.config import load_config, user_config_dir, user_state_dir
+from muagent.config import load_config, private_state_dir, user_config_dir
 from muagent.console import Console
 from muagent.mcp_client import load_servers, start_servers
 from muagent.repl import Repl, terminal_session
@@ -48,17 +48,16 @@ def main() -> None:
         _exit_with(f"Configuration error in {mcp_file}:", exc)
 
     console = Console()
+    state = private_state_dir()
     try:
-        servers, mcp_tools = start_servers(
-            mcp_configs, user_state_dir(), console.notice
-        )
+        servers, mcp_tools = start_servers(mcp_configs, state, console.notice)
     except KeyboardInterrupt:
         raise SystemExit(130) from None
     if console.after_status:  # a server failed, and said so
         console.blank()
 
     try:
-        session = terminal_session(COMMANDS, user_state_dir() / "history")
+        session = terminal_session(COMMANDS, state / "history")
         Repl(Agent(config, tools=mcp_tools), COMMANDS, session).run()
     finally:
         for server in servers:

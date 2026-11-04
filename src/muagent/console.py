@@ -3,6 +3,7 @@ import json
 import re
 import shutil
 import sys
+from collections.abc import Callable
 from typing import Any
 
 from muagent.tools import Tool
@@ -93,8 +94,14 @@ class Console:
     text that follows one starts after a blank line.
     """
 
-    def __init__(self) -> None:
-        """Create a console, with the cursor at the start of a line."""
+    def __init__(self, ask: Callable[[str], str] | None = None) -> None:
+        """Create a console, with the cursor at the start of a line.
+
+        Args:
+            ask: Reads the answer to a question, given the question as its prompt;
+                `input()` if omitted.
+        """
+        self._ask = ask
         self.at_line_start = True
         self.after_status = False  # whether the last output was a status block
         # Text the terminal's encoding cannot show is replaced, not an error that
@@ -171,7 +178,7 @@ class Console:
             self.end_line()
             self.at_line_start = False  # the prompt leaves the cursor after it
             try:
-                answer = input(sanitize(prompt)).strip().lower()
+                answer = (self._ask or input)(sanitize(prompt)).strip().lower()
             except EOFError:
                 print()  # no Enter ended the line
                 answer = ""

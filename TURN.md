@@ -47,7 +47,7 @@ that `Repl.ask` hands it, which are methods of `Console`:
 
 - `Repl.run` reads a prompt with the prompt_toolkit session (plain `input("> ")` when input or
   output is redirected) and strips it. A pasted block arrives as one prompt, newlines
-  included. A blank line is skipped. Ctrl-C or end of input at this prompt ends muagent.
+  included, and so does a prompt with lines added by hand (Alt-Enter, Ctrl-J). A blank line is skipped. Ctrl-C or end of input at this prompt ends muagent.
 - `Repl.handle` lowercases the first word and looks it up among the slash commands.
   A lone word that starts with `/` and is not a command gives `[Unknown command: …]`.
   Anything else, including `/usr/bin is missing`, goes to the model.
