@@ -1,21 +1,70 @@
-"""Settings: the Config model and where its values are loaded from."""
+"""Settings: the Config model and where its values are loaded from.
 
+A value comes from the highest of these that sets it: the command line, the
+environment, `config.json`, and the default. `config.json` also lists the MCP
+servers, which only it can do.
+"""
+
+import json
 import os
 from pathlib import Path
-from typing import get_args
+from typing import Annotated, Any, NoReturn, get_args
 
 from openai.types.shared import ReasoningEffort
-from pydantic import Field, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, SecretStr, ValidationError, field_validator
+from pydantic_settings import (
+    BaseSettings,
+    JsonConfigSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
+
+from muagent.mcp_client import (
+    NAME_PATTERN,
+    McpServerConfig,
+    UnsetVariableError,
+    fill_placeholders,
+)
+
+
+def _fail(kind: str, **details: Any) -> NoReturn:
+    """Report config.json as invalid the way pydantic reports a bad setting."""
+    raise ValidationError.from_exception_data(
+        "config.json",
+        [{"type": kind, "loc": (), "input": "", **details}],  # pyright: ignore[reportArgumentType]
+    ) from None
+
+
+class _ConfigFile(JsonConfigSettingsSource):
+    """The settings in config.json, under the names a user writes there.
+
+    The environment calls three settings `OPENAI_*`, which is also what pydantic
+    knows them by; in the file they are `model`, `base_url` and `api_key`, like the
+    others. A file that is not a JSON object is reported like any other mistake.
+    """
+
+    def _read_file(self, file_path: Any) -> dict[str, Any]:
+        try:
+            data = super()._read_file(file_path)
+        except json.JSONDecodeError as exc:
+            _fail("json_invalid", ctx={"error": f"{file_path}: {exc}"})
+        if not isinstance(data, dict):
+            _fail("dict_type", input=data)
+        renamed = {
+            name: str(field.validation_alias)
+            for name, field in Config.model_fields.items()
+            if field.validation_alias
+        }
+        return {renamed.get(key, key): value for key, value in data.items()}
 
 
 class Config(BaseSettings):
     """Configuration for the AI agent."""
 
     # A field without an alias is read from the environment variable of the same
-    # name, in any case: max_turns from MAX_TURNS.
-    # Config files may hold keys that aren't settings; ignore them, don't fail.
-    model_config = SettingsConfigDict(extra="ignore")
+    # name, in any case: max_turns from MAX_TURNS. A key that is not a setting is
+    # a mistake in config.json, and says so.
+    model_config = SettingsConfigDict(extra="forbid", json_file_encoding="utf-8")
     model: str = Field(
         min_length=1,
         default="gpt-5.4-mini",
@@ -45,6 +94,37 @@ class Config(BaseSettings):
     reasoning_effort: ReasoningEffort | None = Field(
         default=None,
     )
+    # Only config.json lists servers: they are nested, and no flag or variable
+    # could say them.
+    mcp_servers: dict[Annotated[str, Field(pattern=NAME_PATTERN)], McpServerConfig] = (
+        Field(default_factory=dict, validation_alias="mcpServers")
+    )
+
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def _fill_in_variables(cls, value: object) -> object:
+        """Let the key be `${NAME}` in the file, so that it can stay in the
+        environment. This looks at the value that won, wherever it came from: a
+        placeholder in the file that the environment overrode is never looked at."""
+        if not isinstance(value, str):
+            return value
+        try:
+            return fill_placeholders(value, os.environ)
+        except UnsetVariableError as exc:
+            raise ValueError(str(exc)) from None
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # Highest first: the flags (passed as keyword arguments), the environment,
+        # the file. A `.env` file is not read.
+        return init_settings, env_settings, _ConfigFile(settings_cls)
 
 
 def _xdg_dir(variable: str, default: str) -> Path:
@@ -85,23 +165,42 @@ def private_state_dir() -> Path:
     return path
 
 
-def user_env_file() -> Path:
-    """Return the user-level settings file, `$XDG_CONFIG_HOME/muagent/.env`."""
-    return user_config_dir() / ".env"
+def load_config(path: Path | None = None, **flags: object) -> Config:
+    """Load the settings: the flags, then the environment, then the file.
 
+    The file is `path`, or the one `MUAGENT_CONFIG` names, or `config.json` in
+    `user_config_dir()`; the last may be missing. It is never looked for in the
+    current directory: whoever controls a project could set the base URL, and the
+    API key and every prompt would go wherever they chose.
 
-def load_config() -> Config:
-    """Load the settings.
+    Args:
+        path: The file, if the user named one.
+        **flags: Settings given on the command line, by field name. Each wins over
+            the environment and the file; None is a value too (the model's default).
 
-    Environment variables take precedence over the user-level file (see
-    user_env_file()), which may be missing. A `.env` in the current directory is not
-    read: whoever controls a project could set the base URL, and the API key and
-    every prompt would go wherever they chose.
+    Returns:
+        The settings.
 
     Raises:
-        ValidationError: If a setting is missing or invalid.
+        FileNotFoundError: If the user named a file that does not exist.
+        ValidationError: If a setting is missing or invalid, or the file is not a
+            JSON object.
     """
-    return Config(_env_file=user_env_file())  # pyright: ignore[reportCallIssue]
+    if path is None and os.environ.get("MUAGENT_CONFIG"):
+        path = Path(os.environ["MUAGENT_CONFIG"])
+    if path is not None and not path.exists():
+        raise FileNotFoundError(f"Config file not found: {path}")
+
+    class Loaded(Config):  # the settings class is told its file by its config
+        model_config = SettingsConfigDict(
+            json_file=path or user_config_dir() / "config.json"
+        )
+
+    names = {
+        name: str(field.validation_alias or name)
+        for name, field in Config.model_fields.items()
+    }
+    return Loaded(**{names[name]: value for name, value in flags.items()})  # pyright: ignore[reportArgumentType]
 
 
 # ReasoningEffort is Optional[Literal[...]]; these are the Literal's values.

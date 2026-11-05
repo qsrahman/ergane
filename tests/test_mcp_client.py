@@ -19,18 +19,23 @@ import pytest
 from pydantic import ValidationError
 
 from fake_api import TEXT
+from muagent.config import load_config
 from muagent.mcp_client import (
     McpServer,
     McpServerConfig,
     McpServerError,
     _expand,
     _list_tools,
-    load_servers,
     start_servers,
 )
 from muagent.tools import MAX_OUTPUT_CHARS, Tool
 
 FAKE = str(Path(__file__).parent / "fake_mcp_server.py")
+
+
+def load_servers(path: Path) -> dict[str, McpServerConfig]:
+    """The servers of a config file, as main() gets them."""
+    return load_config(path, api_key="test").mcp_servers
 
 
 @pytest.fixture(scope="module")
@@ -351,12 +356,9 @@ class TestLog:
 
 class TestLoadServers:
     def write(self, tmp_path: Path, text: str) -> Path:
-        path = tmp_path / "mcp.json"
+        path = tmp_path / "config.json"
         path.write_text(text)
         return path
-
-    def test_no_file_means_no_servers(self, tmp_path):
-        assert load_servers(tmp_path / "mcp.json") == {}
 
     def test_a_server_has_a_command_and_optional_arguments_environment_and_trust(
         self, tmp_path
@@ -429,7 +431,7 @@ class TestLoadServers:
 
 class TestUrls:
     def load(self, tmp_path: Path, entry: dict):
-        path = tmp_path / "mcp.json"
+        path = tmp_path / "config.json"
         path.write_text(json.dumps({"mcpServers": {"web": entry}}))
         return load_servers(path)["web"]
 
@@ -472,10 +474,10 @@ class TestUrls:
 
 
 class TestMcpJsonKeys:
-    """`type` and `enable`, as other tools' mcp.json files have them."""
+    """`type` and `enable`, as other tools' MCP files have them."""
 
     def load(self, tmp_path: Path, entry: dict):
-        path = tmp_path / "mcp.json"
+        path = tmp_path / "config.json"
         path.write_text(json.dumps({"mcpServers": {"s": entry}}))
         return load_servers(path)["s"]
 
@@ -527,7 +529,7 @@ class TestMcpJsonKeys:
             self.load(tmp_path, entry)
 
     def test_a_file_in_this_dialect_loads(self, tmp_path):
-        path = tmp_path / "mcp.json"
+        path = tmp_path / "config.json"
         path.write_text(
             json.dumps(
                 {
@@ -945,7 +947,7 @@ class TestToolFilter:
         assert "no tool ad " in notices[0] and "add" in notices[0]
 
     def test_an_empty_list_is_refused(self, tmp_path):
-        path = tmp_path / "mcp.json"
+        path = tmp_path / "config.json"
         path.write_text('{"mcpServers": {"s": {"command": "x", "tools": []}}}')
 
         with pytest.raises(ValidationError, match=r"mcpServers\.s\.tools"):

@@ -19,7 +19,7 @@ import threading
 from collections.abc import Callable, Coroutine, Mapping
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Literal, Self, TextIO
+from typing import TYPE_CHECKING, Any, Literal, Self, TextIO
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -33,8 +33,8 @@ if TYPE_CHECKING:
 
 # OpenAI rejects the whole request, not just the tool, for a name outside this.
 _ALLOWED = "a-zA-Z0-9_-"
-_NAME_PATTERN = rf"^[{_ALLOWED}]+$"  # anchored: pydantic searches, not matches
-_NAME = re.compile(_NAME_PATTERN)
+NAME_PATTERN = rf"^[{_ALLOWED}]+$"  # anchored: pydantic searches, not matches
+_NAME = re.compile(NAME_PATTERN)
 _DISALLOWED = re.compile(rf"[^{_ALLOWED}]")
 _MAX_NAME_CHARS = 128
 
@@ -154,7 +154,7 @@ def _check_url(url: str) -> None:
 
 
 class McpServerConfig(BaseModel):
-    """One server in mcp.json: a program to run (`command`) or a `url` to connect to."""
+    """One server in config.json: a program to run (`command`) or a `url` to connect to."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -196,36 +196,6 @@ class McpServerConfig(BaseModel):
             raise ValueError("args and env go with command")
         _check_url(self.url)
         return self
-
-
-class _McpFile(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    # Named as in the file: with an alias, pydantic does not flag the field's own
-    # name as an unknown key, and `servers` would be ignored without a word.
-    mcpServers: dict[Annotated[str, Field(pattern=_NAME_PATTERN)], McpServerConfig] = (
-        Field(default_factory=dict)
-    )
-
-
-def load_servers(path: Path) -> dict[str, McpServerConfig]:
-    """Read the servers from an mcp.json: `{"mcpServers": {name: {command, ...}}}`.
-
-    Args:
-        path: The file. It is meant to be the user's own, never one from a project:
-            a server is a program that runs when muagent starts.
-
-    Returns:
-        The servers by name; none if the file does not exist.
-
-    Raises:
-        ValidationError: If the file is not valid JSON or has other contents.
-    """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return {}
-    return _McpFile.model_validate_json(text).mcpServers
 
 
 class McpServer:
@@ -513,6 +483,34 @@ class McpServer:
 _PLACEHOLDER = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
+class UnsetVariableError(ValueError):
+    """A `${NAME}` placeholder names a variable that is not set."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"${{{name}}} is not set")
+        self.name = name
+
+
+def fill_placeholders(text: str, environ: Mapping[str, str]) -> str:
+    """Fill in the `${NAME}` placeholders of a text from the environment.
+
+    One pass: the text a variable holds is not looked at again. `$NAME` and a `${`
+    without a name are plain text.
+
+    Raises:
+        UnsetVariableError: If a variable is not set. It names the variable, never a
+            value.
+    """
+
+    def value(match: re.Match[str]) -> str:
+        variable = match.group(1)
+        if variable not in environ:
+            raise UnsetVariableError(variable)
+        return environ[variable]
+
+    return _PLACEHOLDER.sub(value, text)
+
+
 def _expand(
     name: str, config: McpServerConfig, environ: Mapping[str, str]
 ) -> McpServerConfig:
@@ -528,16 +526,12 @@ def _expand(
     """
 
     def fill(text: str, where: str) -> str:
-        def value(match: re.Match[str]) -> str:
-            variable = match.group(1)
-            if variable not in environ:
-                raise McpServerError(
-                    f"MCP server {name!r}: {where} uses ${{{variable}}}, "
-                    "which is not set"
-                )
-            return environ[variable]
-
-        return _PLACEHOLDER.sub(value, text)
+        try:
+            return fill_placeholders(text, environ)
+        except UnsetVariableError as exc:
+            raise McpServerError(
+                f"MCP server {name!r}: {where} uses ${{{exc.name}}}, which is not set"
+            ) from None
 
     return config.model_copy(
         update={

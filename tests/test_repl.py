@@ -7,7 +7,6 @@ from fake_api import REFUSAL, STREAM_ERROR, TEXT
 from helpers import make_config, make_context, run_repl
 from muagent.agent import Agent
 from muagent.commands import COMMANDS
-from muagent.config import private_state_dir
 from muagent.repl import Repl, terminal_session
 from muagent.tools import Tool
 
@@ -477,18 +476,3 @@ class TestTerminalSession:
 
         assert answer is True
         assert history.read_text() == ""  # "y" is not a prompt to recall
-
-
-def test_the_state_directory_is_closed_to_other_users(tmp_path, monkeypatch):
-    state = tmp_path / "state"
-    state.mkdir(mode=0o755)
-    state.chmod(0o755)
-    monkeypatch.setenv("XDG_STATE_HOME", str(state))
-
-    path = private_state_dir()
-
-    assert path == state / "muagent"
-    assert path.stat().st_mode & 0o777 == 0o700
-    path.chmod(0o755)
-    private_state_dir()  # an existing one is closed too
-    assert path.stat().st_mode & 0o777 == 0o700

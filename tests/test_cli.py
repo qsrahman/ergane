@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from muagent.cli import main
+from muagent.cli import main, parse_args
 
 
 def test_main_wires_config_agent_and_repl(monkeypatch: pytest.MonkeyPatch, capsys):
@@ -13,7 +13,7 @@ def test_main_wires_config_agent_and_repl(monkeypatch: pytest.MonkeyPatch, capsy
     monkeypatch.setenv("OPENAI_MODEL", "wired-model")
     monkeypatch.setattr("builtins.input", lambda _prompt: "/exit")
 
-    main()
+    main([])
 
     out = capsys.readouterr().out
     assert "model: wired-model" in out
@@ -22,22 +22,22 @@ def test_main_wires_config_agent_and_repl(monkeypatch: pytest.MonkeyPatch, capsy
 
 def test_main_exits_on_invalid_config(capsys: pytest.CaptureFixture[str]):
     with pytest.raises(SystemExit) as exc:
-        main()
+        main([])
 
     assert exc.value.code == 1
     assert "OPENAI_API_KEY" in capsys.readouterr().err
 
 
-def test_main_names_a_bad_setting_by_its_environment_variable(
+def test_main_names_a_bad_setting_by_its_key(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
     monkeypatch.setenv("OPENAI_API_KEY", "test")
     monkeypatch.setenv("MAX_TURNS", "0")
 
     with pytest.raises(SystemExit):
-        main()
+        main([])
 
-    assert "  - MAX_TURNS:" in capsys.readouterr().err
+    assert "  - max_turns:" in capsys.readouterr().err
 
 
 def test_settings_are_read_from_the_environment_in_any_case(
@@ -55,7 +55,7 @@ def test_settings_are_read_from_the_environment_in_any_case(
 
 
 class RecordingRepl:
-    """Stands in for Repl so a test can see which Agent main() built."""
+    """Stands in for Repl so a test can see which Agent main([]) built."""
 
     agent = None
 
@@ -70,7 +70,7 @@ def test_without_an_mcp_json_the_agent_has_no_tools(monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("OPENAI_API_KEY", "test")
     monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
 
-    main()
+    main([])
 
     assert RecordingRepl.agent is not None
     assert RecordingRepl.agent.tools == {}
@@ -82,8 +82,8 @@ FAKE_SERVER = {
 }
 
 
-def write_mcp_json(config_home: Path, servers: dict) -> None:
-    path = config_home / "muagent" / "mcp.json"
+def write_config_json(config_home: Path, servers: dict) -> None:
+    path = config_home / "muagent" / "config.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"mcpServers": servers}))
 
@@ -100,10 +100,10 @@ class TestMcpServers:
     def test_the_agent_gets_the_tools_of_the_servers_in_mcp_json(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ):
-        write_mcp_json(tmp_path, {"fake": FAKE_SERVER})
+        write_config_json(tmp_path, {"fake": FAKE_SERVER})
         monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
 
-        main()
+        main([])
 
         assert RecordingRepl.agent is not None
         names = list(RecordingRepl.agent.tools)
@@ -118,9 +118,9 @@ class TestMcpServers:
 
         monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
         with serve_http() as url:
-            write_mcp_json(tmp_path, {"web": {"url": url}})
+            write_config_json(tmp_path, {"web": {"url": url}})
 
-            main()
+            main([])
 
         assert RecordingRepl.agent is not None
         assert "web__add" in RecordingRepl.agent.tools
@@ -139,7 +139,7 @@ class TestMcpServers:
                 CallingRepl.key = agent.tools["on__getenv"].call('{"name": "KEY"}')
 
         monkeypatch.setattr("muagent.cli.Repl", CallingRepl)
-        write_mcp_json(
+        write_config_json(
             tmp_path,
             {
                 "on": {
@@ -153,7 +153,7 @@ class TestMcpServers:
             },
         )
 
-        main()
+        main([])
 
         assert RecordingRepl.agent is not None
         tools = RecordingRepl.agent.tools
@@ -164,10 +164,10 @@ class TestMcpServers:
     def test_the_servers_are_stopped_when_muagent_ends(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ):
-        write_mcp_json(tmp_path, {"fake": FAKE_SERVER})
+        write_config_json(tmp_path, {"fake": FAKE_SERVER})
         monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
 
-        main()
+        main([])
 
         assert "mcp-fake" not in threads()
 
@@ -179,22 +179,22 @@ class TestMcpServers:
                 assert "mcp-fake" in threads()
                 raise RuntimeError("repl failed")
 
-        write_mcp_json(tmp_path, {"fake": FAKE_SERVER})
+        write_config_json(tmp_path, {"fake": FAKE_SERVER})
         monkeypatch.setattr("muagent.cli.Repl", FailingRepl)
 
         with pytest.raises(RuntimeError):
-            main()
+            main([])
 
         assert "mcp-fake" not in threads()
 
     def test_a_server_that_starts_is_not_announced_but_counted_in_the_banner(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
     ):
-        write_mcp_json(tmp_path, {"fake": FAKE_SERVER})
+        write_config_json(tmp_path, {"fake": FAKE_SERVER})
         monkeypatch.setenv("OPENAI_MODEL", "banner-model")
         monkeypatch.setattr("builtins.input", lambda _prompt: "/exit")
 
-        main()
+        main([])
 
         first_line = capsys.readouterr().out.splitlines()[0]
         # The server's 14.
@@ -205,10 +205,10 @@ class TestMcpServers:
     def test_a_server_that_fails_does_not_stop_muagent(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
     ):
-        write_mcp_json(tmp_path, {"broken": {"command": "/no/such/server"}})
+        write_config_json(tmp_path, {"broken": {"command": "/no/such/server"}})
         monkeypatch.setattr("builtins.input", lambda _prompt: "/exit")
 
-        main()
+        main([])
 
         out = capsys.readouterr().out
         assert out.startswith("[MCP server 'broken' failed to start: FileNotFoundError")
@@ -220,15 +220,15 @@ class TestMcpServers:
     def test_a_mistake_in_mcp_json_is_reported_and_muagent_exits(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ):
-        write_mcp_json(tmp_path, {"fake": {"command": "x", "arg": []}})
+        write_config_json(tmp_path, {"fake": {"command": "x", "arg": []}})
 
         with pytest.raises(SystemExit) as exc:
-            main()
+            main([])
 
         err = capsys.readouterr().err
         assert exc.value.code == 1
-        assert f"Configuration error in {tmp_path / 'muagent' / 'mcp.json'}:" in err
-        assert "  - mcpServers.fake.arg:" in err  # not upper case: not a variable
+        assert err.startswith("Configuration error:")
+        assert "  - mcpServers.fake.arg:" in err
 
     def test_ctrl_c_while_the_servers_start_exits_quietly(
         self, monkeypatch: pytest.MonkeyPatch
@@ -239,6 +239,102 @@ class TestMcpServers:
         monkeypatch.setattr("muagent.cli.start_servers", interrupted)
 
         with pytest.raises(SystemExit) as exc:
-            main()
+            main([])
 
         assert exc.value.code == 130
+
+
+class TestFlags:
+    @pytest.fixture(autouse=True)
+    def api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "test")
+        monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
+
+    def test_a_flag_that_is_not_given_is_not_in_the_result(self):
+        assert vars(parse_args([])) == {"no_mcp": False}
+
+    def test_every_flag(self):
+        args = parse_args(
+            [
+                "--config", "c.json", "--model", "m", "--base-url", "u",
+                "--no-streaming", "--max-context-tokens", "9", "--max-turns", "2",
+                "--reasoning-effort", "low", "--no-mcp",
+            ]
+        )  # fmt: skip
+
+        assert vars(args) == {
+            "config": Path("c.json"),
+            "model": "m",
+            "base_url": "u",
+            "streaming": False,
+            "max_context_tokens": 9,
+            "max_turns": 2,
+            "reasoning_effort": "low",
+            "no_mcp": True,
+        }
+
+    def test_there_is_no_flag_for_the_key(self, capsys):
+        with pytest.raises(SystemExit) as exc:
+            parse_args(["--api-key", "sk-in-the-process-list"])
+
+        assert exc.value.code == 2
+
+    def test_a_flag_wins_over_the_environment_and_the_file(
+        self, monkeypatch, tmp_path: Path
+    ):
+        (tmp_path / "muagent").mkdir()
+        (tmp_path / "muagent" / "config.json").write_text(
+            json.dumps({"model": "file-model", "max_turns": 5})
+        )
+        monkeypatch.setenv("OPENAI_MODEL", "env-model")
+        monkeypatch.setenv("MAX_TURNS", "6")
+
+        main(["--model", "flag-model"])
+
+        agent = RecordingRepl.agent
+        assert agent is not None
+        assert agent.config.model == "flag-model"  # flag > env > file
+        assert agent.config.max_turns == 6  # env > file
+
+    def test_default_as_the_effort_sends_none_over_the_file(self, tmp_path: Path):
+        (tmp_path / "muagent").mkdir()
+        (tmp_path / "muagent" / "config.json").write_text(
+            json.dumps({"reasoning_effort": "high"})
+        )
+
+        main(["--reasoning-effort", "default"])
+
+        assert RecordingRepl.agent is not None
+        assert RecordingRepl.agent.config.reasoning_effort is None
+
+    def test_a_bad_value_is_reported_by_its_key(self, capsys):
+        with pytest.raises(SystemExit) as exc:
+            main(["--max-turns", "0"])
+
+        assert exc.value.code == 1
+        assert "  - max_turns:" in capsys.readouterr().err
+
+    def test_the_config_flag_names_the_file(self, tmp_path: Path):
+        other = tmp_path / "other.json"
+        other.write_text(json.dumps({"model": "other-model"}))
+
+        main(["--config", str(other)])
+
+        assert RecordingRepl.agent is not None
+        assert RecordingRepl.agent.config.model == "other-model"
+
+    def test_a_config_file_that_does_not_exist_is_reported(self, tmp_path, capsys):
+        with pytest.raises(SystemExit) as exc:
+            main(["--config", str(tmp_path / "nowhere.json")])
+
+        assert exc.value.code == 1
+        assert "Config file not found" in capsys.readouterr().err
+
+    def test_no_mcp_starts_none_of_the_servers(self, tmp_path: Path):
+        write_config_json(tmp_path, {"fake": FAKE_SERVER})
+
+        main(["--no-mcp"])
+
+        assert RecordingRepl.agent is not None
+        assert RecordingRepl.agent.tools == {}
+        assert "mcp-fake" not in threads()

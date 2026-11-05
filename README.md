@@ -23,30 +23,37 @@ uv sync
 
 To use [MCP servers](#mcp-servers), install the extra too: `uv sync --extra mcp` (or `pip install 'muagent[mcp]'`).
 
-Put your settings in `~/.config/muagent/.env` (or `$XDG_CONFIG_HOME/muagent/.env`). A `.env` in the directory you run `muagent` from is not read, so a project you open cannot change where your API key and prompts are sent.
+Put your settings in `~/.config/muagent/config.json` (or `$XDG_CONFIG_HOME/muagent/config.json`). A `config.json` in the directory you run `muagent` from is not read, so a project you open cannot change where your API key and prompts are sent.
 
-```dotenv
-OPENAI_API_KEY=sk-...
-# Optional:
-# OPENAI_BASE_URL=https://api.openai.com/v1
-# OPENAI_MODEL=gpt-5.4-mini
-# STREAMING=true
-# MAX_CONTEXT_TOKENS=65536
-# REASONING_EFFORT=low
-# MAX_TURNS=25
+```json
+{
+  "api_key": "${OPENAI_API_KEY}",
+  "model": "gpt-5.4-mini",
+  "base_url": "https://api.openai.com/v1",
+  "streaming": true,
+  "max_context_tokens": 65536,
+  "reasoning_effort": "low",
+  "max_turns": 25,
+  "mcpServers": {}
+}
 ```
 
-Environment variables take precedence over the file. Keys that aren't settings are ignored.
+Only the key is required, and it may be written out, or as `${NAME}` to take it from the environment variable `NAME` (a variable that is not set is an error that names it). The servers under `mcpServers` are explained [below](#mcp-servers). A key that is not a setting is an error that names it. There is no `.env` file: put the key in the environment or in this file.
 
-| Variable             | Default               | Description                                                                                                                                                    |
-| -------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OPENAI_API_KEY`     | —                     | API key (required)                                                                                                                                             |
-| `OPENAI_BASE_URL`    | OpenAI default        | Base URL for an OpenAI-compatible API                                                                                                                          |
-| `OPENAI_MODEL`       | `gpt-5.4-mini`        | Model name                                                                                                                                                     |
-| `STREAMING`          | `true`                | Stream tokens as they arrive                                                                                                                                   |
-| `MAX_CONTEXT_TOKENS` | `65536`               | Token budget for one request: the system instructions, the definitions of the tools and the conversation history together (not the reply). Old turns are dropped to fit it, so many or long tool definitions leave less room for the history. Keep it well below the model's context window. |
-| `REASONING_EFFORT`   | unset (model default) | `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. Leave unset for non-reasoning models, which reject it.                                           |
-| `MAX_TURNS`          | `25`                  | Most model calls for one prompt: the cap on the tool loop.                                                                        |
+Each setting comes from the first of these that sets it: **its command-line flag, its environment variable, `config.json`, its default.** So a variable overrides the file, and a flag overrides both.
+
+| File key             | Environment variable | Flag                     | Default               | Description |
+| -------------------- | -------------------- | ------------------------ | --------------------- | ----------- |
+| `api_key`            | `OPENAI_API_KEY`     | none (it would show in the process list) | —       | API key (required) |
+| `base_url`           | `OPENAI_BASE_URL`    | `--base-url URL`         | OpenAI default        | Base URL for an OpenAI-compatible API |
+| `model`              | `OPENAI_MODEL`       | `--model NAME`           | `gpt-5.4-mini`        | Model name |
+| `streaming`          | `STREAMING`          | `--streaming`, `--no-streaming` | `true`         | Stream tokens as they arrive |
+| `max_context_tokens` | `MAX_CONTEXT_TOKENS` | `--max-context-tokens N` | `65536`               | Token budget for one request: the system instructions, the definitions of the tools and the conversation history together (not the reply). Old turns are dropped to fit it, so many or long tool definitions leave less room for the history. Keep it well below the model's context window. |
+| `reasoning_effort`   | `REASONING_EFFORT`   | `--reasoning-effort LEVEL` | unset (model default) | `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`; the flag also takes `default`, to send none over a value in the file. Leave unset for non-reasoning models, which reject it. |
+| `max_turns`          | `MAX_TURNS`          | `--max-turns N`          | `25`                  | Most model calls for one prompt: the cap on the tool loop. |
+| `mcpServers`         | none                 | `--no-mcp` (start none)  | none                  | The [MCP servers](#mcp-servers). |
+
+Two more flags: `--config FILE` reads another file (so does the variable `MUAGENT_CONFIG`; the flag wins), and `--help` lists them all. A file you name that does not exist is an error; the default one may be missing, if the environment and flags give the key.
 
 ## Usage
 
@@ -77,7 +84,7 @@ Command names are case-insensitive. A mistyped command such as `/rest` is report
 
 The model can call tools. A tool that only reads runs at once, and `muagent` prints the call as a dimmed line (on a terminal, unless `NO_COLOR` is set), such as `[add({"a": 17, "b": 25})]`, never wider than the terminal: the middle of long values is left out. A tool that can change things asks first, in one line, such as `Allow save {"path": "notes.txt"}? [y/N/a]`; type `y` to allow this call, or `a` to allow that tool for the rest of the session (it then runs like a read-only one, with its call shown as a line, and `/tools` lists it as allowed; restart muagent to take it back). Anything else is a no. The line is never wider than the terminal: if the arguments do not fit, the middle of their long values is left out (the start and the end stay) and the prompt ends `[y/N/a/?]`; type `?` to see all of it, and it asks again. The result goes back to the model, which says what it found, repeating until the model answers. When a turn grows past `MAX_CONTEXT_TOKENS` while it runs, the oldest tool results are replaced by a short placeholder (the calls stay) so that it can go on; only if the latest results alone are over, it is stopped. If a call fails, the error text goes back to the model so it can correct the call. The Responses API must support function calling.
 
-`muagent` has no tools of its own: they come from the MCP servers you list in `mcp.json` (see below). With none, it is a plain chat, and `/tools` says so.
+`muagent` has no tools of its own: they come from the MCP servers you list in `config.json` (see below). With none, it is a plain chat, and `/tools` says so.
 
 To give it a tool written in Python, make a function with a docstring (its description, written for the model), type hints (its parameters) and `@tool`, and list it in `main()` in `cli.py`, next to the tools of the MCP servers (`Agent(config, tools=[add, *mcp_tools])`):
 
@@ -90,7 +97,7 @@ def add(a: int, b: int) -> str:
 
 ## MCP servers
 
-`muagent` can use the tools of [MCP](https://modelcontextprotocol.io) servers, either a local program it runs (stdio) or a server it connects to over HTTP (streamable HTTP). List them in `~/.config/muagent/mcp.json` (or `$XDG_CONFIG_HOME/muagent/mcp.json`), in the usual format:
+`muagent` can use the tools of [MCP](https://modelcontextprotocol.io) servers, either a local program it runs (stdio) or a server it connects to over HTTP (streamable HTTP). List them under `mcpServers` in `config.json`, in the usual format of other tools' MCP files:
 
 ```json
 {
@@ -130,9 +137,9 @@ The names are letters, digits, `_` and `-`. A server's tools are offered to the 
 
 A few things to know before you add a server:
 
-- **A server is a program that runs as you, when `muagent` starts.** Only the user-level `mcp.json` is read, never one from the directory you are in, so a project you open cannot start programs.
+- **A server is a program that runs as you, when `muagent` starts.** Only the user-level `config.json` is read, never one from the directory you are in, so a project you open cannot start programs.
 - **Every MCP tool asks before it runs**, showing its arguments (all of them, with `?`), unless you set `read_only` for that server. A server's own claim that a tool is read-only is ignored: it is not something `muagent` can check.
-- **A server at a URL receives what the model sends it**: the arguments of every call, which can hold file contents or other things from your conversation. Connect only to servers you trust with that. `mcp.json` holds the headers in plain text, so keep it to yourself (`chmod 600`). Redirects to another host are not followed, so the headers go only where you pointed them.
+- **A server at a URL receives what the model sends it**: the arguments of every call, which can hold file contents or other things from your conversation. Connect only to servers you trust with that. `config.json` holds the headers (and perhaps the key) in plain text, so keep it to yourself (`chmod 600`). Redirects to another host are not followed, so the headers go only where you pointed them.
 - **Tool descriptions come from the server** and are read by the model. Add servers you trust.
 - The list of tools is read once, at start.
 
@@ -142,7 +149,7 @@ A few things to know before you add a server:
 uv run pytest
 ```
 
-The tests run against a local fake of the Responses API. They ignore your `.env` and user config file, and make no external network calls.
+The tests run against a local fake of the Responses API. They ignore your `config.json` and environment, and make no external network calls.
 
 ## How it works
 
