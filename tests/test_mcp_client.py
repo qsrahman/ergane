@@ -992,3 +992,260 @@ class TestAgentGate:
         output = fake_server.requests[1]["input"][-1]["output"]
         assert output == "contents of notes.txt"
         assert agent.context.items[-1] == {"role": "assistant", "content": TEXT}
+
+
+def block_result(*content, structured=None, is_error=False):
+    import mcp_types
+
+    return mcp_types.CallToolResult(
+        content=list(content), structured_content=structured, is_error=is_error
+    )
+
+
+class TestResultText:
+    def test_a_text_file_the_server_embedded_is_text(self):
+        import mcp_types
+
+        from muagent.mcp_client import _text
+
+        file = mcp_types.EmbeddedResource(
+            type="resource",
+            resource=mcp_types.TextResourceContents(
+                uri="file:///a.txt", text="contents", mime_type="text/plain"
+            ),
+        )
+
+        assert _text(block_result(file)) == "contents"
+
+    def test_a_binary_one_and_a_link_are_named(self):
+        import mcp_types
+
+        from muagent.mcp_client import _text
+
+        blob = mcp_types.EmbeddedResource(
+            type="resource",
+            resource=mcp_types.BlobResourceContents(uri="file:///a.bin", blob="AAAA"),
+        )
+        link = mcp_types.ResourceLink(type="resource_link", uri="file:///b", name="b")
+
+        assert _text(block_result(blob, link)) == (
+            "[resource: file:///a.bin]\n[resource_link: file:///b]"
+        )
+
+    def test_a_result_with_only_structured_content_is_that_as_json(self):
+        from muagent.mcp_client import _text
+
+        assert _text(block_result(structured={"sum": 3})) == '{"sum": 3}'
+
+    def test_structured_content_next_to_text_is_not_repeated(self):
+        import mcp_types
+
+        from muagent.mcp_client import _text
+
+        text = mcp_types.TextContent(type="text", text="3")
+
+        assert _text(block_result(text, structured={"sum": 3})) == "3"
+
+    def test_an_error_is_marked(self):
+        import mcp_types
+
+        from muagent.mcp_client import _text
+
+        text = mcp_types.TextContent(type="text", text="bad")
+
+        assert _text(block_result(text, is_error=True)) == "Error: bad"
+
+
+class TestConnectionLost:
+    """A server whose connection ended is started again by the next call."""
+
+    @pytest.fixture(autouse=True)
+    def always_ask_first(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Not after 10 s of silence, as in use: no test waits that long.
+        monkeypatch.setattr("muagent.mcp_client._IDLE_SECONDS", 0)
+
+    def kill(self, server: McpServer, tool: Tool) -> None:
+        import signal
+
+        os.kill(int(tool.call("{}")), signal.SIGKILL)
+        time.sleep(0.3)
+
+    def test_a_server_that_died_while_idle_works_again_at_the_next_call(
+        self, make_server
+    ):
+        server = make_server()
+        tools = {t.name: t for t in server.tools()}
+        self.kill(server, tools["fake__pid"])
+
+        assert tools["fake__add"].call('{"a": 1, "b": 2}') == "3"  # no error at all
+
+    def test_the_call_that_found_it_dead_fails_and_the_next_works(self, make_server):
+        server = make_server()
+        tools = {t.name: t for t in server.tools()}
+
+        assert tools["fake__die"].call("{}").startswith("Error:")
+
+        # The call that failed is not repeated: it may have done part of its work.
+        assert tools["fake__add"].call('{"a": 1, "b": 2}') == "3"
+
+    def test_it_is_a_new_process_and_the_log_keeps_what_the_old_one_wrote(
+        self, make_server, tmp_path
+    ):
+        server = make_server()
+        tools = {t.name: t for t in server.tools()}
+        tools["fake__chatty"].call("{}")
+        before = tools["fake__pid"].call("{}")
+        self.kill(server, tools["fake__pid"])
+
+        after = tools["fake__pid"].call("{}")
+
+        assert after != before
+        assert "fake server log line" in (tmp_path / "mcp.log").read_text()
+
+    def test_a_server_that_keeps_dying_is_not_started_for_ever(self, make_server):
+        server = make_server()
+        tools = {t.name: t for t in server.tools()}
+        outputs = []
+        for _ in range(8):
+            outputs.append(tools["fake__die"].call("{}"))
+
+        assert any("is not started any more" in output for output in outputs)
+
+    def test_a_restart_that_fails_says_so_and_the_server_is_tried_again_later(
+        self, make_server, tmp_path
+    ):
+        # Starts the fake server the first time and exits at once afterwards.
+        script = tmp_path / "once.py"
+        script.write_text(
+            "import os, sys\n"
+            "marker = sys.argv[1]\n"
+            "if os.path.exists(marker):\n"
+            "    sys.exit(1)\n"
+            "open(marker, 'w').close()\n"
+            f"os.execv(sys.executable, [sys.executable, {FAKE!r}])\n"
+        )
+        server = make_server(args=[str(script), str(tmp_path / "marker")])
+        tools = {t.name: t for t in server.tools()}
+        self.kill(server, tools["fake__pid"])
+
+        output = tools["fake__add"].call('{"a": 1, "b": 2}')
+
+        assert output.startswith("Error: McpServerError:")
+        assert "restarting it after it stopped" in output
+
+    def test_a_server_that_was_closed_is_not_started_again(self, make_server):
+        server = make_server()
+        tools = {t.name: t for t in server.tools()}
+        server.close()
+
+        assert "is not running" in tools["fake__add"].call('{"a": 1, "b": 2}')
+        assert server._thread is None
+
+    def test_a_remote_server_that_went_away_and_came_back_works_again(self, tmp_path):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+
+        def run() -> subprocess.Popen:
+            process = subprocess.Popen(
+                [sys.executable, FAKE, str(port)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            for _ in range(200):
+                try:
+                    socket.create_connection(("127.0.0.1", port), 0.1).close()
+                    return process
+                except OSError:
+                    time.sleep(0.05)
+            raise RuntimeError("the fake HTTP server did not start")
+
+        process = run()
+        server = McpServer(
+            "web", McpServerConfig(url=f"http://127.0.0.1:{port}/mcp"), tmp_path / "l"
+        )
+        try:
+            server.start()
+            tools = {t.name: t for t in server.tools()}
+            process.terminate()
+            process.wait(10)
+            assert tools["web__add"].call('{"a": 1, "b": 2}').startswith("Error:")
+            process = run()
+
+            assert tools["web__add"].call('{"a": 1, "b": 2}') == "3"
+        finally:
+            server.close()
+            process.terminate()
+            process.wait(10)
+
+
+class TestStartingTogether:
+    def hanging(self, timeout: float = 1) -> McpServerConfig:
+        return McpServerConfig(command="sleep", args=["30"], startup_timeout=timeout)
+
+    def test_servers_that_never_answer_delay_the_start_by_one_timeout_not_the_sum(
+        self, tmp_path
+    ):
+        notices: list[str] = []
+        started = time.monotonic()
+
+        servers, found = start_servers(
+            {f"hang{i}": self.hanging() for i in range(4)}, tmp_path, notices.append
+        )
+
+        elapsed = time.monotonic() - started
+        assert (servers, found) == ([], []) and len(notices) == 4
+        # One timeout (1 s) and one stop (the SDK waits 2 s for a server that does not
+        # leave), together: it was 4 x 3 s when each was waited for in turn.
+        assert elapsed < 6
+
+    def test_a_server_that_fails_to_connect_is_left_for_close(self, tmp_path):
+        server = McpServer("hang", self.hanging(1), tmp_path / "hang.log")
+        server.launch()
+        try:
+            with pytest.raises(McpServerError, match="did not answer within 1 s"):
+                server.connect()
+
+            assert "mcp-hang" in [t.name for t in threading.enumerate()]
+        finally:
+            server.close()
+        assert "mcp-hang" not in [t.name for t in threading.enumerate()]
+
+    def test_servers_are_closed_together(self, tmp_path):
+        from muagent.mcp_client import close_servers
+
+        servers = [
+            McpServer(f"slow{i}", self.hanging(30), tmp_path / f"{i}.log")
+            for i in range(3)
+        ]
+        for server in servers:
+            server.launch()
+        time.sleep(0.5)  # let each start its process
+        started = time.monotonic()
+
+        close_servers(servers)
+
+        # Each takes about 2 s to stop (the process ignores its closed input).
+        assert time.monotonic() - started < 4.5
+        assert not any(t.name.startswith("mcp-slow") for t in threading.enumerate())
+
+
+class TestNamesAcrossServers:
+    def test_two_servers_cannot_give_the_model_the_same_tool_name(self, tmp_path):
+        configs = {
+            "outer": McpServerConfig(
+                command=sys.executable, args=[FAKE], tools=["inner__tool"]
+            ),
+            "outer__inner": McpServerConfig(
+                command=sys.executable, args=[FAKE], tools=["tool"]
+            ),
+        }
+
+        servers, found = start_servers(configs, tmp_path, lambda text: None)
+        try:
+            names = [tool.name for tool in found]
+            assert len(names) == len(set(names)) == 2
+            assert "outer__inner__tool" in names
+        finally:
+            for server in servers:
+                server.close()

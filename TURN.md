@@ -175,11 +175,12 @@ that: it is not caught here, but `run_turn` keeps the turn, §8). A result over 
 
 For an MCP tool the runner hands the request to that server's own thread, where the
 async SDK runs, and waits for the answer for at most `call_timeout` (60 s unless the
-server's entry in `config.json` says otherwise). Text blocks are joined; other blocks
-become a placeholder such as `[image: image/png]`; a server-side error gets an
-`Error:` prefix. A call that times out is cancelled and the connection stays usable
-(`Error: TimeoutError: MCP server 'x' did not answer within N s`); a server that has
-died gives `Error: McpServerError: MCP server 'x': …`. See [README.md](README.md#mcp-servers).
+server's entry in `config.json` says otherwise). Text blocks are joined (so is a text file the server embedded; a result with only
+structured content is that as JSON); other blocks become a placeholder such as
+`[image: image/png]`; a server-side error gets an `Error:` prefix. A call that times out is cancelled and the connection stays usable
+(`Error: TimeoutError: MCP server 'x' did not answer within N s`); a server whose connection
+ended fails the call that finds it (`Error: McpServerError: MCP server 'x': …`) and is
+started again by the next call (up to 3 times a session), which is not repeated for it. See [README.md](README.md#mcp-servers).
 
 ## 6. When the rounds stop
 

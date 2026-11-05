@@ -107,7 +107,7 @@ class TestMcpServers:
 
         assert RecordingRepl.agent is not None
         names = list(RecordingRepl.agent.tools)
-        assert len(names) == 14  # the fake server's
+        assert len(names) == 17  # the fake server's
         assert "fake__add" in names
         assert (tmp_path / "muagent" / "fake.log").exists()
 
@@ -197,9 +197,9 @@ class TestMcpServers:
         main([])
 
         first_line = capsys.readouterr().out.splitlines()[0]
-        # The server's 14.
+        # The server's 17.
         assert first_line == (
-            "muagent | model: banner-model | 14 tools | /help lists commands"
+            "muagent | model: banner-model | 17 tools | /help lists commands"
         )
 
     def test_a_server_that_fails_does_not_stop_muagent(

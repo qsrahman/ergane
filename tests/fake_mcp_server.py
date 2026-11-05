@@ -79,6 +79,24 @@ def getenv(name: str) -> str:
 
 
 @server.tool()
+def pid() -> str:
+    """Return the process id of the server."""
+    return str(os.getpid())
+
+
+@server.tool(name="inner__tool")
+def inner_tool() -> str:
+    """With a server named `outer`, this comes to `outer__inner__tool`."""
+    return "inner__tool"
+
+
+@server.tool(name="tool")
+def plain_tool() -> str:
+    """With a server named `outer__inner`, this comes to `outer__inner__tool` too."""
+    return "tool"
+
+
+@server.tool()
 def getcwd() -> str:
     """Return the working directory of the server process."""
     return os.getcwd()

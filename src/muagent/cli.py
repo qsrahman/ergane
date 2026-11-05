@@ -10,7 +10,7 @@ from muagent.agent import Agent
 from muagent.commands import COMMANDS
 from muagent.config import EFFORTS, load_config, private_state_dir
 from muagent.console import Console
-from muagent.mcp_client import start_servers
+from muagent.mcp_client import close_servers, start_servers
 from muagent.repl import Repl, terminal_session
 
 
@@ -122,5 +122,4 @@ def main(argv: Sequence[str] | None = None) -> None:
         session = terminal_session(COMMANDS, state / "history")
         Repl(Agent(config, tools=mcp_tools), COMMANDS, session).run()
     finally:
-        for server in servers:
-            server.close()
+        close_servers(servers)
