@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import re
 import shutil
 import sys
@@ -102,6 +103,8 @@ class Console:
                 `input()` if omitted.
         """
         self._ask = ask
+        # Status lines are dimmed on a terminal, unless NO_COLOR asks for no colour.
+        self.color = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
         self.at_line_start = True
         self.after_status = False  # whether the last output was a status block
         # Text the terminal's encoding cannot show is replaced, not an error that
@@ -109,12 +112,14 @@ class Console:
         if isinstance(sys.stdout, io.TextIOWrapper):
             sys.stdout.reconfigure(errors="replace")
 
-    def _emit(self, text: str, *, status: bool) -> None:
+    def _emit(self, text: str, *, status: bool, dim: bool = False) -> None:
         """Print sanitized text, separating status blocks from plain text.
 
         Args:
             text: The text to print, without a newline added.
             status: Whether the text is a status block (a notice or a question).
+            dim: Whether to dim it where there is colour. The codes are added
+                after the text is sanitized, which would remove them.
         """
         text = sanitize(text)
         if not text:
@@ -123,7 +128,11 @@ class Console:
             text = "\n" + text  # never inside a line of reply
         elif self.after_status and not status and text.strip():
             text = "\n" + text  # a reply stands apart from the status lines before it
-        print(text, end="", flush=True)
+        shown = text
+        if dim and self.color:
+            body = text.strip("\n")
+            shown = text.replace(body, f"\033[2m{body}\033[0m", 1)
+        print(shown, end="", flush=True)
         self.at_line_start = text.endswith("\n")
         self.after_status = status
 
@@ -151,7 +160,21 @@ class Console:
             text: The status message; it is flattened to one line, so text from
                 the server cannot break out of the brackets.
         """
-        self._emit(f"[{' '.join(text.split())}]\n", status=True)
+        self._emit(f"[{' '.join(text.split())}]\n", status=True, dim=True)
+
+    def call(self, name: str, arguments: str) -> None:
+        """Show a tool call that runs without asking, as one status line.
+
+        The line is as wide as the terminal at most, with the middle of long strings
+        in the arguments left out (see `confirm`).
+
+        Args:
+            name: The tool's name.
+            arguments: The model's arguments, as JSON text.
+        """
+        room = shutil.get_terminal_size().columns - len(name) - len("[()]") - 1
+        shown, _ = _fit(arguments, max(room, 20))
+        self.notice(f"{name}({shown})")
 
     def confirm(self, tool: Tool, arguments: str) -> bool | Literal["always"]:
         """Ask the user, on one line, whether a tool that is not read-only may run.

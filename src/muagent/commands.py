@@ -150,6 +150,29 @@ def effort(repl: Repl, args: str) -> str:
     return f"Reasoning effort: {config.reasoning_effort or 'model default'}"
 
 
+@command("/context")
+def context_(repl: Repl, args: str) -> None:
+    """Show how much of the context budget the next request would use."""
+    agent = repl.agent
+    instructions, tools, history = agent.context_estimate()
+    total = instructions + tools + history
+    budget = agent.config.max_context_tokens
+    rows = [
+        ("instructions", f"~{instructions:,}"),
+        (f"tools ({len(agent.tools)})", f"~{tools:,}"),
+        ("history", f"~{history:,}"),
+        ("total", f"~{total:,} of {budget:,} ({total * 100 // budget}%)"),
+    ]
+    if agent.last_input_tokens is not None:
+        rows.append(
+            ("last request", f"{agent.last_input_tokens:,} (counted by the server)")
+        )
+    width = max(len(label) for label, _ in rows)
+    for label, tokens in rows:
+        repl.console.write(f"  {label:<{width}}  {tokens}\n")
+    repl.console.blank()
+
+
 @command("/tools")
 def tools_(repl: Repl, args: str) -> str | None:
     """List the tools offered to the model."""

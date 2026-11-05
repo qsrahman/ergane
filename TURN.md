@@ -19,7 +19,7 @@ line, because lines move. Everything is in [`src/muagent/`](src/muagent/).
               /command ─────────┼──► the command's handler (no model call; /retry sends a prompt again)
                                 │
               anything else     ▼
-                            Repl.ask ── blank line ──► Agent.run_turn(prompt, on_text, on_notice, confirm)
+                            Repl.ask ── blank line ──► Agent.run_turn(prompt, on_text, on_notice, confirm, on_call)
                                                           │
        Context.begin_turn: history + prompt, trimmed ◄────┤
                                                           │
@@ -40,8 +40,9 @@ that `Repl.ask` hands it, which are methods of `Console`:
 | Callback    | Is                | Carries                                                       |
 |-------------|-------------------|---------------------------------------------------------------|
 | `on_text`   | `Console.write`   | the reply, as it arrives                                      |
-| `on_notice` | `Console.notice`  | one-line status: a call that runs, a trim, a problem          |
+| `on_notice` | `Console.notice`  | one-line status: a trim, a retry, a dropped result            |
 | `confirm`   | `Console.confirm` | the permission question; returns whether the call may run     |
+| `on_call`   | `Console.call`    | a call that runs without asking, as one line                  |
 
 ## 1. The prompt (`Repl`)
 
@@ -150,8 +151,9 @@ no output (400) and an output with no call:
 | is to a tool that asks, and you say no     | `Allow name {args}? [y/N/a] n`  | `The user denied this call.`                       |
 | is to a tool you answered `a` to earlier   | `[name(args)]`                  | its result                                         |
 
-- The arguments in the `[…]` line are made one line and cut at 80 characters. The permission
-  line shows the arguments in full if they fit the terminal, otherwise with the middle
+- The `[…]` line (`Console.call`) is as wide as the terminal at most, the arguments on one
+  line with the middle of long values left out, like the permission line. That line
+  shows the arguments in full if they fit the terminal, otherwise with the middle
   of long values left out and `[y/N/a/?]`; `?` prints everything and asks again; `a`
   allows the call and every later call to that tool until muagent ends (`Agent.always_allowed`,
   by tool name). End of

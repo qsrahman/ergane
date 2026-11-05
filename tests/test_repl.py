@@ -26,7 +26,7 @@ class TestRepl:
             prompts: list[str] = []
 
             def fake_run_turn(
-                prompt: str, on_text=None, on_notice=None, confirm=None
+                prompt: str, on_text=None, on_notice=None, confirm=None, on_call=None
             ) -> None:
                 prompts.append(prompt)
                 if turn:
@@ -61,7 +61,7 @@ class TestRepl:
     ):
         agent = Agent(make_config())
 
-        def turn(prompt: str, on_text, on_notice, confirm) -> None:
+        def turn(prompt: str, on_text, on_notice, confirm, on_call) -> None:
             on_text("line\n")
 
         monkeypatch.setattr(agent, "run_turn", turn)
@@ -74,7 +74,7 @@ class TestRepl:
     ):
         agent = Agent(make_config())
 
-        def turn(prompt: str, on_text, on_notice, confirm) -> None:
+        def turn(prompt: str, on_text, on_notice, confirm, on_call) -> None:
             on_text("partial")
             raise KeyboardInterrupt
 
@@ -316,6 +316,14 @@ class TestTerminalSession:
             )
             Repl(agent, COMMANDS, session).run()
         return prompts, history.read_text() if history.exists() else ""
+
+    def test_a_line_added_by_hand_has_a_marker_under_the_prompt(self, tmp_path):
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, tmp_path / "history", input=pipe, output=DummyOutput()
+            )
+
+            assert session is not None and session.prompt_continuation == ". "
 
     def test_a_pasted_block_is_one_prompt(self, tmp_path):
         paste = "\x1b[200~line one\nline two\x1b[201~\r"

@@ -95,6 +95,7 @@ def terminal_session(
         history=_history_file(history),
         completer=_CommandCompleter(commands),
         auto_suggest=AutoSuggestFromHistory(),
+        prompt_continuation=". ",  # lines added by hand or pasted line up under "> "
         key_bindings=_NEWLINE_KEYS,
         input=input,
         output=output,
@@ -196,6 +197,7 @@ class Repl:
                 on_text=console.write,
                 on_notice=console.notice,
                 confirm=console.confirm,
+                on_call=console.call,
             )
         except TurnError as exc:
             console.notice(str(exc))

@@ -44,6 +44,10 @@ SECOND_FUNCTION_CALL = {
 }
 
 
+# What the "usage" scenario says the server counted in the request.
+USAGE_INPUT_TOKENS = 1234
+
+
 def make_response(status: str | None, output: list | None = None, **extra) -> dict:
     return {
         "id": "resp_1",
@@ -130,6 +134,15 @@ def final_event(scenario: str, tool_output_sent: bool = False) -> tuple[str, dic
         return "response.completed", make_response("cancelled", [MESSAGE])
     if scenario == "nostatus":
         return "response.completed", make_response(None, [MESSAGE])
+    if scenario == "usage":
+        usage = {
+            "input_tokens": USAGE_INPUT_TOKENS,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 5,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": USAGE_INPUT_TOKENS + 5,
+        }
+        return "response.completed", make_response("completed", [MESSAGE], usage=usage)
     if scenario == "empty":
         return "response.completed", make_response("completed")
     if scenario == "failed":
@@ -156,7 +169,7 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     ends), "tool_call" (calls a tool until its output is in the input, then
     replies with text), "tool_call_reasoning" (the same, with a reasoning item
     before each call), "tool_call_parallel" (two calls in one response),
-    "tool_loop" (calls a tool every time), "http_error" (a 400 response), "status_N" (an error response with
+    "tool_loop" (calls a tool every time), "http_error" (a 400 response), "usage" (a reply that carries a token count), "status_N" (an error response with
     status N and an OpenAI-style body),
     "tool_then_X" (a tool call, then the scenario X once the tool's output is
     in the input, such as "tool_then_failed"), or anything else for a completed

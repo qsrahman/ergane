@@ -17,7 +17,7 @@ from muagent.tools import Tool
 
 _ROLE = """\
 # Role
-You are muagent, a coding agent running in the user's terminal. You help with software \
+You are muagent, an expert coding agent running in the user's terminal. You help with software \
 engineering: writing, reading, debugging, reviewing and explaining code.
 
 """
@@ -94,16 +94,6 @@ output or code the user can look up; name the file and function instead.
 
 SYSTEM_PROMPT = _ROLE + _TOOLS + _CONDUCT
 SYSTEM_PROMPT_NO_TOOLS = _ROLE + _NO_TOOLS + _CONDUCT
-
-
-# Longest line a tool call or its result may take in a notice.
-NOTICE_CHARS = 80
-
-
-def _one_line(text: str) -> str:
-    """The text as one line of at most NOTICE_CHARS characters, for a notice."""
-    line = " ".join(text.split())
-    return line if len(line) <= NOTICE_CHARS else line[: NOTICE_CHARS - 1] + "…"
 
 
 # What stands in for a tool result that was dropped to make room (see _drop_outputs).
@@ -193,6 +183,9 @@ class Agent:
         self.context = Context()
         # Tools the user allowed for the rest of the session, by name.
         self.always_allowed: set[str] = set()
+        # What the server counted in the last request it answered; None until then,
+        # and when a compatible server sends no usage.
+        self.last_input_tokens: int | None = None
         self.tools = {tool.name: tool for tool in tools}
         if len(self.tools) < len(tools):
             raise ValueError("Tool names must be unique")
@@ -205,6 +198,7 @@ class Agent:
         confirm: Callable[
             [Tool, str], bool | Literal["always"]
         ] = lambda tool, arguments: False,
+        on_call: Callable[[str, str], None] = lambda name, arguments: None,
     ) -> None:
         """Send one user message, passing the reply text to on_text.
 
@@ -222,13 +216,17 @@ class Agent:
             on_text: Called with each piece of reply text as it arrives when
                 streaming, or once with the whole reply otherwise.
             on_notice: Called with status messages, such as old turns being
-                dropped to fit the token budget, and each tool call that runs
-                without asking.
+                dropped to fit the token budget.
             confirm: Called with a tool that is not read-only and the model's
                 arguments for it, before it runs; it returns whether to allow
                 the call (or "always", which allows it and every later call to that
                 tool in this session). It is also what shows the user the call, so
                 there is no other line for it. The default denies every such call.
+            on_call: Called with the name and the arguments (JSON text) of each
+                tool call that runs without asking, before it runs, to show it.
+                A call that is asked about is shown by `confirm`, and a result is
+                not shown at all: it goes to the model, and the reply says what it
+                found.
 
         Raises:
             TurnError: If the response is incomplete, failed, refused or has no
@@ -264,6 +262,8 @@ class Agent:
                         reason = type(exc).__name__
                     self._keep_stopped_turn(items, rounds, reason)
                 raise
+            if response.usage is not None:
+                self.last_input_tokens = response.usage.input_tokens
             problem = self._response_status(response)
             calls = [item for item in response.output if item.type == "function_call"]
             if problem or not calls:
@@ -274,7 +274,7 @@ class Agent:
                     ResponseInputParam,
                     [item.model_dump(exclude_none=True) for item in response.output],
                 )
-                self._run_tools(calls, items, on_notice, confirm)
+                self._run_tools(calls, items, on_call, confirm)
             except KeyboardInterrupt:
                 # A call that was running, or had not run yet, has no output: say so,
                 # or the API rejects the history. The call may have done part of its
@@ -391,6 +391,17 @@ class Agent:
             "Environment:\n"
             f"- Operating system: {platform.platform()}\n"
             f"- Current date: {date.today().isoformat()}\n"
+        )
+
+    def context_estimate(self) -> tuple[int, int, int]:
+        """Estimate the tokens of the instructions, the tool definitions and the
+        history, which together are what the next request would carry."""
+        return (
+            estimate_tokens({"instructions": self._instructions()}),
+            estimate_tokens({"tools": [tool.param() for tool in self.tools.values()]})
+            if self.tools
+            else 0,
+            sum(estimate_tokens(item) for item in self.context.items),
         )
 
     def _fixed_tokens(self) -> int:
@@ -523,7 +534,7 @@ class Agent:
         self,
         calls: Sequence[ResponseFunctionToolCall],
         items: ResponseInputParam,
-        on_notice: Callable[[str], None],
+        on_call: Callable[[str, str], None],
         confirm: Callable[[Tool, str], bool | Literal["always"]],
     ) -> None:
         """Run the model's tool calls, adding each output to `items` as it is done.
@@ -536,10 +547,10 @@ class Agent:
             calls: The function calls in the model's response.
             items: The turn's items; the outputs are added at the end, in order. If
                 Ctrl-C interrupts, the outputs made so far are already there.
-            on_notice: Called with each call that runs without asking, before it is
-                run, shortened to one line. A call that is asked about is shown by
-                `confirm`, and a result is not shown at all: it goes to the model,
-                and the reply says what it found.
+            on_call: Called with each call that runs without asking, before it is
+                run. A call that is asked about is shown by `confirm`, and a result
+                is not shown at all: it goes to the model, and the reply says what
+                it found.
             confirm: Asked before each call to a tool that is not read-only.
         """
         for call in calls:
@@ -553,7 +564,7 @@ class Agent:
                 and tool.name not in self.always_allowed
             )
             if not asks:
-                on_notice(f"{call.name}({_one_line(call.arguments)})")
+                on_call(call.name, call.arguments)
             if tool is None:
                 known = ", ".join(self.tools) or "none"
                 output = f"Unknown tool: {call.name}. Available tools: {known}."

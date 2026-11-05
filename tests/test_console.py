@@ -38,7 +38,9 @@ class TestSanitize:
     def test_notices_are_sanitized(self, monkeypatch, capsys):
         agent = Agent(make_config())
 
-        def fail(prompt: str, on_text=None, on_notice=None, confirm=None) -> None:
+        def fail(
+            prompt: str, on_text=None, on_notice=None, confirm=None, on_call=None
+        ) -> None:
             raise TurnError("Response failed: \x1b[2Jboom")
 
         monkeypatch.setattr(agent, "run_turn", fail)
@@ -410,3 +412,73 @@ class TestConfirm:
         console.notice("Closed")
 
         assert capsys.readouterr().out == "\n[Closed]\n"
+
+
+class TestCall:
+    def test_a_call_is_a_status_line_with_the_name_and_the_arguments(self, capsys):
+        Console().call("read_file", '{"path":"notes.txt"}')
+
+        assert capsys.readouterr().out == '[read_file({"path": "notes.txt"})]\n'
+
+    def test_the_line_follows_the_width_of_the_terminal(self, monkeypatch, capsys):
+        arguments = json.dumps({"text": "x" * 300})
+        monkeypatch.setenv("COLUMNS", "60")
+        Console().call("read_file", arguments)
+        narrow = capsys.readouterr().out
+        monkeypatch.setenv("COLUMNS", "200")
+        Console().call("read_file", arguments)
+        wide = capsys.readouterr().out
+
+        assert len(narrow.rstrip("\n")) < 60 and "…" in narrow
+        assert 60 < len(wide.rstrip("\n")) < 200 and "…" in wide
+
+    def test_a_call_that_fits_is_shown_whole(self, monkeypatch, capsys):
+        monkeypatch.setenv("COLUMNS", "200")
+        arguments = json.dumps({"path": "a" * 100})
+
+        Console().call("read_file", arguments)
+
+        assert "…" not in capsys.readouterr().out
+
+
+class TestDim:
+    @pytest.fixture
+    def console(self):
+        console = Console()
+        console.color = True
+        return console
+
+    def test_a_notice_is_dimmed_where_there_is_colour(self, console, capsys):
+        console.notice("Cancelled")
+
+        assert capsys.readouterr().out == "\033[2m[Cancelled]\033[0m\n"
+
+    def test_the_fresh_line_stays_outside_the_dimmed_part(self, console, capsys):
+        console.write("partial")
+
+        console.notice("Cancelled")
+
+        assert capsys.readouterr().out == "partial\n\033[2m[Cancelled]\033[0m\n"
+
+    def test_a_reply_is_not_dimmed(self, console, capsys):
+        console.write("hello\n")
+
+        assert capsys.readouterr().out == "hello\n"
+
+    def test_text_from_the_model_cannot_add_codes_of_its_own(self, console, capsys):
+        console.notice("a\033[31mb")
+
+        assert capsys.readouterr().out.count("\033") == 2  # ours: dim and reset
+
+    def test_without_a_terminal_there_are_no_codes(self, capsys):
+        # Under pytest stdout is not a terminal.
+        Console().notice("Cancelled")
+
+        assert capsys.readouterr().out == "[Cancelled]\n"
+
+    def test_no_color_turns_it_off(self, monkeypatch):
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+        assert Console().color is True
+        monkeypatch.setenv("NO_COLOR", "1")
+
+        assert Console().color is False

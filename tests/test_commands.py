@@ -276,6 +276,48 @@ LOOK = Tool.from_function(look)
 SAVE = Tool.from_function(save, read_only=False)
 
 
+class TestContextCommand:
+    def test_it_shows_the_parts_of_the_budget(self, monkeypatch, make_agent, capsys):
+        agent = make_agent(tools=[LOOK, SAVE], MAX_CONTEXT_TOKENS=10000)
+        instructions, tools, history = agent.context_estimate()
+        total = instructions + tools + history
+
+        run_repl(monkeypatch, agent, ["/context", "/exit"])
+
+        out = capsys.readouterr().out
+        assert f"  instructions  ~{instructions:,}\n" in out
+        assert f"  tools (2)     ~{tools:,}\n" in out
+        assert f"  history       ~{history:,}\n" in out
+        assert (
+            f"  total         ~{total:,} of 10,000 ({total * 100 // 10000}%)\n" in out
+        )
+        assert "last request" not in out  # nothing has been sent yet
+
+    def test_it_adds_the_count_of_the_server_once_there_is_one(
+        self, monkeypatch, make_agent, capsys
+    ):
+        agent = make_agent()
+        agent.last_input_tokens = 12345
+
+        run_repl(monkeypatch, agent, ["/context", "/exit"])
+
+        assert (
+            "  last request  12,345 (counted by the server)\n"
+            in capsys.readouterr().out
+        )
+
+    def test_the_history_grows_and_a_reset_empties_it(
+        self, monkeypatch, make_agent, capsys
+    ):
+        agent = make_agent()
+        agent.run_turn("hello")
+        assert agent.context_estimate()[2] > 0
+
+        run_repl(monkeypatch, agent, ["/reset", "/context", "/exit"])
+
+        assert "  history       ~0\n" in capsys.readouterr().out
+
+
 class TestToolsCommand:
     def test_it_lists_the_tools_by_whether_they_ask_first(
         self, monkeypatch, make_agent, capsys

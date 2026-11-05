@@ -13,18 +13,17 @@ from fake_api import (
     SECOND_FUNCTION_CALL,
     STREAM_ERROR,
     TEXT,
+    USAGE_INPUT_TOKENS,
     make_response,
 )
 from helpers import make_config, make_context
 from muagent.agent import (
     DROPPED_OUTPUT,
-    NOTICE_CHARS,
     STREAM_RETRIES,
     SYSTEM_PROMPT,
     SYSTEM_PROMPT_NO_TOOLS,
     Agent,
     TurnError,
-    _one_line,
     describe_error,
 )
 from muagent.context import estimate_tokens
@@ -473,14 +472,14 @@ class TestAgentToolLoop:
 
     def test_each_call_is_reported_as_it_is_run(self, make_agent, streaming):
         agent = make_agent(tools=[READ_FILE], STREAMING=streaming)
-        notices: list[str] = []
+        calls: list[tuple[str, str]] = []
 
-        agent.run_turn("tool_call_parallel", on_notice=notices.append)
+        agent.run_turn("tool_call_parallel", on_call=lambda *call: calls.append(call))
 
         # Only the calls: their results go to the model, not to the screen.
-        assert notices == [
-            'read_file({"path": "notes.txt"})',
-            'read_file({"path": "todo.txt"})',
+        assert calls == [
+            ("read_file", '{"path": "notes.txt"}'),
+            ("read_file", '{"path": "todo.txt"}'),
         ]
 
     def test_a_call_that_is_asked_about_gets_no_line_of_its_own(
@@ -490,16 +489,18 @@ class TestAgentToolLoop:
         agent = make_agent(
             tools=[Tool.from_function(read_file, read_only=False)], STREAMING=streaming
         )
-        notices: list[str] = []
+        calls: list[tuple[str, str]] = []
         asked: list[str] = []
 
         def confirm(tool: Tool, arguments: str) -> bool:
             asked.append(arguments)
             return False
 
-        agent.run_turn("tool_call", on_notice=notices.append, confirm=confirm)
+        agent.run_turn(
+            "tool_call", on_call=lambda *call: calls.append(call), confirm=confirm
+        )
 
-        assert notices == []
+        assert calls == []
         assert asked == [FUNCTION_CALL["arguments"]]
 
     def test_a_call_that_cannot_run_is_shown_even_for_a_tool_that_asks(
@@ -513,19 +514,19 @@ class TestAgentToolLoop:
         agent = make_agent(
             tools=[Tool.from_function(read_file, read_only=False)], STREAMING=streaming
         )
-        notices: list[str] = []
+        calls: list[tuple[str, str]] = []
 
-        agent.run_turn("tool_call", on_notice=notices.append)
+        agent.run_turn("tool_call", on_call=lambda *call: calls.append(call))
 
-        assert notices == ['read_file({"path": "notes.txt"})']
+        assert calls == [("read_file", '{"path": "notes.txt"}')]
 
     def test_a_call_to_an_unknown_tool_is_shown(self, make_agent, streaming):
         agent = make_agent(STREAMING=streaming)
-        notices: list[str] = []
+        calls: list[tuple[str, str]] = []
 
-        agent.run_turn("tool_call", on_notice=notices.append)
+        agent.run_turn("tool_call", on_call=lambda *call: calls.append(call))
 
-        assert notices == ['read_file({"path": "notes.txt"})']
+        assert calls == [("read_file", '{"path": "notes.txt"}')]
 
     def test_a_tool_that_is_not_read_only_is_denied_unless_confirmed(
         self, make_agent, fake_server, streaming
@@ -943,14 +944,6 @@ def test_the_prompt_without_tools_says_there_are_none_and_does_not_talk_about_ca
         assert priming not in SYSTEM_PROMPT_NO_TOOLS
 
 
-def test_a_long_call_is_flattened_and_cut_to_one_line_for_its_notice():
-    line = _one_line('read_file({"path": "' + "a b\n" * 100 + '"})')
-
-    assert "\n" not in line
-    assert line.endswith("…")
-    assert len(line) == NOTICE_CHARS
-
-
 class TestStreamRetry:
     """A stream that breaks before any text is shown is sent again."""
 
@@ -1051,10 +1044,7 @@ class TestStreamRetry:
 
         assert ran == ["notes.txt"]
         assert len(fake_server.requests) == 3  # the call, the broken try, the retry
-        assert notices == [
-            'read_file({"path": "notes.txt"})',
-            f"{self.EARLY}; trying again (1 of 2)",
-        ]
+        assert notices == [f"{self.EARLY}; trying again (1 of 2)"]
         kinds = [item.get("type") or item.get("role") for item in agent.context.items]
         assert kinds == ["user", "function_call", "function_call_output", "assistant"]
 
@@ -1165,19 +1155,21 @@ class TestAlwaysAllow:
         ran: list[str] = []
         agent = self.agent(make_agent, streaming, ran, MAX_TURNS=3)
         asked: list[str] = []
-        notices: list[str] = []
+        calls: list[tuple[str, str]] = []
 
         def confirm(tool: Tool, arguments: str):
             asked.append(tool.name)
             return "always"
 
         with pytest.raises(TurnError):
-            agent.run_turn("tool_loop", on_notice=notices.append, confirm=confirm)
+            agent.run_turn(
+                "tool_loop", on_call=lambda *call: calls.append(call), confirm=confirm
+            )
 
         assert asked == ["read_file"] and len(ran) == 3
         assert agent.always_allowed == {"read_file"}
         # A call that runs without asking is shown as a line, like a read-only one.
-        assert notices == ['read_file({"path": "notes.txt"})'] * 2
+        assert calls == [("read_file", '{"path": "notes.txt"}')] * 2
 
     def test_it_lasts_for_the_session_not_just_the_turn(self, make_agent, streaming):
         ran: list[str] = []
@@ -1220,3 +1212,37 @@ class TestAlwaysAllow:
         agent.run_turn("tool_call", confirm=lambda tool, arguments: "always")
 
         assert agent.always_allowed == set()
+
+
+@pytest.mark.parametrize("streaming", [True, False])
+class TestContextEstimate:
+    def test_the_count_the_server_reports_is_kept(self, make_agent, streaming):
+        agent = make_agent(STREAMING=streaming)
+        assert agent.last_input_tokens is None
+
+        agent.run_turn("usage")
+
+        assert agent.last_input_tokens == USAGE_INPUT_TOKENS
+
+    def test_a_reply_without_a_count_leaves_the_last_one(self, make_agent, streaming):
+        agent = make_agent(STREAMING=streaming)
+        agent.run_turn("usage")
+
+        agent.run_turn("hello")  # the fake sends no usage for this one
+
+        assert agent.last_input_tokens == USAGE_INPUT_TOKENS
+
+    def test_instructions_tools_and_history_are_estimated_apart(
+        self, make_agent, streaming
+    ):
+        bare = make_agent(STREAMING=streaming)
+        with_tools = make_agent(tools=[READ_FILE], STREAMING=streaming)
+
+        before = with_tools.context_estimate()
+        with_tools.run_turn("tool_call")
+        after = with_tools.context_estimate()
+
+        assert bare.context_estimate()[1] == 0
+        assert before[1] > bare.context_estimate()[1]  # a tool is a definition
+        assert before[2] == 0 and after[2] > 0  # the turn is history now
+        assert after[:2] == before[:2]
