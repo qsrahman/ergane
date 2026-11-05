@@ -80,6 +80,22 @@ def help_(repl: Repl, args: str) -> None:
     for name, cmd in sorted(repl.commands.items()):
         repl.console.write(f"  {name:<{width}}  {cmd.description}\n")
     repl.console.blank()
+    allow = 'At "Allow …?": y allows, a allows the tool for the session, ? shows it all'
+    keys = [("y, a, ?", allow)]
+    if repl.session:
+        keys = [
+            (
+                "Alt-Enter, Ctrl-J",
+                "Add a line to the prompt (a pasted block is one prompt)",
+            ),
+            ("Tab, Up, Down", "Complete a command, recall earlier prompts"),
+            ("Ctrl-C", "Clear the line; on an empty line, press twice to quit"),
+            *keys,
+        ]
+    key_width = max(len(label) for label, _ in keys)
+    for label, effect in keys:
+        repl.console.write(f"  {label:<{key_width}}  {effect}\n")
+    repl.console.blank()
 
 
 @command("/reset")

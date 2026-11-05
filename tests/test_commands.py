@@ -160,6 +160,15 @@ class TestCommandsWithAgent:
         printed_codes = "\033[2J\033[3J\033[H" in capsys.readouterr().out
         assert printed_codes is is_terminal
 
+    def test_help_without_a_line_editor_lists_only_the_keys_that_work(
+        self, monkeypatch, make_agent, capsys
+    ):
+        run_repl(monkeypatch, make_agent(), self.inputs("/help"))
+
+        out = capsys.readouterr().out
+        assert "Alt-Enter" not in out and "Ctrl-C" not in out  # no session here
+        assert 'y, a, ?  At "Allow …?"' in out  # the question works anywhere
+
     def test_help_lists_every_registered_command(self, monkeypatch, make_agent, capsys):
         run_repl(monkeypatch, make_agent(), self.inputs("/help"))
 

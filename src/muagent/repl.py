@@ -24,13 +24,23 @@ from muagent.console import Console
 for _sequence in ("\x1b[13;2u", "\x1b[27;2;13~"):
     ANSI_SEQUENCES[_sequence] = (Keys.Escape, Keys.ControlM)
 
-_NEWLINE_KEYS = KeyBindings()
+_KEYS = KeyBindings()
 
 
-@_NEWLINE_KEYS.add("escape", "enter")  # Alt-Enter, and Shift-Enter where it is sent
-@_NEWLINE_KEYS.add("c-j")  # a line feed, which every terminal can send
+@_KEYS.add("escape", "enter")  # Alt-Enter, and Shift-Enter where it is sent
+@_KEYS.add("c-j")  # a line feed, which every terminal can send
 def _newline(event) -> None:
     event.current_buffer.insert_text("\n")
+
+
+@_KEYS.add("c-c")
+def _interrupt(event) -> None:
+    # Typed text is what a stray Ctrl-C should cost, not the session: it clears the
+    # line. On an empty line it is the usual interrupt, which `Repl.run` asks twice.
+    if event.current_buffer.text:
+        event.current_buffer.reset()
+    else:
+        event.app.exit(exception=KeyboardInterrupt, style="class:aborting")
 
 
 class _CommandCompleter(Completer):
@@ -96,7 +106,7 @@ def terminal_session(
         completer=_CommandCompleter(commands),
         auto_suggest=AutoSuggestFromHistory(),
         prompt_continuation=". ",  # lines added by hand or pasted line up under "> "
-        key_bindings=_NEWLINE_KEYS,
+        key_bindings=_KEYS,
         input=input,
         output=output,
     )
@@ -144,13 +154,23 @@ class Repl:
         )
 
         self.running = True
+        interrupted = False  # the last prompt ended in Ctrl-C
         while self.running:
             try:
                 prompt = (
                     self.session.prompt("> ") if self.session else input("> ")
                 ).strip()
-            except KeyboardInterrupt, EOFError:
+            except EOFError:
                 break
+            except KeyboardInterrupt:
+                # The conversation lives only in memory: one stray Ctrl-C must not
+                # end it.
+                if interrupted:
+                    break
+                interrupted = True
+                self.console.notice("Press Ctrl-C again, or type /exit, to quit")
+                continue
+            interrupted = False
             if prompt:
                 self.handle(prompt)
         self.console.write("Bye.\n")

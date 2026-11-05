@@ -39,11 +39,28 @@ class TestRepl:
         return run
 
     @pytest.mark.parametrize(
-        "stop", ["/exit", "/quit", "  /EXIT  ", EOFError(), KeyboardInterrupt()]
+        "stop",
+        [
+            "/exit",
+            "/quit",
+            "  /EXIT  ",
+            EOFError(),
+            [KeyboardInterrupt(), KeyboardInterrupt()],
+        ],
     )
     def test_stops_on_exit_command_or_eof(self, repl, capsys, stop):
-        assert repl([stop]) == []
+        assert repl(stop if isinstance(stop, list) else [stop]) == []
         assert capsys.readouterr().out.endswith("Bye.\n")
+
+    def test_one_ctrl_c_at_the_prompt_does_not_quit(self, repl, capsys):
+        assert repl([KeyboardInterrupt(), "hi", "/exit"]) == ["hi"]
+        assert "[Press Ctrl-C again, or type /exit, to quit]" in capsys.readouterr().out
+
+    def test_typing_between_two_ctrl_c_starts_the_count_again(self, repl, capsys):
+        inputs = [KeyboardInterrupt(), "hi", KeyboardInterrupt(), "there", "/exit"]
+
+        assert repl(inputs) == ["hi", "there"]
+        assert capsys.readouterr().out.count("Press Ctrl-C again") == 2
 
     def test_strips_input_and_skips_blank_lines(self, repl):
         assert repl(["", "   ", "  hi  ", "/exit"]) == ["hi"]
@@ -316,6 +333,31 @@ class TestTerminalSession:
             )
             Repl(agent, COMMANDS, session).run()
         return prompts, history.read_text() if history.exists() else ""
+
+    def test_ctrl_c_clears_what_was_typed_and_does_not_quit(self, tmp_path, capsys):
+        prompts, _ = self.read(tmp_path, "abc\x03def\r/exit\r")
+
+        assert prompts == ["def"]
+        assert "Press Ctrl-C again" not in capsys.readouterr().out
+
+    def test_ctrl_c_on_an_empty_line_asks_for_a_second_press(self, tmp_path, capsys):
+        prompts, _ = self.read(tmp_path, "\x03x\r/exit\r")
+
+        assert prompts == ["x"]
+        assert "Press Ctrl-C again" in capsys.readouterr().out
+
+    def test_two_ctrl_c_in_a_row_on_an_empty_line_quit(self, tmp_path, capsys):
+        prompts, _ = self.read(tmp_path, "\x03\x03")
+
+        assert prompts == [] and capsys.readouterr().out.endswith("Bye.\n")
+
+    def test_help_lists_the_keys_of_the_editor(self, tmp_path, capsys):
+        self.read(tmp_path, "/help\r/exit\r")
+
+        out = capsys.readouterr().out
+        assert "  Alt-Enter, Ctrl-J  Add a line to the prompt" in out
+        assert "Ctrl-C             Clear the line; on an empty line, press twice" in out
+        assert '"Allow …?": y allows, a allows the tool for the session' in out
 
     def test_a_line_added_by_hand_has_a_marker_under_the_prompt(self, tmp_path):
         with create_pipe_input() as pipe:
