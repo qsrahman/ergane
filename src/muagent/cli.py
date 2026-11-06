@@ -1,3 +1,6 @@
+"""The command line: parses the flags, loads the config, starts the MCP servers and
+the REPL, and closes the servers whatever happens."""
+
 import argparse
 import sys
 from collections.abc import Sequence
@@ -132,11 +135,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         )
     except KeyboardInterrupt:
         raise SystemExit(130) from None
-    if console.after_status:  # a server failed, and said so
-        console.blank()
 
     try:
         session = terminal_session(COMMANDS, state / "history")
-        Repl(Agent(config, tools=mcp_tools), COMMANDS, session).run()
+        # The banner is separated from the notices of servers that failed by the
+        # console itself, which is why it is the same one.
+        Repl(Agent(config, tools=mcp_tools), COMMANDS, session, console).run()
     finally:
         close_servers(servers)

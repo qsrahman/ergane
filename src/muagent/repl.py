@@ -1,3 +1,10 @@
+"""The input loop: reads prompts, dispatches slash commands, runs turns.
+
+The line editor is prompt_toolkit (history, completion, bracketed paste); macOS's
+Python has libedit, which has no bracketed paste, so a pasted block would be many
+prompts. With input or output redirected there is no session and `input()` reads.
+"""
+
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -121,6 +128,7 @@ class Repl:
         agent: Agent,
         commands: Mapping[str, Command],
         session: PromptSession[str] | None = None,
+        console: Console | None = None,
     ) -> None:
         """Create a REPL for an agent.
 
@@ -129,16 +137,17 @@ class Repl:
             commands: The slash commands, by name.
             session: The line editor that reads the prompts (see
                 `terminal_session`); without one, `input()` does.
+            console: What prints; one that already printed (the start-up notices)
+                keeps the state that separates its output from the next.
         """
         self.agent = agent
-        # An answer to "Allow …?" is not a prompt: it has its own editor, so it is
-        # not kept in the history or completed as a command.
-        ask = (
-            PromptSession(input=session.app.input, output=session.app.output).prompt
-            if session
-            else None
-        )
-        self.console = Console(ask)
+        self.console = console or Console()
+        if session:
+            # An answer to "Allow …?" is not a prompt: it has its own editor, so it
+            # is not kept in the history or completed as a command.
+            self.console.ask = PromptSession(
+                input=session.app.input, output=session.app.output
+            ).prompt
         self.running = False
         self.commands = commands
         self.session = session

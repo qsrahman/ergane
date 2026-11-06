@@ -483,3 +483,18 @@ class TestDim:
         monkeypatch.setenv("NO_COLOR", "1")
 
         assert Console().color is False
+
+
+class TestColumns:
+    def test_the_texts_are_lined_up_under_the_longest_label(self, capsys):
+        Console().columns([("a", "one"), ("long", "two")])
+
+        assert capsys.readouterr().out == "  a     one\n  long  two\n"
+
+    def test_it_is_plain_text_that_the_next_notice_stands_apart_from(self, capsys):
+        console = Console()
+
+        console.columns([("a", "one")])
+        console.notice("done")
+
+        assert capsys.readouterr().out == "  a  one\n[done]\n"

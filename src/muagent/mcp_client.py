@@ -7,6 +7,40 @@ The MCP SDK is async and the rest of muagent is not, so each server runs on a
 background thread with its own event loop, and a call blocks until the loop answers.
 The `mcp` package is imported only when a server starts, so muagent works without it
 as long as no server is configured.
+
+Design notes, for whoever changes this:
+
+- One task per server (`_serve`) enters and leaves the whole connection: the SDK's task
+  groups must be left by the task that entered them. Its end is noticed by a
+  done-callback (`_task_done`), not by code in `_serve`, because a task cancelled before
+  its first step never runs any of its code; the callback also reads the task's
+  exception, or asyncio logs it to the terminal. `_close` cancels through a callback
+  run on the loop after the one that creates the task, for the same reason.
+- Starting: `launch()` every server, then `connect()` each. The startup timeout counts
+  from `launch()`, so servers that never answer delay the start by one timeout. A
+  failed `connect()` leaves the server for `close()` (stopping takes seconds: the SDK
+  waits 2 s for a program that ignores its closed input); `start_servers` closes the
+  failed ones together, `close_servers` the running ones.
+- A server whose connection ended is started again by the next call (`_submit`), up to
+  `_MAX_RESTARTS` times; the call that found it dead fails and is not repeated. After
+  `_IDLE_SECONDS` of silence a call first pings, because a program that exits while the
+  task is only waiting is not noticed otherwise. Only an answer that says the
+  connection is closed counts: a busy server is not gone.
+- Names are `server__tool` with what the API rejects replaced by `_`, and made unique
+  across the servers (`a` with `b__c` and `a__b` with `c` collide). A name the API
+  rejects fails the whole request.
+- Trust is `read_only` for a whole server, from the user's file. The server's own
+  `readOnlyHint` is never used: a server can claim anything.
+- A tool's `check` only requires the keys the schema requires: a JSON Schema check is
+  stricter than servers, which accept `"4"` for an integer, and the server's own errors
+  come back as text for the model.
+- A program does not inherit the environment, only the SDK's short allow-list plus its
+  `env`, so it never sees `OPENAI_API_KEY`; it starts in muagent's directory (there is
+  no `cwd` setting); its stderr goes to a log file, or it would land in the terminal.
+  A url must be https unless it is loopback, and may not hold credentials; the SDK
+  follows redirects only within the url's origin, so the headers go nowhere else.
+- The tools are listed once, at start; changes a server announces later are not
+  followed.
 """
 
 import asyncio

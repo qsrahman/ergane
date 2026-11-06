@@ -77,9 +77,9 @@ def command(name: str, arguments: tuple[str, ...] = ()) -> Callable[[Handler], H
 @command("/help")
 def help_(repl: Repl, args: str) -> None:
     """List the available commands."""
-    width = max(len(name) for name in repl.commands)
-    for name, cmd in sorted(repl.commands.items()):
-        repl.console.write(f"  {name:<{width}}  {cmd.description}\n")
+    repl.console.columns(
+        [(name, cmd.description) for name, cmd in sorted(repl.commands.items())]
+    )
     repl.console.blank()
     allow = 'At "Allow …?": y allows, a allows the tool for the session, ? shows it all'
     keys = [("y, a, ?", allow)]
@@ -93,9 +93,7 @@ def help_(repl: Repl, args: str) -> None:
             ("Ctrl-C", "Clear the line; on an empty line, press twice to quit"),
             *keys,
         ]
-    key_width = max(len(label) for label, _ in keys)
-    for label, effect in keys:
-        repl.console.write(f"  {label:<{key_width}}  {effect}\n")
+    repl.console.columns(keys)
     repl.console.blank()
 
 
@@ -212,9 +210,7 @@ def context_(repl: Repl, args: str) -> None:
         rows.append(
             ("last request", f"{agent.last_input_tokens:,} (counted by the server)")
         )
-    width = max(len(label) for label, _ in rows)
-    for label, tokens in rows:
-        repl.console.write(f"  {label:<{width}}  {tokens}\n")
+    repl.console.columns(rows)
     repl.console.blank()
 
 
@@ -232,17 +228,16 @@ def tools_(repl: Repl, args: str) -> str | None:
     asks = [name for name in asks if name not in allowed]
     if not (free or allowed or asks):
         return "Tools: none"
-    groups = [
-        (label, names)
-        for label, names in (
-            ("run without asking", free),
-            ("allowed this session", allowed),
-            ("ask first", asks),
-        )
-        if names
-    ]
-    width = max(len(label) for label, _ in groups)
-    for label, names in groups:
-        repl.console.write(f"  {label:<{width}}  {', '.join(names)}\n")
+    repl.console.columns(
+        [
+            (label, ", ".join(names))
+            for label, names in (
+                ("run without asking", free),
+                ("allowed this session", allowed),
+                ("ask first", asks),
+            )
+            if names
+        ]
+    )
     repl.console.blank()
     return None

@@ -1,6 +1,15 @@
+"""The conversation history, how it is trimmed or summarized, and token estimates.
+
+Every request uses `store=False`, so the whole history is resent each turn. It
+changes in four places only: `save_turn`, `undo` (which `rewind` uses), `reset` and
+`compact`; `begin_turn` and the rounds of a turn work on a copy. The history is
+user and assistant messages from its first item, apart from the tool work of the
+newest turn, which stays so that a follow-up can refer to what the tools found.
+"""
+
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, cast
 
 from openai.types.responses import ResponseInputParam
@@ -143,26 +152,20 @@ def drop_outputs(items: ResponseInputParam, upto: int, needed: int) -> int:
     """
     plain = cast(list[dict[str, Any]], items)
     freed = 0
-    for i in range(upto):
-        item = plain[i]
-        if freed >= needed:
-            return freed
-        if item.get("type") == "function_call_output" and (
-            len(item["output"]) > PRUNE_CHARS
-        ):
-            shortened = {**item, "output": shorten(item["output"])}
-            freed += estimate_tokens(item) - estimate_tokens(shortened)
-            plain[i] = shortened
-    for i in range(upto):
-        item = plain[i]
-        if freed >= needed:
-            break
-        if item.get("type") == "function_call_output" and (
-            item["output"] != DROPPED_OUTPUT
-        ):
-            dropped = {**item, "output": DROPPED_OUTPUT}
-            freed += estimate_tokens(item) - estimate_tokens(dropped)
-            plain[i] = dropped
+
+    def replace(wanted: Callable[[str], bool], new: Callable[[str], str]) -> None:
+        nonlocal freed
+        for i in range(upto):
+            item = plain[i]
+            if freed >= needed:
+                return
+            if item.get("type") == "function_call_output" and wanted(item["output"]):
+                replaced = {**item, "output": new(item["output"])}
+                freed += estimate_tokens(item) - estimate_tokens(replaced)
+                plain[i] = replaced
+
+    replace(lambda output: len(output) > PRUNE_CHARS, shorten)
+    replace(lambda output: output != DROPPED_OUTPUT, lambda output: DROPPED_OUTPUT)
     return freed
 
 

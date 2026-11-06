@@ -1,10 +1,19 @@
+"""All terminal output, and the question that asks permission for a tool.
+
+Output is plain text (a streamed reply, a command's output) or a status block (a
+notice, the question). Both go through `Console._emit`, the one place that keeps them
+apart: a status block starts on a fresh line, and plain text after one starts after a
+blank line. A new kind of output goes through `_emit` too. Replies and notices carry
+text from the model or a server, so everything is `sanitize`d first.
+"""
+
 import io
 import json
 import os
 import re
 import shutil
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, Literal
 
 from muagent.tools import Tool
@@ -102,7 +111,7 @@ class Console:
             ask: Reads the answer to a question, given the question as its prompt;
                 `input()` if omitted.
         """
-        self._ask = ask
+        self.ask = ask
         # Status lines are dimmed on a terminal, unless NO_COLOR asks for no colour.
         self.color = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
         self.at_line_start = True
@@ -147,6 +156,17 @@ class Console:
     def blank(self) -> None:
         """Print an empty line."""
         self.write("\n")
+
+    def columns(self, rows: Sequence[tuple[str, str]]) -> None:
+        """Print rows of a label and a text, the texts lined up.
+
+        Args:
+            rows: The labels and what to say of each. Each line is indented by two
+                spaces; the caller adds the blank line after the last.
+        """
+        width = max(len(label) for label, _ in rows)
+        for label, text in rows:
+            self.write(f"  {label:<{width}}  {text}\n")
 
     def end_line(self) -> None:
         """Finish the current line, if one was started."""
@@ -205,7 +225,7 @@ class Console:
             self.end_line()
             self.at_line_start = False  # the prompt leaves the cursor after it
             try:
-                answer = (self._ask or input)(sanitize(prompt)).strip().lower()
+                answer = (self.ask or input)(sanitize(prompt)).strip().lower()
             except EOFError:
                 print()  # no Enter ended the line
                 answer = ""

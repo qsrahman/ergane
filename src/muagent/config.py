@@ -3,6 +3,25 @@
 A value comes from the highest of these that sets it: the command line, the
 environment, `config.json`, and the default. `config.json` also lists the MCP
 servers, which only it can do.
+
+How it is built, and why:
+
+- `Config.settings_customise_sources` is exactly that chain. The flags arrive as
+  keyword arguments (pydantic-settings' highest source) by field name; `None` is a
+  value (`--reasoning-effort default`). There is no `.env` and no flag for the key (it
+  would show in the process list).
+- The file is the user's, never one in the working directory: whoever controls a
+  project could set `base_url`, and the key and every prompt would go there. For the
+  same reason `_Environment` drops `mcpServers` (a server is a program), which
+  pydantic-settings would read from a JSON variable. `load_config` gives the path to a
+  subclass through `json_file`, since it is only known at run time.
+- Three fields have the environment's names as aliases (`OPENAI_*`), so `_ConfigFile`
+  renames those keys; the others are read from the variable named like the field, in
+  any case. `extra="forbid"`: a key that is not a setting names itself in the error,
+  and a file that is not a JSON object is a `ValidationError` too (`_fail`), so
+  `main()` has one path for every mistake.
+- `api_key` may be `${NAME}`. It is filled in on the value that won, so a placeholder
+  the environment overrode is never looked at.
 """
 
 import json

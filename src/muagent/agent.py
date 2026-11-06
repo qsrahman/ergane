@@ -1,3 +1,27 @@
+"""The agent: runs a turn against the model, with tools, inside a token budget.
+
+`Agent` does no terminal I/O; what the user should see goes through the callbacks of
+`run_turn`. TURN.md walks a turn through this module. What must stay true when you
+change it:
+
+- Every function call has its output before anything is sent or saved (the API
+  rejects a call without one, and an output without its call). Rounds that fail or
+  are interrupted are answered, never left open.
+- A turn is saved whole or not at all, with one exception: once a round has
+  completed (tools may have had effects, and the model must know), a failure, Ctrl-C
+  or the `max_turns` cap keeps the turn with a closing note. A failure in the first
+  round saves nothing.
+- A stream that breaks before any text is shown is sent again (`STREAM_RETRIES`):
+  Ollama's cloud proxy lost a connection 100 s into a request and a turn of 25 rounds
+  was thrown away. Tools run only after a complete response, so a retry repeats a
+  request, never an action.
+- Summaries (`compact`) change nothing unless the summary is good, and a failure
+  never stops the turn. The design follows research into opencode, Codex, OpenClaw, pi,
+  Qwen Code and DeepSeek Harness. Not done: a separate summary model, a summary
+  request that shares the chat's cache, splitting one oversized turn, and a stored
+  transcript with undo.
+"""
+
 import platform
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -415,26 +439,23 @@ class Agent:
             f"- Current date: {date.today().isoformat()}\n"
         )
 
-    def context_estimate(self) -> tuple[int, int, int]:
-        """Estimate the tokens of the instructions, the tool definitions and the
-        history, which together are what the next request would carry."""
+    def _fixed_estimate(self) -> tuple[int, int]:
+        """Estimate the tokens that every request carries whatever the conversation:
+        the instructions, and the definitions of the tools."""
+        tools = [tool.param() for tool in self.tools.values()]
         return (
             estimate_tokens({"instructions": self._instructions()}),
-            estimate_tokens({"tools": [tool.param() for tool in self.tools.values()]})
-            if self.tools
-            else 0,
-            self.context.estimate(),
+            estimate_tokens({"tools": tools}) if tools else 0,
         )
 
     def _fixed_tokens(self) -> int:
-        """Estimate the tokens that every request carries whatever the conversation:
-        the instructions and the definitions of the tools."""
-        return estimate_tokens(
-            {
-                "instructions": self._instructions(),
-                "tools": [tool.param() for tool in self.tools.values()],
-            }
-        )
+        """The instructions and the definitions of the tools, together."""
+        return sum(self._fixed_estimate())
+
+    def context_estimate(self) -> tuple[int, int, int]:
+        """Estimate the tokens of the instructions, the tool definitions and the
+        history, which together are what the next request would carry."""
+        return (*self._fixed_estimate(), self.context.estimate())
 
     def _send_response(
         self,
@@ -517,6 +538,9 @@ class Agent:
         self, params: ResponseCreateParamsBase, on_text: Callable[[str], None]
     ) -> Response:
         """Stream one request and return its final response.
+
+        This is `responses.stream`, not `create(stream=True)`: it rebuilds the final
+        output when a compatible server leaves it out of `response.completed`.
 
         Raises:
             StreamCut: If the stream ends without a final response and the server

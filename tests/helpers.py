@@ -7,6 +7,7 @@ from muagent.agent import Agent
 from muagent.commands import COMMANDS
 from muagent.config import Config
 from muagent.repl import Repl
+from muagent.tools import Tool
 
 
 def make_context(turns: int) -> ResponseInputParam:
@@ -37,3 +38,9 @@ def run_repl(monkeypatch: pytest.MonkeyPatch, agent: Agent, inputs: list) -> Non
 
     monkeypatch.setattr("builtins.input", fake_input)
     Repl(agent, COMMANDS).run()
+
+
+def tool_with(function) -> Tool:
+    """A tool named read_file (the one the fake API calls) that runs `function`."""
+    function.__name__ = "read_file"
+    return Tool.from_function(function)
