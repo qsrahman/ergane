@@ -82,13 +82,11 @@ def _fit(arguments: str, room: int) -> tuple[str, bool]:
         line = " ".join(arguments.split())  # not JSON: nothing but its whitespace
     else:
         line = json.dumps(parsed, ensure_ascii=False)
-        if len(line) <= room:
-            return line, False
-        for cap in (64, 40, 24, 16, 8):
-            line = json.dumps(_cut_strings(parsed, cap), ensure_ascii=False)
-            if len(line) <= room:
-                return line, True
-        return line[: room - 1] + "…", True
+        if len(line) > room:
+            for cap in (64, 40, 24, 16, 8):
+                line = json.dumps(_cut_strings(parsed, cap), ensure_ascii=False)
+                if len(line) <= room:
+                    return line, True
     if len(line) <= room:
         return line, False
     return line[: room - 1] + "…", True

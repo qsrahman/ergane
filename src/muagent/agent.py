@@ -45,12 +45,7 @@ from muagent.context import (
     extract_summary,
     transcript,
 )
-from muagent.errors import (
-    StreamCut,
-    TurnError,
-    describe_error,
-    is_context_overflow,
-)
+from muagent.errors import StreamCut, TurnError, describe_error, is_context_overflow
 from muagent.prompts import COMPACT_PROMPT, SYSTEM_PROMPT, SYSTEM_PROMPT_NO_TOOLS
 from muagent.tools import Tool
 
@@ -504,9 +499,13 @@ class Agent:
         # Non-reasoning models reject a reasoning setting, so leave it out if unset.
         effort = self.config.reasoning_effort
         if effort is not None:
-            if summary and effort not in ("none", "minimal", "low"):
-                effort = "low"  # a summary does not need thinking; never raise it
-            params["reasoning"] = {"effort": effort}
+            params["reasoning"] = {
+                "effort": (
+                    "low"
+                    if summary and effort not in ("none", "minimal", "low")
+                    else effort
+                )
+            }
         if summary:
             params["max_output_tokens"] = SUMMARY_MAX_TOKENS
         elif self.tools:

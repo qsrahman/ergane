@@ -294,11 +294,7 @@ class Context:
             How many items from the front to summarize; 0 if there is nothing older
             than what is kept.
         """
-        starts = [
-            i
-            for i, item in enumerate(self.items)
-            if isinstance(item, dict) and item.get("role") == "user"
-        ]
+        starts = [i for i, item in enumerate(self.items) if _is_user_message(item)]
         if len(starts) < 2:
             return 0
         ends = [*starts[1:], len(self.items)]
