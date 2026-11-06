@@ -389,12 +389,14 @@ the model still answered.
 | What                                  | Where                                                        |
 |---------------------------------------|--------------------------------------------------------------|
 | reading input, commands, `ask`        | `Repl` in [`repl.py`](src/muagent/repl.py), [`commands.py`](src/muagent/commands.py) |
-| the turn, the rounds, the stops       | `Agent.run_turn` in [`agent.py`](src/muagent/agent.py)       |
+| the turn, the rounds, the stops       | `Agent.run_turn`, `_ask`, `_run_round` in [`agent.py`](src/muagent/agent.py) |
 | the request and the stream            | `Agent._send_response`                                       |
 | calls and permissions                 | `Agent._run_tools`, `Tool` in [`tools.py`](src/muagent/tools.py) |
 | history, summary, trimming, saving    | `Context` in [`context.py`](src/muagent/context.py)          |
-| summarizing, pruning, too-long retry  | `Agent.compact`, `_drop_outputs`, `_shrink` in [`agent.py`](src/muagent/agent.py) |
+| summarizing, too-long retry           | `Agent.compact`, `_shrink` in [`agent.py`](src/muagent/agent.py) |
+| pruning, transcript, summary check    | `drop_outputs`, `transcript`, `extract_summary` in [`context.py`](src/muagent/context.py) |
+| errors and how they are worded        | [`errors.py`](src/muagent/errors.py)                         |
 | everything printed                    | `Console` in [`console.py`](src/muagent/console.py)          |
 | MCP servers                           | [`mcp_client.py`](src/muagent/mcp_client.py)                 |
-| the system prompt                     | `SYSTEM_PROMPT` in `agent.py`                                |
+| the prompts                           | [`prompts.py`](src/muagent/prompts.py)                       |
 | the layout of an exchange, pinned     | `TestReplRendering` in [`tests/test_repl.py`](tests/test_repl.py) |

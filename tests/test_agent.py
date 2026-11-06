@@ -19,19 +19,13 @@ from fake_api import (
 from helpers import make_config, make_context
 from muagent.agent import (
     COMPACT_FAILURES,
-    COMPACT_PROMPT,
-    DROPPED_OUTPUT,
-    PRUNE_CHARS,
     STREAM_RETRIES,
     SUMMARY_MAX_TOKENS,
-    SYSTEM_PROMPT,
-    SYSTEM_PROMPT_NO_TOOLS,
     Agent,
-    TurnError,
-    describe_error,
-    is_context_overflow,
 )
-from muagent.context import estimate_tokens
+from muagent.context import DROPPED_OUTPUT, PRUNE_CHARS, estimate_tokens
+from muagent.errors import TurnError, describe_error, is_context_overflow
+from muagent.prompts import COMPACT_PROMPT, SYSTEM_PROMPT, SYSTEM_PROMPT_NO_TOOLS
 from muagent.tools import MAX_OUTPUT_CHARS, Tool
 
 
@@ -1568,6 +1562,21 @@ class TestTooLong:
             caught.value
         )
         assert len(fake_server.requests) == 1
+
+    def test_after_a_tool_it_is_tried_once_too(
+        self, make_agent, fake_server, streaming
+    ):
+        def huge(path: str) -> str:
+            """Read a text file."""
+            return "x" * 20000  # shortened the first time, dropped the second
+
+        agent = make_agent(tools=[tool_with(huge)], STREAMING=streaming)
+
+        with pytest.raises(Exception) as caught:
+            agent.run_turn("tool_then_overflow")
+
+        assert is_context_overflow(caught.value)
+        assert len(fake_server.requests) == 3  # the call, refused, shortened, refused
 
     def test_it_is_tried_once_in_a_turn(self, make_agent, fake_server, streaming):
         agent = make_agent(

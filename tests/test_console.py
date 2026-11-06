@@ -5,8 +5,9 @@ import sys
 import pytest
 
 from helpers import make_config, run_repl
-from muagent.agent import Agent, TurnError
+from muagent.agent import Agent
 from muagent.console import Console, sanitize
+from muagent.errors import TurnError
 from muagent.tools import Tool
 
 

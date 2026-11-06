@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING
 from openai.types.shared import ReasoningEffort
 from pydantic import TypeAdapter, ValidationError
 
-from muagent.agent import TurnError, describe_error
 from muagent.config import EFFORTS
+from muagent.errors import TurnError, describe_error
 
 if TYPE_CHECKING:
     from muagent.repl import Repl

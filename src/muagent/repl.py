@@ -13,9 +13,10 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.output import Output
 
-from muagent.agent import Agent, TurnError, describe_error
+from muagent.agent import Agent
 from muagent.commands import Command
 from muagent.console import Console
+from muagent.errors import TurnError, describe_error
 
 # A terminal asked for Shift-Enter (kitty's keyboard protocol, or xterm's
 # modifyOtherKeys) sends one of these, which prompt_toolkit does not know. They are

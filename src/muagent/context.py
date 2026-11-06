@@ -1,7 +1,24 @@
 import json
+import re
 from collections.abc import Mapping
+from typing import Any, cast
 
 from openai.types.responses import ResponseInputParam
+
+from muagent.errors import TurnError
+
+# What stands in for a tool result that was dropped to make room (see drop_outputs).
+DROPPED_OUTPUT = "[output dropped to fit the context]"
+
+# A tool result longer than this is shortened, before it is dropped, when the turn
+# does not fit: the start and the end are kept, since the start says what it is and
+# the end often says how it went, and the marker says that something is hidden.
+PRUNE_CHARS = 8000
+PRUNE_HEAD = 4000
+PRUNE_TAIL = 1000
+
+# A tool result in the text that is summarized is cut to this many characters.
+TRANSCRIPT_RESULT_CHARS = 2000
 
 # Item types that only matter while a turn runs, and for the turn after it.
 _TOOL_WORK = ("reasoning", "function_call", "function_call_output")
@@ -27,6 +44,126 @@ def estimate_tokens(item: Mapping[str, object]) -> int:
     """
     counted = {k: v for k, v in item.items() if k != "encrypted_content"}
     return len(json.dumps(counted, ensure_ascii=False).encode()) // 4 + 1
+
+
+def _cut(text: str, chars: int) -> str:
+    """The text, or its first `chars` characters and a count of the rest."""
+    if len(text) <= chars:
+        return text
+    return f"{text[:chars]} [... {len(text) - chars:,} more characters]"
+
+
+def shorten(text: str) -> str:
+    """A long tool result with its middle hidden, and a marker that says so."""
+    hidden = len(text) - PRUNE_HEAD - PRUNE_TAIL
+    return (
+        f"{text[:PRUNE_HEAD]}\n[... {hidden:,} characters hidden; call the tool "
+        f"again if you need them ...]\n{text[-PRUNE_TAIL:]}"
+    )
+
+
+def transcript(items: ResponseInputParam) -> str:
+    """Items as labelled text, for the model that summarizes them.
+
+    As text, so that it does not take the conversation for one to continue. Tool
+    results are cut, and reasoning is left out.
+    """
+    lines = []
+    for item in cast(list[dict[str, Any]], items):
+        if item.get("type") == "function_call":
+            lines.append(f"[Tool call]: {item['name']}({_cut(item['arguments'], 500)})")
+        elif item.get("type") == "function_call_output":
+            lines.append(
+                f"[Tool result]: {_cut(item['output'], TRANSCRIPT_RESULT_CHARS)}"
+            )
+        elif item.get("role") in ("user", "assistant"):
+            content = item["content"]
+            if not isinstance(content, str):  # the model's own message items
+                content = "".join(part.get("text", "") for part in content)
+            label = "User" if item["role"] == "user" else "Assistant"
+            lines.append(f"[{label}]: {content}")
+    return "\n".join(lines)
+
+
+def extract_summary(text: str, replaces: str) -> str:
+    """The summary out of the model's answer, if it is one worth keeping.
+
+    The scratchpad (<analysis>) is dropped. The summary is what is in <summary>, or
+    else the rest of the answer: models that were asked for the tags do not all
+    write them (gemma4 does not), and an answer that was cut off by the output cap
+    never gets here, since its status says so.
+
+    Raises:
+        TurnError: If there is nothing left, it has no headings (so it is not the
+            summary that was asked for), or it is longer than the text it replaces.
+    """
+    text = re.sub(r"<analysis>.*?(</analysis>|$)", "", text, flags=re.DOTALL)
+    match = re.search(r"<summary>(.*?)(</summary>|$)", text, flags=re.DOTALL)
+    summary = (match.group(1) if match else text).strip()
+    if not summary:
+        raise TurnError("the summary is empty")
+    if "##" not in summary:
+        raise TurnError("the answer is not a summary: it has no headings")
+    if len(summary) >= len(replaces):
+        raise TurnError("the summary is longer than the text it replaces")
+    return summary
+
+
+def answer_open_calls(items: ResponseInputParam) -> None:
+    """Give every function call in `items` that has no output one that says the
+    user interrupted it."""
+    plain = cast(list[dict[str, Any]], items)
+    answered = {i["call_id"] for i in plain if i.get("type") == "function_call_output"}
+    for item in list(plain):
+        if item.get("type") == "function_call" and item["call_id"] not in answered:
+            plain.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": item["call_id"],
+                    "output": "The user interrupted this call: it did not "
+                    "finish, or did not run.",
+                }
+            )
+
+
+def drop_outputs(items: ResponseInputParam, upto: int, needed: int) -> int:
+    """Shorten, then drop, tool results among the first `upto` items, oldest
+    first, until `needed` tokens (estimated) are freed or none is left.
+
+    The calls stay, so the model still sees what it did and every call keeps its
+    output, which the API requires. An item is replaced, not edited: the items
+    of earlier turns are shared with the history.
+
+    A long result is first shortened to its start and end (PRUNE_CHARS), which
+    often frees enough and leaves the model something to read; only what is
+    still needed after that is replaced by the placeholder.
+
+    Returns:
+        The estimated number of tokens freed.
+    """
+    plain = cast(list[dict[str, Any]], items)
+    freed = 0
+    for i in range(upto):
+        item = plain[i]
+        if freed >= needed:
+            return freed
+        if item.get("type") == "function_call_output" and (
+            len(item["output"]) > PRUNE_CHARS
+        ):
+            shortened = {**item, "output": shorten(item["output"])}
+            freed += estimate_tokens(item) - estimate_tokens(shortened)
+            plain[i] = shortened
+    for i in range(upto):
+        item = plain[i]
+        if freed >= needed:
+            break
+        if item.get("type") == "function_call_output" and (
+            item["output"] != DROPPED_OUTPUT
+        ):
+            dropped = {**item, "output": DROPPED_OUTPUT}
+            freed += estimate_tokens(item) - estimate_tokens(dropped)
+            plain[i] = dropped
+    return freed
 
 
 class Context:
