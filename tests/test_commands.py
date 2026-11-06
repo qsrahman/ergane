@@ -294,11 +294,11 @@ class TestContextCommand:
         run_repl(monkeypatch, agent, ["/context", "/exit"])
 
         out = capsys.readouterr().out
-        assert f"  instructions  ~{instructions:,}\n" in out
-        assert f"  tools (2)     ~{tools:,}\n" in out
-        assert f"  history       ~{history:,}\n" in out
+        assert f"  instructions   ~{instructions:,}\n" in out
+        assert f"  tools (2)      ~{tools:,}\n" in out
+        assert f"  history        ~{history:,}\n" in out
         assert (
-            f"  total         ~{total:,} of 10,000 ({total * 100 // 10000}%)\n" in out
+            f"  total          ~{total:,} of 10,000 ({total * 100 // 10000}%)\n" in out
         )
         assert "last request" not in out  # nothing has been sent yet
 
@@ -311,7 +311,7 @@ class TestContextCommand:
         run_repl(monkeypatch, agent, ["/context", "/exit"])
 
         assert (
-            "  last request  12,345 (counted by the server)\n"
+            "  last request   12,345 (counted by the server)\n"
             in capsys.readouterr().out
         )
 
@@ -324,7 +324,89 @@ class TestContextCommand:
 
         run_repl(monkeypatch, agent, ["/reset", "/context", "/exit"])
 
-        assert "  history       ~0\n" in capsys.readouterr().out
+        assert "  history        ~0\n" in capsys.readouterr().out
+
+
+def long_history() -> list:
+    items = []
+    for i in range(10):
+        items.append({"role": "user", "content": f"q{i} " + "x" * 400})
+        items.append({"role": "assistant", "content": f"a{i} " + "y" * 400})
+    return items
+
+
+class TestCompactCommands:
+    def agent(self, make_agent, **config):
+        agent = make_agent(MAX_CONTEXT_TOKENS=4000, KEEP_RECENT_TOKENS=500, **config)
+        agent.context.items = long_history()
+        return agent
+
+    def test_compact_summarizes_now_and_summary_shows_it(
+        self, monkeypatch, make_agent, capsys
+    ):
+        agent = self.agent(make_agent, AUTO_COMPACT=False)
+
+        run_repl(monkeypatch, agent, ["/compact", "/summary", "/exit"])
+
+        out = capsys.readouterr().out
+        assert "[Summarizing earlier messages…]" in out
+        assert "[Summarized " in out and "earlier turns" in out
+        assert "\nNOTES 8\n" in out  # shown by /summary: the 8 turns summarized
+        assert agent.context.summary == "## Goal\nNOTES 8"
+
+    def test_a_focus_goes_to_the_model(self, monkeypatch, make_agent, fake_server):
+        agent = self.agent(make_agent, AUTO_COMPACT=False)
+
+        run_repl(monkeypatch, agent, ["/compact the database schema", "/exit"])
+
+        assert (
+            "Focus: the database schema"
+            in fake_server.requests[0]["input"][0]["content"]
+        )
+
+    def test_compact_says_when_there_is_nothing_to_summarize(
+        self, monkeypatch, make_agent, capsys
+    ):
+        run_repl(monkeypatch, make_agent(), ["/compact", "/exit"])
+
+        assert "[Nothing to summarize: the history is short]" in capsys.readouterr().out
+
+    def test_a_summary_that_fails_is_reported_and_changes_nothing(
+        self, monkeypatch, make_agent, capsys
+    ):
+        agent = self.agent(make_agent, AUTO_COMPACT=False)
+        agent.context.items[0] = {"role": "user", "content": "SUMMARY_EMPTY"}
+        before = list(agent.context.items)
+
+        run_repl(monkeypatch, agent, ["/compact", "/exit"])
+
+        assert "[Could not summarize: the summary is empty]" in capsys.readouterr().out
+        assert agent.context.items == before and agent.context.summary is None
+
+    def test_summary_before_there_is_one(self, monkeypatch, make_agent, capsys):
+        run_repl(monkeypatch, make_agent(), ["/summary", "/exit"])
+
+        assert "[No summary yet]" in capsys.readouterr().out
+
+    def test_reset_forgets_the_summary(self, monkeypatch, make_agent):
+        agent = self.agent(make_agent, AUTO_COMPACT=False)
+        agent.context.summary = "NOTES"
+
+        run_repl(monkeypatch, agent, ["/reset", "/exit"])
+
+        assert agent.context.summary is None
+
+    def test_context_says_where_summaries_start(self, monkeypatch, make_agent, capsys):
+        agent = make_agent(MAX_CONTEXT_TOKENS=10000)
+
+        run_repl(monkeypatch, agent, ["/context", "/exit"])
+
+        assert "  summarizes at  ~7,500\n" in capsys.readouterr().out
+
+    def test_context_says_when_they_are_off(self, monkeypatch, make_agent, capsys):
+        run_repl(monkeypatch, make_agent(AUTO_COMPACT=False), ["/context", "/exit"])
+
+        assert "off (/compact does it by hand)" in capsys.readouterr().out
 
 
 class TestToolsCommand:

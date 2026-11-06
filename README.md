@@ -6,7 +6,7 @@ A minimal terminal chat agent built on the OpenAI [Responses API](https://platfo
 
 - Interactive REPL built on [prompt_toolkit](https://python-prompt-toolkit.readthedocs.io/): line editing, a history that is kept between sessions (with a grey suggestion from it as you type), Tab completion of the slash commands and of `/effort`'s levels, and a pasted block (a stack trace, a function) is one prompt
 - Streaming output, which can be turned off
-- Client-side conversation history with token-based trimming, so long sessions stay within a configurable context budget
+- Client-side conversation history that stays within a configurable context budget: when it gets long, the oldest turns are summarized by the model (the newest are kept as they are), and a long tool result is shortened to its start and end when it does not fit
 - Works with any OpenAI-compatible base URL
 - Tool calling: the model can call the tools of your [MCP servers](#mcp-servers), sees their errors, and can correct itself
 
@@ -50,6 +50,9 @@ Each setting comes from the first of these that sets it: **its command-line flag
 | `streaming`          | `STREAMING`          | `--streaming`, `--no-streaming` | `true`         | Stream tokens as they arrive |
 | `max_context_tokens` | `MAX_CONTEXT_TOKENS` | `--max-context-tokens N` | `65536`               | Token budget for one request: the system instructions, the definitions of the tools and the conversation history together (not the reply). Old turns are dropped to fit it, so many or long tool definitions leave less room for the history. Keep it well below the model's context window. |
 | `reasoning_effort`   | `REASONING_EFFORT`   | `--reasoning-effort LEVEL` | unset (model default) | `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`; the flag also takes `default`, to send none over a value in the file. Leave unset for non-reasoning models, which reject it. |
+| `auto_compact`       | `AUTO_COMPACT`       | `--auto-compact`, `--no-auto-compact` | `true`   | Summarize the oldest turns when the history gets long (see [Long conversations](#long-conversations)). |
+| `compact_at`         | `COMPACT_AT`         | `--compact-at SHARE`     | `0.75`                | Share of `max_context_tokens` at which to summarize. |
+| `keep_recent_tokens` | `KEEP_RECENT_TOKENS` | `--keep-recent-tokens N` | `15000`               | About how many tokens of the newest turns stay as they are (at most half of where summarizing starts). |
 | `max_turns`          | `MAX_TURNS`          | `--max-turns N`          | `25`                  | Most model calls for one prompt: the cap on the tool loop. |
 | `mcpServers`         | none                 | `--no-mcp` (start none)  | none                  | The [MCP servers](#mcp-servers). |
 
@@ -71,6 +74,8 @@ Type a prompt at `>` and press Enter. Up and Down recall earlier prompts, which 
 | `/retry`          | Resend the last prompt; if its reply was saved, it is replaced                   |
 | `/undo`           | Remove the last exchange from the history                                        |
 | `/tools`          | List the tools offered to the model, by whether they ask first  |
+| `/compact [FOCUS]` | Summarize the earlier turns now; `FOCUS` says what the summary must keep |
+| `/summary`        | Show the summary that stands for the earliest turns |
 | `/context`        | Show how much of the context budget the next request would use: the instructions, the tool definitions and the history (estimates), and the count the server gave for the last request |
 | `/model [NAME]`   | Show the model, or switch to `NAME` for the rest of the session                  |
 | `/effort [LEVEL]` | Show the reasoning effort, or set it (`none` … `max`, or `default` to leave it out) |
@@ -143,6 +148,18 @@ A few things to know before you add a server:
 - **Tool descriptions come from the server** and are read by the model. Add servers you trust.
 - The list of tools is read once, at start.
 
+## Long conversations
+
+Every request carries the whole history, so a long session would outgrow `max_context_tokens`. muagent deals with it in three steps, from the cheapest:
+
+1. **A long tool result is shortened** when the turn does not fit: the first 4,000 and last 1,000 characters stay, with a note of how much is hidden, and the model can call the tool again. Only if that is not enough is a result replaced by a placeholder.
+2. **Old turns are summarized.** When the next request would pass `compact_at` (75%) of the budget, the model is asked for a summary of the oldest turns, with headings: goal, constraints, progress, decisions, every request in order, exact references (paths, ids, errors), next steps. The newest turns (about `keep_recent_tokens`) stay as they are. The summary goes first in every later request, as notes and not instructions, and the next summary updates it. It uses the model you chat with, one extra request, and says so: `[Summarizing earlier messages…]`.
+3. **What still does not fit is dropped,** oldest turns first, as before. This is also what happens if a summary fails: the failure is shown, the conversation goes on, and after three failures in a row summaries pause until `/compact` works.
+
+`/compact [focus]` summarizes now, `/summary` shows it, `/context` shows where summaries start, and `--no-auto-compact` turns them off. If the server refuses a request as too long, muagent summarizes (or shortens the results) and sends it again, once.
+
+A summary is written from everything in the conversation, web pages and tool output included, so it is sent as notes, not instructions, and nothing in it is trusted more than the text it came from. Summaries lose detail: anything that must survive exactly belongs in a file, not the chat.
+
 ## Tests
 
 ```bash
@@ -155,6 +172,6 @@ The tests run against a local fake of the Responses API. They ignore your `confi
 
 - Requests are sent with `store=False`, so the server keeps no conversation state. The full history is resent on each turn.
 - A turn, tool calls and their results included, is added to the history once the final response completes with text. An incomplete response keeps the partial reply you already saw; failed or empty responses leave the history unchanged.
-- When the instructions, the tool definitions and the history together exceed `MAX_CONTEXT_TOKENS`, the oldest turns are dropped first. Tokens are estimated at about 4 bytes of UTF-8 per token, which works with any backend's tokenizer.
+- When the next request would pass `COMPACT_AT` of `MAX_CONTEXT_TOKENS` (instructions, tool definitions and history together), the oldest turns are summarized and the newest kept; see [Long conversations](#long-conversations). Turns that still do not fit are dropped, oldest first. Tokens are estimated at about 4 bytes of UTF-8 per token, which works with any backend's tokenizer.
 
 [TURN.md](TURN.md) follows one turn through the code: what is sent, what is kept, what you see, and every way a turn can end.

@@ -47,6 +47,23 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="MAX_CONTEXT_TOKENS: budget for a whole request",
     )
     parser.add_argument(
+        "--auto-compact",
+        action=argparse.BooleanOptionalAction,
+        help="AUTO_COMPACT: summarize the oldest turns when the history gets long",
+    )
+    parser.add_argument(
+        "--compact-at",
+        type=float,
+        metavar="SHARE",
+        help="COMPACT_AT: share of the context budget at which to summarize",
+    )
+    parser.add_argument(
+        "--keep-recent-tokens",
+        type=int,
+        metavar="N",
+        help="KEEP_RECENT_TOKENS: tokens of the newest turns kept verbatim",
+    )
+    parser.add_argument(
         "--max-turns",
         type=int,
         metavar="N",

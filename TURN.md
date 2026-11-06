@@ -21,7 +21,8 @@ line, because lines move. Everything is in [`src/muagent/`](src/muagent/).
               anything else     ▼
                             Repl.ask ── blank line ──► Agent.run_turn(prompt, on_text, on_notice, confirm, on_call)
                                                           │
-       Context.begin_turn: history + prompt, trimmed ◄────┤
+       _compact_if_due: summarize old turns if long ◄─────┤   (§2a)
+       Context.begin_turn: summary + history + prompt ◄───┤
                                                           │
                        ┌──────────────────────────────────┤   at most MAX_TURNS rounds
                        │  _send_response    one request; the reply text streams to the screen
@@ -68,8 +69,11 @@ that `Repl.ask` hands it, which are methods of `Console`:
 
 ## 2. Starting the turn (`Context.begin_turn`)
 
-`begin_turn(prompt, max_tokens)` returns the **items** for the first request: a copy
-of the history plus `{"role": "user", "content": prompt}`. The history itself does
+First, if the next request would be over `COMPACT_AT` (75%) of the budget, the oldest turns
+are summarized (§2a). Then:
+
+`begin_turn(prompt, max_tokens)` returns the **items** for the first request: the summary
+message if there is one, a copy of the history, and `{"role": "user", "content": prompt}`. The history itself does
 not change until the turn is saved, so a turn that fails leaves nothing behind. It
 also remembers the prompt for `/retry` and marks it as not saved.
 
@@ -78,7 +82,39 @@ If the items are over `MAX_CONTEXT_TOKENS`, whole turns are dropped from the fro
 `[Context trimmed: oldest turns dropped]`. The size is an estimate: the UTF-8 bytes
 of an item's JSON divided by four, with a reasoning item's opaque
 `encrypted_content` left out. The newest turn is never dropped, so one enormous
-prompt can still be over the limit.
+prompt can still be over the limit. The summary is never dropped. With summaries off, or
+when one failed, this trimming is what keeps the request in the budget.
+
+### 2a. Summarizing the oldest turns (`Agent.compact`)
+
+The trigger is an estimate, before the turn: the instructions and tool definitions
+(`_fixed_tokens`), the history with its summary, and the prompt, against `COMPACT_AT` of
+`MAX_CONTEXT_TOKENS`. Past it, `Context.plan_compaction` keeps the newest turns that
+fit in `KEEP_RECENT_TOKENS` (at most half the trigger, and always the newest turn) and
+cuts at the start of a turn, so a tool call stays with its output.
+
+The turns before the cut go to the model as labelled text (`[User]:`, `[Assistant]:`,
+`[Tool call]:`, `[Tool result]:` cut to 2,000 characters; reasoning left out), so that
+it does not take them for a conversation to continue. The request has no tools, the
+summarizing prompt in place of the system prompt, a cap of 8,000 tokens on the answer,
+and `reasoning: low` where an effort is set. The answer has headings: goal, constraints,
+progress, decisions, every request in order, exact references (paths, ids, errors),
+next steps; an `<analysis>` scratchpad before it is dropped, and a missing
+`<summary>` tag is forgiven, since not every model writes it. The previous summary is
+an input, so there is always one summary, updated, never summaries of summaries.
+
+The result is checked: empty, without headings, or longer than the text it replaces is
+refused, and so is an answer that hit the cap. A refusal, an API error or a timeout is a
+notice (`[Could not summarize earlier messages: …]`), the history stays whole, and the
+turn goes on, with the trimming above as the fallback. After 3 failures in a row
+summaries are not tried by themselves until `/compact` works. Ctrl-C leaves the history
+as it was.
+
+What the model then sees, first in every request, is
+`<conversation_summary>` … `</conversation_summary>`, a `user` message that says it is
+notes about what happened and not instructions: it was written from text that may hold a
+web page's orders. It is not an item of the history (`Context.summary`), so the messages
+still alternate and `/undo` and `/retry` work on the turns after it.
 
 `MAX_CONTEXT_TOKENS` is a budget for the whole request, not only the history, so the
 items are given what is left of it after the part every request carries: the
@@ -189,11 +225,14 @@ After each round with tool calls the loop checks, in this order:
 1. **The budget.** `_next_request_tokens` takes the `usage.input_tokens` the server
    reported for the request it just answered, which is exact, plus an estimate of the
    items added since (everything is estimated if the server sent no usage). Over
-   `MAX_CONTEXT_TOKENS` first drops tool results: those of the rounds before the one
-   that just ran, oldest first, each replaced by `[output dropped to fit the context]`
-   until the estimate fits, with the notice `[Context full: older tool results
-   dropped]`. The calls stay, so the model sees what it did and every call keeps an
-   output, and the turn goes on (the model may call again for what it needs). If the
+   `MAX_CONTEXT_TOKENS` first shortens tool results: those of the rounds before the one
+   that just ran, oldest first. A result over 8,000 characters keeps its first 4,000 and
+   last 1,000 with `[... N characters hidden; call the tool again if you need them ...]`
+   (the start says what it is, the end often how it went); what is still too much after
+   that is replaced by `[output dropped to fit the context]`. The notice is
+   `[Context full: older tool results dropped]`. The calls stay, so the model sees what
+   it did and every call keeps an output, and the turn goes on (the model may call
+   again for what it needs). If the
    latest round's results alone are over, nothing older is left to drop and the turn
    ends with `This turn grew past the context budget (about X of Y tokens). Ask for
    less, or raise MAX_CONTEXT_TOKENS`, saving nothing.
@@ -236,6 +275,7 @@ only the replies. Calls and outputs are removed together, for the same reason as
 | `MAX_TURNS` rounds of tool calls                      | yes, with a closing note| `[Stopped after N model calls without a final answer]`        |
 | the turn outgrows `MAX_CONTEXT_TOKENS`                | older results are dropped and the turn goes on; no if the latest round alone is over | `[Context full: older tool results dropped]`, or `[This turn grew past the context budget …]` |
 | Ctrl-C                                                | yes after a completed round or while tools run; no in the first model call | `[Cancelled]`                           |
+| the server refuses a request as too long (once a turn) | as usual, if the retry works | `[The request was too long for the model; trying again, shorter]`: before the first round the oldest turns are summarized, later the earlier results are shortened; then it is sent again |
 | the API or the network fails (after the SDK's retries)| no, unless a round already ran | `[API error …]` or `[Agent error: Type: message]`                         |
 
 "Unless a round already ran": once at least one round has completed (the model called
@@ -292,7 +332,9 @@ follows one, such as the reply, starts after a blank line.
 |-----------|-------------------------------------------------------------------------------------------|
 | `/retry`  | `Context.rewind()` drops the last turn if it was saved, then `ask` sends its prompt again  |
 | `/undo`   | drops the last turn: the last user message and everything after it                         |
-| `/reset`  | forgets the whole history                                                                  |
+| `/reset`  | forgets the whole history, the summary too                                                 |
+| `/compact [focus]` | summarizes the oldest turns now (§2a); the focus says what the summary must keep |
+| `/summary` | shows the summary                                                                          |
 | `/model`, `/effort` | change the config; the next request reads it                                     |
 
 ## 11. What must stay true
@@ -301,9 +343,10 @@ follows one, such as the reply, starts after a blank line.
   with its reply or not at all.
 - **Every call has its output** before anything is sent or saved, and an output never
   outlives its call.
-- **The history changes in three places only:** `save_turn`, `undo` (which `rewind`
-  uses) and `reset`. `begin_turn` and the rounds work on a copy.
-- **The newest user message is never trimmed away.**
+- **The history changes in four places only:** `save_turn`, `undo` (which `rewind`
+  uses), `reset` and `compact`. `begin_turn` and the rounds work on a copy.
+- **The newest user message is never trimmed away,** and neither is the summary.
+- **A summary replaces turns only when it is good:** the history is whole after a failure.
 - **The agent prints nothing.** If a new message is for the user, it goes through one
   of the three callbacks.
 
@@ -349,7 +392,8 @@ the model still answered.
 | the turn, the rounds, the stops       | `Agent.run_turn` in [`agent.py`](src/muagent/agent.py)       |
 | the request and the stream            | `Agent._send_response`                                       |
 | calls and permissions                 | `Agent._run_tools`, `Tool` in [`tools.py`](src/muagent/tools.py) |
-| history, trimming, saving, pruning    | `Context` in [`context.py`](src/muagent/context.py)          |
+| history, summary, trimming, saving    | `Context` in [`context.py`](src/muagent/context.py)          |
+| summarizing, pruning, too-long retry  | `Agent.compact`, `_drop_outputs`, `_shrink` in [`agent.py`](src/muagent/agent.py) |
 | everything printed                    | `Console` in [`console.py`](src/muagent/console.py)          |
 | MCP servers                           | [`mcp_client.py`](src/muagent/mcp_client.py)                 |
 | the system prompt                     | `SYSTEM_PROMPT` in `agent.py`                                |

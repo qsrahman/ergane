@@ -89,6 +89,21 @@ class Config(BaseSettings):
         default=25,
         gt=0,
     )
+    # When the history (with the instructions and the tools) passes compact_at of
+    # max_context_tokens, the oldest turns are summarized, keeping about
+    # keep_recent_tokens of the newest verbatim.
+    auto_compact: bool = Field(
+        default=True,
+    )
+    compact_at: float = Field(
+        default=0.75,
+        gt=0,
+        le=1,
+    )
+    keep_recent_tokens: int = Field(
+        default=15_000,
+        ge=0,
+    )
     # None sends no reasoning setting, so the model's default applies.
     # Non-reasoning models reject any effort with HTTP 400.
     reasoning_effort: ReasoningEffort | None = Field(

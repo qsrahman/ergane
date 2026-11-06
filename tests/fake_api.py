@@ -74,6 +74,46 @@ TOOL_CALLS = {
 }
 
 
+SUMMARY_PROMPT_START = "You are summarizing a conversation"
+
+
+def summary_response(body: dict) -> tuple[str, dict]:
+    """The answer to the request that summarizes old turns.
+
+    The text of the conversation picks the outcome: SUMMARY_EMPTY, SUMMARY_NOHEADINGS
+    (not a summary), SUMMARY_LONG (longer than what it replaces) and
+    SUMMARY_INCOMPLETE (stopped by the output cap) are the ways it goes wrong;
+    SUMMARY_PLAIN and SUMMARY_UNCLOSED are good summaries without the tags, or
+    without the closing one; otherwise it is a good summary that says how many user
+    lines it was given.
+    """
+    text = body["input"][0]["content"]
+    if "SUMMARY_EMPTY" in text:
+        answer = "<analysis>a</analysis><summary></summary>"
+    elif "SUMMARY_NOHEADINGS" in text:
+        answer = "<summary>I am not able to do that.</summary>"
+    elif "SUMMARY_LONG" in text:
+        answer = f"<summary>## Goal\n{'x' * (len(text) + 10)}</summary>"
+    elif "SUMMARY_UNCLOSED" in text:
+        answer = "<summary>## Goal\nNOTES unclosed"
+    elif "SUMMARY_PLAIN" in text:
+        answer = "## Goal\nNOTES plain"
+    else:
+        count = text.count("[User]:")
+        answer = (
+            f"<analysis>thinking</analysis><summary>## Goal\nNOTES {count}</summary>"
+        )
+    message = {
+        **MESSAGE,
+        "content": [{"type": "output_text", "text": answer, "annotations": []}],
+    }
+    if "SUMMARY_INCOMPLETE" in text:
+        return "response.incomplete", make_response(
+            "incomplete", [message], incomplete_details={"reason": "max_output_tokens"}
+        )
+    return "response.completed", make_response("completed", [message])
+
+
 def last_user_prompt(items: list[dict]) -> str:
     """The most recent user message in a request's input.
 
@@ -169,7 +209,8 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     ends), "tool_call" (calls a tool until its output is in the input, then
     replies with text), "tool_call_reasoning" (the same, with a reasoning item
     before each call), "tool_call_parallel" (two calls in one response),
-    "tool_loop" (calls a tool every time), "http_error" (a 400 response), "usage" (a reply that carries a token count), "status_N" (an error response with
+    "tool_loop" (calls a tool every time), "http_error" (a 400 response), "usage" (a reply that carries a token count), "overflow_once" and "overflow" (a request refused as too long, the first time or
+    every time), "status_N" (an error response with
     status N and an OpenAI-style body),
     "tool_then_X" (a tool call, then the scenario X once the tool's output is
     in the input, such as "tool_then_failed"), or anything else for a completed
@@ -200,7 +241,28 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        if scenario == "http_error":
+        summarizing = body.get("instructions", "").startswith(SUMMARY_PROMPT_START)
+        if scenario == "overflow" or (
+            scenario == "overflow_once" and not getattr(self.server, "refused", 0)
+        ):
+            self.server.refused = 1  # pyright: ignore[reportAttributeAccessIssue]
+            data = json.dumps(
+                {
+                    "error": {
+                        "message": "This model's maximum context length is 8192 tokens.",
+                        "code": "context_length_exceeded",
+                    }
+                }
+            ).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if scenario == "http_error" or (
+            summarizing and "SUMMARY_FAIL" in body["input"][0]["content"]
+        ):
             data = json.dumps({"error": {"message": "bad request"}}).encode()
             self.send_response(400)
             self.send_header("Content-Type", "application/json")
@@ -208,7 +270,10 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        event_type, response = final_event(scenario, tool_output_sent)
+        if summarizing:
+            event_type, response = summary_response(body)
+        else:
+            event_type, response = final_event(scenario, tool_output_sent)
         # How often this exact request came before: a retry sends the same input.
         attempt = sum(
             1
@@ -296,7 +361,8 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
                     send(
                         "response.content_part.added", **ids, part={**part, "text": ""}
                     )
-                    for delta in ("Hello", " world"):
+                    half = len(part["text"]) // 2
+                    for delta in (part["text"][:half], part["text"][half:]):
                         send(
                             "response.output_text.delta",
                             **ids,
@@ -313,7 +379,12 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
                             )
                             send("error", code=code, message=STREAM_ERROR)
                             return
-                    send("response.output_text.done", **ids, text=TEXT, logprobs=[])
+                    send(
+                        "response.output_text.done",
+                        **ids,
+                        text=part["text"],
+                        logprobs=[],
+                    )
                 send("response.content_part.done", **ids, part=part)
             send("response.output_item.done", output_index=index, item=item)
         send(event_type, response=response)

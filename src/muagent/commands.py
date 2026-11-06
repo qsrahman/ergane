@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from openai.types.shared import ReasoningEffort
 from pydantic import TypeAdapter, ValidationError
 
+from muagent.agent import TurnError, describe_error
 from muagent.config import EFFORTS
 
 if TYPE_CHECKING:
@@ -166,6 +167,29 @@ def effort(repl: Repl, args: str) -> str:
     return f"Reasoning effort: {config.reasoning_effort or 'model default'}"
 
 
+@command("/compact")
+def compact_(repl: Repl, args: str) -> str | None:
+    """Summarize the earlier turns now; FOCUS says what the summary must keep."""
+    try:
+        done = repl.agent.compact(repl.console.notice, args or None)
+    except TurnError as exc:
+        return f"Could not summarize: {exc}"
+    except Exception as exc:  # noqa: BLE001
+        return describe_error(exc)
+    return None if done else "Nothing to summarize: the history is short"
+
+
+@command("/summary")
+def summary_(repl: Repl, args: str) -> str | None:
+    """Show the summary that stands for the earliest turns."""
+    summary = repl.agent.context.summary
+    if summary is None:
+        return "No summary yet"
+    repl.console.write(f"{summary}\n")
+    repl.console.blank()
+    return None
+
+
 @command("/context")
 def context_(repl: Repl, args: str) -> None:
     """Show how much of the context budget the next request would use."""
@@ -179,6 +203,11 @@ def context_(repl: Repl, args: str) -> None:
         ("history", f"~{history:,}"),
         ("total", f"~{total:,} of {budget:,} ({total * 100 // budget}%)"),
     ]
+    if agent.config.auto_compact:
+        trigger = int(agent.config.compact_at * budget)
+        rows.append(("summarizes at", f"~{trigger:,}"))
+    else:
+        rows.append(("summarizes at", "off (/compact does it by hand)"))
     if agent.last_input_tokens is not None:
         rows.append(
             ("last request", f"{agent.last_input_tokens:,} (counted by the server)")

@@ -18,13 +18,18 @@ from fake_api import (
 )
 from helpers import make_config, make_context
 from muagent.agent import (
+    COMPACT_FAILURES,
+    COMPACT_PROMPT,
     DROPPED_OUTPUT,
+    PRUNE_CHARS,
     STREAM_RETRIES,
+    SUMMARY_MAX_TOKENS,
     SYSTEM_PROMPT,
     SYSTEM_PROMPT_NO_TOOLS,
     Agent,
     TurnError,
     describe_error,
+    is_context_overflow,
 )
 from muagent.context import estimate_tokens
 from muagent.tools import MAX_OUTPUT_CHARS, Tool
@@ -193,7 +198,10 @@ class TestAgentRunTurn:
         ]
 
     def test_reports_trimmed_context(self, make_agent, fake_server, streaming):
-        agent = make_agent(STREAMING=streaming, MAX_CONTEXT_TOKENS=1)
+        # Summaries off: this is the trimming that is left when they are not made.
+        agent = make_agent(
+            STREAMING=streaming, MAX_CONTEXT_TOKENS=1, AUTO_COMPACT=False
+        )
         agent.context.items = make_context(2)
 
         notices: list[str] = []
@@ -204,7 +212,7 @@ class TestAgentRunTurn:
 
     def test_a_budget_changed_after_startup_takes_effect(self, make_agent, streaming):
         # A setting changed at runtime (as a command would) must be used right away.
-        agent = make_agent(STREAMING=streaming)
+        agent = make_agent(STREAMING=streaming, AUTO_COMPACT=False)
         agent.context.items = make_context(2)
         notices: list[str] = []
 
@@ -1246,3 +1254,372 @@ class TestContextEstimate:
         assert before[1] > bare.context_estimate()[1]  # a tool is a definition
         assert before[2] == 0 and after[2] > 0  # the turn is history now
         assert after[:2] == before[:2]
+
+
+def old_turns(count: int = 10, marker: str = "") -> list:
+    """`count` turns of about 200 tokens each; `marker` goes into the first prompt."""
+    items = []
+    for i in range(count):
+        items.append(
+            {"role": "user", "content": f"q{i} {marker if i == 0 else ''}" + "x" * 400}
+        )
+        items.append({"role": "assistant", "content": f"a{i} " + "y" * 400})
+    return items
+
+
+def summarizing(request: dict) -> bool:
+    return request["instructions"].startswith(COMPACT_PROMPT[:20])
+
+
+@pytest.mark.parametrize("streaming", [True, False])
+class TestCompaction:
+    """About 700 tokens of instructions, 4,000 of budget, summaries from 3,000."""
+
+    def agent(self, make_agent, streaming, history=None, **config):
+        config = {"MAX_CONTEXT_TOKENS": 3600, "KEEP_RECENT_TOKENS": 500, **config}
+        agent = make_agent(STREAMING=streaming, **config)
+        agent.context.items = old_turns() if history is None else history
+        return agent
+
+    def test_a_long_history_is_summarized_before_the_turn(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = self.agent(make_agent, streaming)
+        notices: list[str] = []
+
+        agent.run_turn("go", on_notice=notices.append)
+
+        assert notices[0] == "Summarizing earlier messages…"
+        assert notices[1].startswith("Summarized 8 earlier turns")
+        summary_request, turn_request = fake_server.requests
+        assert summarizing(summary_request) and not summarizing(turn_request)
+        assert "tools" not in summary_request
+        assert summary_request["max_output_tokens"] == SUMMARY_MAX_TOKENS
+        # The turn is sent with the summary first, then the newest turns kept as they were.
+        first = turn_request["input"][0]
+        assert first["role"] == "user" and "NOTES 8" in first["content"]
+        assert turn_request["input"][1]["content"].startswith("q8")
+        assert agent.context.summary == "## Goal\nNOTES 8"
+        assert agent.context.items[0]["content"].startswith("q8")
+
+    def test_the_summary_is_asked_for_as_labelled_text_with_tool_results_cut(
+        self, make_agent, fake_server, streaming
+    ):
+        history = old_turns(10)
+        history[1:1] = [  # the first turn used a tool
+            {
+                "type": "function_call",
+                "call_id": "c",
+                "name": "look",
+                "arguments": "{}",
+            },
+            {"type": "function_call_output", "call_id": "c", "output": "o" * 5000},
+        ]
+        agent = self.agent(make_agent, streaming, history)
+
+        agent.run_turn("go")
+
+        text = fake_server.requests[0]["input"][0]["content"]
+        assert text.startswith("Conversation:\n[User]: q0")
+        assert "[Tool call]: look({})" in text
+        assert "[Tool result]: " + "o" * 2000 + " [... 3,000 more characters]" in text
+        assert "[Assistant]: a0" in text
+
+    def test_a_history_under_the_trigger_is_left_alone(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = self.agent(make_agent, streaming, old_turns(3))
+        notices: list[str] = []
+
+        agent.run_turn("go", on_notice=notices.append)
+
+        assert notices == [] and len(fake_server.requests) == 1
+        assert agent.context.summary is None
+
+    def test_with_summaries_off_the_history_is_sent_as_it_is_while_it_fits(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = self.agent(make_agent, streaming, AUTO_COMPACT=False)
+        notices: list[str] = []
+
+        agent.run_turn("go", on_notice=notices.append)
+
+        assert notices == [] and len(fake_server.requests) == 1
+        assert len(fake_server.requests[0]["input"]) == 21
+        assert agent.context.summary is None
+
+    def test_a_summary_that_fails_does_not_stop_the_turn(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = self.agent(make_agent, streaming, old_turns(10, "SUMMARY_FAIL"))
+        notices: list[str] = []
+
+        agent.run_turn("go", on_notice=notices.append)
+
+        assert notices[0] == "Summarizing earlier messages…"
+        assert notices[1].startswith(
+            "Could not summarize earlier messages: API error 400"
+        )
+        assert agent.context.summary is None and agent.compact_failures == 1
+        assert agent.context.items[-1] == {"role": "assistant", "content": TEXT}
+        assert len(agent.context.items) == 22  # the history is whole
+
+    def test_what_does_not_fit_is_still_dropped_when_the_summary_fails(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = self.agent(
+            make_agent,
+            streaming,
+            old_turns(10, "SUMMARY_FAIL"),
+            MAX_CONTEXT_TOKENS=1800,
+        )
+        notices: list[str] = []
+
+        agent.run_turn("go", on_notice=notices.append)
+
+        assert notices[-1] == "Context trimmed: oldest turns dropped"
+        assert len(fake_server.requests[-1]["input"]) < 21
+
+    @pytest.mark.parametrize(
+        ("marker", "reason"),
+        [
+            ("SUMMARY_EMPTY", "the summary is empty"),
+            ("SUMMARY_NOHEADINGS", "it has no headings"),
+            ("SUMMARY_LONG", "longer than the text it replaces"),
+            ("SUMMARY_INCOMPLETE", "Response incomplete: max_output_tokens"),
+        ],
+    )
+    def test_a_summary_that_is_no_good_is_not_kept(
+        self, make_agent, streaming, marker, reason
+    ):
+        agent = self.agent(make_agent, streaming, old_turns(10, marker))
+        before = list(agent.context.items)
+
+        with pytest.raises(TurnError, match=reason):
+            agent.compact(lambda text: None)
+
+        assert agent.context.items == before and agent.context.summary is None
+
+    @pytest.mark.parametrize(
+        ("marker", "summary"),
+        [
+            ("SUMMARY_PLAIN", "## Goal\nNOTES plain"),
+            ("SUMMARY_UNCLOSED", "## Goal\nNOTES unclosed"),
+        ],
+    )
+    def test_a_good_summary_without_the_tags_is_kept(
+        self, make_agent, streaming, marker, summary
+    ):
+        # gemma4 writes the headings but not the <summary> tags.
+        agent = self.agent(make_agent, streaming, old_turns(10, marker))
+
+        assert agent.compact(lambda text: None)
+
+        assert agent.context.summary == summary
+
+    def test_summaries_pause_after_repeated_failures_and_a_manual_one_resumes_them(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = self.agent(make_agent, streaming, old_turns(10, "SUMMARY_FAIL"))
+        for _ in range(COMPACT_FAILURES + 2):
+            agent.context.items = old_turns(10, "SUMMARY_FAIL")
+            agent.run_turn("go")
+
+        tried = [r for r in fake_server.requests if summarizing(r)]
+        assert len(tried) == COMPACT_FAILURES  # then none by itself
+
+        agent.context.items = old_turns(10)
+        assert agent.compact(lambda text: None)
+        assert agent.compact_failures == 0
+
+    def test_a_second_summary_updates_the_first(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = self.agent(make_agent, streaming)
+        agent.compact(lambda text: None)
+        agent.context.items = [*agent.context.items, *old_turns(8)]
+
+        agent.compact(lambda text: None)
+
+        second = fake_server.requests[1]["input"][0]["content"]
+        assert second.startswith("Previous summary:\n## Goal\nNOTES 8\n\nConversation:")
+        # The new one replaces the old, which was an input to it: one summary, not two.
+        assert (agent.context.summary or "").startswith("## Goal\nNOTES ")
+        assert agent.context.summary.count("## Goal") == 1  # type: ignore[union-attr]
+
+    def test_a_focus_is_passed_on(self, make_agent, fake_server, streaming):
+        agent = self.agent(make_agent, streaming)
+
+        agent.compact(lambda text: None, focus="the schema")
+
+        assert fake_server.requests[0]["input"][0]["content"].endswith(
+            "Focus: the schema"
+        )
+
+    def test_a_reasoning_model_is_asked_to_think_little_for_the_summary(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = self.agent(make_agent, streaming, REASONING_EFFORT="high")
+
+        agent.run_turn("go")
+
+        summary_request, turn_request = fake_server.requests
+        assert summary_request["reasoning"] == {"effort": "low"}
+        assert turn_request["reasoning"] == {"effort": "high"}
+
+    def test_the_summary_is_not_part_of_the_instructions_of_the_chat(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = self.agent(make_agent, streaming)
+
+        agent.run_turn("go")
+
+        assert "NOTES" not in fake_server.requests[1]["instructions"]
+
+    def test_ctrl_c_after_the_summary_keeps_it_and_not_the_turn(
+        self, make_agent, streaming
+    ):
+        agent = self.agent(make_agent, streaming)
+        before = list(agent.context.items)
+
+        def interrupt(text: str) -> None:
+            if text.startswith("Summarized"):
+                raise KeyboardInterrupt
+
+        with pytest.raises(KeyboardInterrupt):
+            agent.run_turn("go", on_notice=interrupt)
+
+        # The interrupt came after the summary was made, so it was kept; the turn was not.
+        assert agent.context.summary == "## Goal\nNOTES 8"
+        assert all(item["content"] != "go" for item in agent.context.items)
+        assert agent.context.items != before
+
+
+@pytest.mark.parametrize("streaming", [True, False])
+class TestTooLong:
+    def test_a_request_the_server_refuses_as_too_long_is_summarized_and_sent_again(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = make_agent(
+            STREAMING=streaming, MAX_CONTEXT_TOKENS=4000, AUTO_COMPACT=True,
+            COMPACT_AT=1, KEEP_RECENT_TOKENS=500,
+        )  # fmt: skip
+        agent.context.items = old_turns(10)[:12]  # under the trigger: nothing yet
+        notices: list[str] = []
+
+        agent.run_turn("overflow_once", on_notice=notices.append)
+
+        kinds = ["summary" if summarizing(r) else "chat" for r in fake_server.requests]
+        assert kinds == ["chat", "summary", "chat"]  # refused, summarized, sent again
+        assert (
+            "The request was too long for the model; trying again, shorter" in notices
+        )
+        assert agent.context.items[-1] == {"role": "assistant", "content": TEXT}
+
+    def test_after_a_tool_the_results_of_earlier_rounds_are_shortened(
+        self, make_agent, fake_server, streaming
+    ):
+        def huge(path: str) -> str:
+            """Read a text file."""
+            return "head" + "x" * 20000 + "tail"
+
+        agent = make_agent(tools=[tool_with(huge)], STREAMING=streaming)
+        notices: list[str] = []
+
+        # Round 1 calls the tool, round 2 is refused, round 3 is the same request,
+        # but the result is shortened.
+        agent.run_turn("tool_then_overflow_once", on_notice=notices.append)
+
+        assert len(fake_server.requests) == 3
+        sent = fake_server.requests[2]["input"][-1]["output"]
+        assert sent.startswith("head") and sent.endswith("tail")
+        assert len(sent) < PRUNE_CHARS
+
+    def test_nothing_to_shorten_is_the_servers_error(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = make_agent(STREAMING=streaming)
+
+        with pytest.raises(Exception) as caught:
+            agent.run_turn("overflow_once")
+
+        assert is_context_overflow(caught.value)
+        assert "Lower max_context_tokens, or use /compact." in describe_error(
+            caught.value
+        )
+        assert len(fake_server.requests) == 1
+
+    def test_it_is_tried_once_in_a_turn(self, make_agent, fake_server, streaming):
+        agent = make_agent(
+            STREAMING=streaming, MAX_CONTEXT_TOKENS=4000, COMPACT_AT=1,
+            KEEP_RECENT_TOKENS=500,
+        )  # fmt: skip
+        agent.context.items = old_turns(10)[:12]
+
+        with pytest.raises(Exception) as caught:
+            agent.run_turn("overflow")
+
+        assert is_context_overflow(caught.value)
+        kinds = ["summary" if summarizing(r) else "chat" for r in fake_server.requests]
+        assert kinds == ["chat", "summary", "chat"]  # and no more
+
+
+class TestOverflowDetection:
+    def error(self, status: int, message: str, code: str | None = None):
+        import httpx2
+        from openai import APIStatusError
+
+        response = httpx2.Response(status, request=httpx2.Request("POST", "http://x"))
+        return APIStatusError(
+            message,
+            response=response,
+            body={"message": message, "code": code},
+        )
+
+    @pytest.mark.parametrize(
+        ("status", "message", "code"),
+        [
+            (400, "anything", "context_length_exceeded"),
+            (400, "This model's maximum context length is 8192 tokens", None),
+            (400, "prompt is too long: 9000 tokens", None),
+            (413, "request too large: token limit exceeded", None),
+            (400, "input exceeds the context window", None),
+        ],
+    )
+    def test_the_ways_servers_say_it(self, status, message, code):
+        assert is_context_overflow(self.error(status, message, code))
+
+    @pytest.mark.parametrize(
+        ("status", "message"),
+        [(400, "invalid tool schema"), (429, "context length"), (500, "too long")],
+    )
+    def test_other_errors_are_not_it(self, status, message):
+        assert not is_context_overflow(self.error(status, message))
+
+
+@pytest.mark.parametrize("streaming", [True, False])
+class TestShorteningResults:
+    def test_a_long_result_keeps_its_start_and_end_and_says_what_is_hidden(
+        self, make_agent, fake_server, streaming
+    ):
+        def huge(path: str) -> str:
+            """Read a text file."""
+            return "head" + "x" * 20000 + "tail"
+
+        agent = make_agent(
+            tools=[tool_with(huge)], STREAMING=streaming,
+            MAX_CONTEXT_TOKENS=9000, MAX_TURNS=3, AUTO_COMPACT=False,
+        )  # fmt: skip
+
+        with pytest.raises(TurnError, match="^Stopped after 3"):
+            agent.run_turn("tool_loop")
+
+        outputs = [
+            item["output"]
+            for item in fake_server.requests[2]["input"]
+            if item.get("type") == "function_call_output"
+        ]
+        assert outputs[0].startswith("head") and outputs[0].endswith("tail")
+        assert "characters hidden; call the tool again" in outputs[0]
+        assert len(outputs[0]) < PRUNE_CHARS
+        assert outputs[-1].startswith("head") and "hidden" not in outputs[-1]

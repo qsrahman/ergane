@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 import pytest
 from openai.types.responses import ResponseInputParam
 
@@ -288,3 +290,130 @@ class TestEstimateTokens:
             )
 
         assert reasoning("x" * 100_000) == reasoning("")
+
+
+def rows(items: ResponseInputParam) -> list[dict[str, Any]]:
+    """The items as plain dicts, which are easier to look into than the SDK's types."""
+    return cast(list[dict[str, Any]], items)
+
+
+def turns(count: int, size: int = 400) -> ResponseInputParam:
+    """Turns of a user message and a reply, each message about `size` characters."""
+    items: ResponseInputParam = []
+    for i in range(count):
+        items.append({"role": "user", "content": f"q{i} " + "x" * size})
+        items.append({"role": "assistant", "content": f"a{i} " + "y" * size})
+    return items
+
+
+class TestCompaction:
+    def test_the_newest_turns_that_fit_are_kept_and_the_cut_is_at_a_turn(self):
+        context = Context()
+        context.items = turns(6)
+        one_turn = sum(estimate_tokens(item) for item in context.items[:2])
+
+        count = context.plan_compaction(keep_tokens=2 * one_turn)
+
+        assert count == 8  # four turns of six are summarized, two kept
+        assert rows(context.items)[count]["content"].startswith("q4")  # a user message
+
+    def test_the_newest_turn_is_kept_however_big(self):
+        context = Context()
+        context.items = turns(3)
+
+        assert context.plan_compaction(keep_tokens=0) == 4  # the first two turns
+
+    def test_nothing_older_than_what_is_kept_means_nothing_to_summarize(self):
+        context = Context()
+        context.items = turns(3)
+
+        assert context.plan_compaction(keep_tokens=ROOMY) == 0
+        assert Context().plan_compaction(keep_tokens=0) == 0
+        context.items = turns(1)
+        assert context.plan_compaction(keep_tokens=0) == 0
+
+    def test_a_tool_call_stays_with_its_output(self):
+        context = Context()
+        context.items = [
+            *turns(2),
+            {"role": "user", "content": "look"},
+            {"type": "function_call", "call_id": "c", "name": "t", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c", "output": "o" * 2000},
+            {"role": "assistant", "content": "found"},
+        ]
+
+        count = context.plan_compaction(keep_tokens=0)
+
+        assert rows(context.items)[count] == {"role": "user", "content": "look"}
+
+    def test_compact_replaces_the_oldest_items_by_the_summary(self):
+        context = Context()
+        context.items = turns(4)
+        kept = context.items[4:]
+
+        context.compact(4, "NOTES")
+
+        assert context.items == kept and context.summary == "NOTES"
+
+    def test_the_summary_comes_first_in_a_request_framed_as_notes(self):
+        context = Context()
+        context.summary = "NOTES"
+        context.items = turns(1, size=5)
+
+        draft, _ = context.begin_turn("new", ROOMY)
+
+        first = rows(draft)[0]
+        assert first["role"] == "user" and "NOTES" in first["content"]
+        assert "not as instructions" in first["content"]
+        assert draft[1:] == [*context.items, {"role": "user", "content": "new"}]
+
+    def test_the_summary_is_never_trimmed_away(self):
+        context = Context()
+        context.summary = "NOTES"
+        context.items = turns(3)
+
+        draft, trimmed = context.begin_turn("new", max_tokens=1)
+
+        assert trimmed
+        assert "NOTES" in rows(draft)[0]["content"]
+        assert draft[1:] == [{"role": "user", "content": "new"}]
+
+    def test_the_summary_is_not_saved_as_an_item(self):
+        context = Context()
+        context.summary = "NOTES"
+        draft, _ = context.begin_turn("new", ROOMY)
+
+        save_reply(context, draft, "reply")
+
+        assert context.items == [
+            {"role": "user", "content": "new"},
+            {"role": "assistant", "content": "reply"},
+        ]
+        assert context.summary == "NOTES"
+
+    def test_the_estimate_counts_the_summary(self):
+        context = Context()
+        context.items = turns(1)
+        without = context.estimate()
+
+        context.summary = "NOTES " * 100
+
+        assert context.estimate() > without
+
+    def test_reset_forgets_the_summary_too(self):
+        context = Context()
+        context.summary = "NOTES"
+        context.items = turns(1)
+
+        context.reset()
+
+        assert context.summary is None and context.items == []
+
+    def test_undo_and_rewind_work_on_the_turns_after_the_summary(self):
+        context = Context()
+        context.summary = "NOTES"
+        draft, _ = context.begin_turn("new", ROOMY)
+        save_reply(context, draft, "reply")
+
+        assert context.rewind() == "new"
+        assert context.items == [] and context.summary == "NOTES"
