@@ -1467,6 +1467,26 @@ class TestCompaction:
         assert summary_request["reasoning"] == {"effort": "low"}
         assert turn_request["reasoning"] == {"effort": "high"}
 
+    @pytest.mark.parametrize(
+        ("effort", "asked"),
+        [
+            ("none", "none"),
+            ("minimal", "minimal"),
+            ("low", "low"),
+            ("medium", "low"),
+            ("high", "low"),
+            ("xhigh", "low"),
+        ],
+    )
+    def test_the_summary_never_asks_for_more_thinking_than_the_chat(
+        self, make_agent, fake_server, streaming, effort, asked
+    ):
+        agent = self.agent(make_agent, streaming, REASONING_EFFORT=effort)
+
+        agent.compact(lambda text: None)
+
+        assert fake_server.requests[0]["reasoning"] == {"effort": asked}
+
     def test_the_summary_is_not_part_of_the_instructions_of_the_chat(
         self, make_agent, fake_server, streaming
     ):

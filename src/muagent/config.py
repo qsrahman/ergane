@@ -14,6 +14,7 @@ from openai.types.shared import ReasoningEffort
 from pydantic import Field, SecretStr, ValidationError, field_validator
 from pydantic_settings import (
     BaseSettings,
+    EnvSettingsSource,
     JsonConfigSettingsSource,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
@@ -56,6 +57,20 @@ class _ConfigFile(JsonConfigSettingsSource):
             if field.validation_alias
         }
         return {renamed.get(key, key): value for key, value in data.items()}
+
+
+class _Environment(EnvSettingsSource):
+    """The environment, without the MCP servers.
+
+    A server is a program muagent runs. pydantic-settings would read the field from
+    a JSON variable (`MCPSERVERS`), and then a `.envrc` in a project could start
+    programs: only the user's own config.json may.
+    """
+
+    def __call__(self) -> dict[str, Any]:
+        values = super().__call__()
+        values.pop("mcpServers", None)  # the key is the alias
+        return values
 
 
 class Config(BaseSettings):
@@ -139,7 +154,7 @@ class Config(BaseSettings):
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         # Highest first: the flags (passed as keyword arguments), the environment,
         # the file. A `.env` file is not read.
-        return init_settings, env_settings, _ConfigFile(settings_cls)
+        return init_settings, _Environment(settings_cls), _ConfigFile(settings_cls)
 
 
 def _xdg_dir(variable: str, default: str) -> Path:

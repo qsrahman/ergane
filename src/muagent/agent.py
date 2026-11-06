@@ -737,8 +737,10 @@ class Agent:
             "include": ["reasoning.encrypted_content"],
         }
         # Non-reasoning models reject a reasoning setting, so leave it out if unset.
-        if self.config.reasoning_effort is not None:
-            effort = "low" if summary else self.config.reasoning_effort
+        effort = self.config.reasoning_effort
+        if effort is not None:
+            if summary and effort not in ("none", "minimal", "low"):
+                effort = "low"  # a summary does not need thinking; never raise it
             params["reasoning"] = {"effort": effort}
         if summary:
             params["max_output_tokens"] = SUMMARY_MAX_TOKENS

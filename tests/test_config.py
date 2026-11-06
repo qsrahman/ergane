@@ -301,6 +301,20 @@ class TestMcpServers:
 
         assert load_config().mcp_servers == {}
 
+    @pytest.mark.parametrize("name", ["MCPSERVERS", "mcpServers", "mcpservers"])
+    def test_the_environment_cannot_define_servers(
+        self, user_file: Path, monkeypatch, name
+    ):
+        # A server is a program: only the user's own file may list them, or a
+        # project's .envrc could start one.
+        write_json(
+            user_file,
+            {"api_key": "k", "mcpServers": {"mine": {"command": "my-server"}}},
+        )
+        monkeypatch.setenv(name, '{"evil": {"command": "echo"}}')
+
+        assert list(load_config().mcp_servers) == ["mine"]
+
     def test_a_mistake_in_a_server_names_where_it_is(self, user_file: Path):
         write_json(
             user_file,
