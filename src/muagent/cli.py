@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from muagent.agent import Agent
 from muagent.commands import COMMANDS
-from muagent.config import EFFORTS, load_config, private_state_dir
+from muagent.config import EFFORTS, config_file, load_config, private_state_dir
 from muagent.console import Console
 from muagent.mcp_client import close_servers, start_servers
 from muagent.repl import Repl, terminal_session
@@ -87,12 +87,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _exit_with(title: str, exc: ValidationError) -> NoReturn:
+def _exit_with(title: str, exc: ValidationError, file: Path) -> NoReturn:
     """Print what is wrong with a configuration, and exit.
 
     Args:
         title: The heading of the report.
         exc: The validation errors.
+        file: The config file in use, which the help for a missing key points to.
 
     Raises:
         SystemExit: Always, with status 1.
@@ -101,6 +102,14 @@ def _exit_with(title: str, exc: ValidationError) -> NoReturn:
     for error in exc.errors():
         field = ".".join(str(part) for part in error["loc"])
         print(f"  - {field + ': ' if field else ''}{error['msg']}", file=sys.stderr)
+    if any(
+        e["type"] == "missing" and e["loc"] == ("OPENAI_API_KEY",) for e in exc.errors()
+    ):
+        print(
+            f'No API key. Put "api_key" in {file} (the key itself, or '
+            '"${OPENAI_API_KEY}"), or set the OPENAI_API_KEY environment variable.',
+            file=sys.stderr,
+        )
     raise SystemExit(1) from None
 
 
@@ -125,7 +134,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         print(exc, file=sys.stderr)
         raise SystemExit(1) from None
     except ValidationError as exc:
-        _exit_with("Configuration error:", exc)
+        _exit_with("Configuration error:", exc, config_file(path))
 
     console = Console()
     state = private_state_dir()

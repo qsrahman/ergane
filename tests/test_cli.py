@@ -28,6 +28,36 @@ def test_main_exits_on_invalid_config(capsys: pytest.CaptureFixture[str]):
     assert "OPENAI_API_KEY" in capsys.readouterr().err
 
 
+def test_a_missing_key_says_where_to_put_it(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        main([])
+
+    err = capsys.readouterr().err
+    assert "  - OPENAI_API_KEY: Field required" in err
+    assert f'No API key. Put "api_key" in {tmp_path / "muagent" / "config.json"}' in err
+    assert "or set the OPENAI_API_KEY environment variable" in err
+
+
+def test_the_help_for_a_missing_key_names_the_file_in_use(tmp_path, capsys):
+    other = tmp_path / "other.json"
+    other.write_text("{}")
+
+    with pytest.raises(SystemExit):
+        main(["--config", str(other)])
+
+    assert f'Put "api_key" in {other}' in capsys.readouterr().err
+
+
+def test_another_mistake_gets_no_such_help(monkeypatch, capsys):
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    monkeypatch.setenv("MAX_TURNS", "0")
+
+    with pytest.raises(SystemExit):
+        main([])
+
+    assert "No API key" not in capsys.readouterr().err
+
+
 def test_main_names_a_bad_setting_by_its_key(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):

@@ -214,6 +214,19 @@ def private_state_dir() -> Path:
     return path
 
 
+def _named_file(path: Path | None) -> Path | None:
+    """The file the user named, by `path` or by `MUAGENT_CONFIG`."""
+    if path is None and os.environ.get("MUAGENT_CONFIG"):
+        return Path(os.environ["MUAGENT_CONFIG"])
+    return path
+
+
+def config_file(path: Path | None = None) -> Path:
+    """The config file in use: the one the user named, or `config.json` in
+    `user_config_dir()`, which may not exist."""
+    return _named_file(path) or user_config_dir() / "config.json"
+
+
 def load_config(path: Path | None = None, **flags: object) -> Config:
     """Load the settings: the flags, then the environment, then the file.
 
@@ -235,15 +248,13 @@ def load_config(path: Path | None = None, **flags: object) -> Config:
         ValidationError: If a setting is missing or invalid, or the file is not a
             JSON object.
     """
-    if path is None and os.environ.get("MUAGENT_CONFIG"):
-        path = Path(os.environ["MUAGENT_CONFIG"])
-    if path is not None and not path.exists():
-        raise FileNotFoundError(f"Config file not found: {path}")
+    named = _named_file(path)
+    if named is not None and not named.exists():
+        raise FileNotFoundError(f"Config file not found: {named}")
+    file = config_file(path)
 
     class Loaded(Config):  # the settings class is told its file by its config
-        model_config = SettingsConfigDict(
-            json_file=path or user_config_dir() / "config.json"
-        )
+        model_config = SettingsConfigDict(json_file=file)
 
     names = {
         name: str(field.validation_alias or name)
