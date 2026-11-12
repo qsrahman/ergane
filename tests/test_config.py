@@ -68,25 +68,21 @@ class TestLoadConfig:
         ) == ("m", "http://localhost:1/v1", False, 1000, 3, "low")
 
     @pytest.mark.parametrize(
-        ("field", "file", "env_name", "env", "flag", "expected"),
+        ("field", "file", "flag"),
         [
-            ("model", "from-file", "OPENAI_MODEL", "from-env", "from-flag", "m"),
-            (
-                "base_url",
-                "http://f/v1",
-                "OPENAI_BASE_URL",
-                "http://e/v1",
-                "http://g/v1",
-                "u",
-            ),
-            ("streaming", False, "STREAMING", "true", False, "s"),
-            ("max_context_tokens", 100, "MAX_CONTEXT_TOKENS", "200", 300, "n"),
-            ("max_turns", 1, "MAX_TURNS", "2", 3, "n"),
-            ("reasoning_effort", "low", "REASONING_EFFORT", "medium", "high", "e"),
+            ("model", "from-file", "from-flag"),
+            ("base_url", "http://f/v1", "http://g/v1"),
+            ("streaming", False, True),
+            ("max_context_tokens", 100, 300),
+            ("max_turns", 1, 3),
+            ("auto_compact", False, True),
+            ("compact_at", 0.5, 0.9),
+            ("keep_recent_tokens", 10, 20),
+            ("reasoning_effort", "low", "high"),
         ],
     )
-    def test_the_flag_beats_the_environment_beats_the_file_beats_the_default(
-        self, user_file, monkeypatch, field, file, env_name, env, flag, expected
+    def test_the_flag_beats_the_file_beats_the_default(
+        self, user_file, monkeypatch, field, file, flag
     ):
         monkeypatch.setenv("OPENAI_API_KEY", "k")
         default = getattr(load_config(), field)
@@ -94,11 +90,31 @@ class TestLoadConfig:
         write_json(user_file, {field: file})
         assert getattr(load_config(), field) == file != default
 
-        monkeypatch.setenv(env_name, env)
-        from_env = getattr(load_config(), field)
-        assert str(from_env).lower() == env.lower() and from_env != file
-
         assert getattr(load_config(**{field: flag}), field) == flag
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "OPENAI_BASE_URL",
+            "OPENAI_MODEL",
+            "STREAMING",
+            "MAX_CONTEXT_TOKENS",
+            "REASONING_EFFORT",
+            "AUTO_COMPACT",
+            "COMPACT_AT",
+            "KEEP_RECENT_TOKENS",
+            "MAX_TURNS",
+        ],
+    )
+    def test_no_variable_but_the_key_sets_anything(self, user_file, monkeypatch, name):
+        # Not even a mistaken one: a variable for these is never looked at.
+        write_json(user_file, {"api_key": "k"})
+        before = load_config().model_dump()
+        monkeypatch.setenv(
+            name, "http://elsewhere.example/v1" if "URL" in name else "0"
+        )
+
+        assert load_config().model_dump() == before
 
     def test_the_api_key_comes_from_the_environment_over_the_file(
         self, user_file, monkeypatch
@@ -140,7 +156,7 @@ class TestLoadConfig:
         (user_file.parent / ".env").write_text("OPENAI_API_KEY=a\n")
         (tmp_path / ".env").write_text("OPENAI_API_KEY=b\n")
 
-        with pytest.raises(ValidationError, match="OPENAI_API_KEY"):
+        with pytest.raises(ValidationError, match="api_key"):
             load_config()
 
     def test_reads_the_default_location_when_xdg_config_home_is_unset(
@@ -175,8 +191,8 @@ class TestLoadConfig:
         assert load_config().model == "from-home"
 
 
-class TestBareNames:
-    """validate_by_name lets config.json say `model`; the environment must not."""
+class TestTheEnvironment:
+    """One variable, OPENAI_API_KEY; the file's keys are the fields' names."""
 
     @pytest.mark.parametrize("name", ["MODEL", "API_KEY", "BASE_URL", "MCP_SERVERS"])
     def test_a_bare_variable_other_programs_may_export_is_ignored(
@@ -194,7 +210,7 @@ class TestBareNames:
     def test_a_bare_api_key_does_not_stand_in_for_the_key(self, monkeypatch):
         monkeypatch.setenv("API_KEY", "some-other-programs-key")
 
-        with pytest.raises(ValidationError, match="OPENAI_API_KEY"):
+        with pytest.raises(ValidationError, match="api_key"):
             load_config()
 
     @pytest.mark.parametrize("name", ["MCPSERVERS", "MCP_SERVERS", "mcpServers"])
@@ -206,32 +222,19 @@ class TestBareNames:
 
         assert load_config().mcp_servers == {}
 
-    def test_the_names_the_openai_sdk_uses_still_work(self, monkeypatch):
+    def test_openai_api_key_is_the_key(self, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "k")
-        monkeypatch.setenv("OPENAI_MODEL", "m")
-        monkeypatch.setenv("OPENAI_BASE_URL", "http://localhost:1/v1")
 
-        config = load_config()
+        assert load_config().api_key.get_secret_value() == "k"
 
-        assert (config.model, config.base_url) == ("m", "http://localhost:1/v1")
-
-    def test_a_setting_without_an_alias_is_read_from_its_own_name(self, monkeypatch):
-        monkeypatch.setenv("OPENAI_API_KEY", "k")
-        monkeypatch.setenv("MAX_TURNS", "7")
-
-        assert load_config().max_turns == 7
-
-    def test_the_file_may_use_either_name(self, tmp_path: Path):
+    def test_the_file_uses_the_names_of_the_settings_and_no_other(self, tmp_path: Path):
         write_json(
             tmp_path / "muagent" / "config.json",
-            {"api_key": "k", "model": "by-name", "base_url": "http://a/v1"},
+            {"OPENAI_API_KEY": "k", "OPENAI_MODEL": "by-env-name"},
         )
-        assert load_config().model == "by-name"
-        write_json(
-            tmp_path / "muagent" / "config.json",
-            {"OPENAI_API_KEY": "k", "OPENAI_MODEL": "by-alias"},
-        )
-        assert load_config().model == "by-alias"
+
+        with pytest.raises(ValidationError, match=r"OPENAI_MODEL\n  Extra inputs"):
+            load_config()
 
 
 class TestNamedFile:
@@ -434,7 +437,7 @@ class TestMcpServers:
 
 
 def test_the_api_key_is_not_revealed_when_the_config_is_printed():
-    config = make_config(OPENAI_API_KEY="sk-secret-123")
+    config = make_config(api_key="sk-secret-123")
 
     for text in (repr(config), str(config), str(config.model_dump())):
         assert "sk-secret-123" not in text
@@ -442,8 +445,8 @@ def test_the_api_key_is_not_revealed_when_the_config_is_printed():
 
 
 def test_an_empty_api_key_is_a_config_error():
-    with pytest.raises(ValidationError, match="OPENAI_API_KEY"):
-        make_config(OPENAI_API_KEY="")
+    with pytest.raises(ValidationError, match="api_key"):
+        make_config(api_key="")
 
 
 def test_the_state_directory_is_closed_to_other_users(tmp_path, monkeypatch):

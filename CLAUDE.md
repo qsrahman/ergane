@@ -39,8 +39,7 @@ it editable; the script is `muagent.cli:main`. Tests import modules directly
   own `MCPServer`, with a tool for each case a client must handle; `test_mcp_client.py`
   starts it as a subprocess.
 - The autouse `isolate_config` fixture runs each test in an empty `tmp_path` that is
-  also `XDG_CONFIG_HOME`, and clears the config environment variables (taken from
-  `Config`'s fields, so a new setting needs no change there).
+  also `XDG_CONFIG_HOME`, and clears `OPENAI_API_KEY`, the one variable muagent reads.
 - Test files mirror the modules (`test_mcp_config.py` is `mcp_config.py`), plus `test_compaction.py` (summaries, shortened
   results, the too-long retry) and `test_fake_api.py`. Helpers (`make_config`,
   `make_context`, `run_repl`, `tool_with`) are in `tests/helpers.py`; the `client` and
@@ -54,26 +53,29 @@ it editable; the script is `muagent.cli:main`. Tests import modules directly
 
 ## Configuration
 
-Highest first: the command-line flags, environment variables, the user's
+Highest first: the command-line flags, the user's
 `$XDG_CONFIG_HOME/muagent/config.json` (default `~/.config/muagent/`), the defaults.
-`load_config(path=None, **flags)` builds `Config`; `main()` prints the per-key errors and
-exits with status 1. Read the docstring of `config.py` for how, and why.
+The environment has one variable, `OPENAI_API_KEY`, which beats `api_key` in the file;
+there is none for any other setting (a variable for `base_url` would let a project's
+environment send the key and every prompt elsewhere, one for the servers would start a
+program of its own, and `MODEL`, `BASE_URL` are exported by other programs). Only
+`--config` names another file. `load_config(path=None, **flags)` builds `Config`;
+`main()` prints the per-key errors and exits with status 1. Read the docstring of
+`config.py` for how, and why.
 
-| Variable (file key) | Default | Notes |
+| Key | Default | Notes |
 |---|---|---|
-| `OPENAI_API_KEY` (`api_key`) | — | required; a `SecretStr`; the file may say `${NAME}`; no flag |
-| `OPENAI_BASE_URL` (`base_url`) | `None` | for OpenAI-compatible endpoints |
-| `OPENAI_MODEL` (`model`) | `gpt-5.4-mini` | |
-| `STREAMING` (`streaming`) | `true` | stream deltas vs. one `responses.create` |
-| `MAX_CONTEXT_TOKENS` (`max_context_tokens`) | `65536` | budget for the whole request input: instructions, tool definitions and history (the output excluded) |
-| `AUTO_COMPACT` (`auto_compact`) | `true` | summarize the oldest turns past `compact_at` |
-| `COMPACT_AT` (`compact_at`) | `0.75` | share of the budget at which to summarize (0 < x ≤ 1) |
-| `KEEP_RECENT_TOKENS` (`keep_recent_tokens`) | `15000` | newest turns a summary leaves as they are; at most half the trigger |
-| `REASONING_EFFORT` (`reasoning_effort`) | unset | unset sends no `reasoning`, since non-reasoning models reject it |
-| `MAX_TURNS` (`max_turns`) | `25` | most model calls per prompt |
+| `api_key` | — | required; a `SecretStr`; may say `${NAME}`; no flag |
+| `base_url` | `None` | for OpenAI-compatible endpoints |
+| `model` | `gpt-5.4-mini` | |
+| `streaming` | `true` | stream deltas vs. one `responses.create` |
+| `max_context_tokens` | `65536` | budget for the whole request input: instructions, tool definitions and history (the output excluded) |
+| `auto_compact` | `true` | summarize the oldest turns past `compact_at` |
+| `compact_at` | `0.75` | share of the budget at which to summarize (0 < x ≤ 1) |
+| `keep_recent_tokens` | `15000` | newest turns a summary leaves as they are; at most half the trigger |
+| `reasoning_effort` | unset | unset sends no `reasoning`, since non-reasoning models reject it |
+| `max_turns` | `25` | most model calls per prompt |
 
-The environment is read by the SDK's names (`OPENAI_*`) and the setting's own name for the
-rest; the bare `MODEL`, `API_KEY` and `BASE_URL` that other programs export are ignored.
 MCP servers are `mcpServers` in the same file (`Config.mcp_servers`), and only there: a
 server is a program, so neither the environment nor a project's files may define one.
 Each server's stderr goes to `$XDG_STATE_HOME/muagent/NAME.log`; the state directory holds

@@ -20,7 +20,7 @@ def make_context(turns: int) -> ResponseInputParam:
 
 def make_config(**values) -> Config:
     # Not model_validate(): only the constructor reads names in any case.
-    return Config(**{"OPENAI_API_KEY": "test", "OPENAI_MODEL": "gpt-4o", **values})  # pyright: ignore[reportCallIssue]
+    return Config(**{"api_key": "test", "model": "gpt-4o", **values})  # pyright: ignore[reportCallIssue]
 
 
 def run_repl(monkeypatch: pytest.MonkeyPatch, agent: Agent, inputs: list) -> None:

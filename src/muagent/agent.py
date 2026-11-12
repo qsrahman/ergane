@@ -302,7 +302,7 @@ class Agent:
             )
             raise TurnError(
                 f"This turn grew past the context budget (about {used} of "
-                f"{budget} tokens). Ask for less, or raise MAX_CONTEXT_TOKENS"
+                f"{budget} tokens). Ask for less, or raise max_context_tokens"
             )
 
     def _keep_stopped_turn(

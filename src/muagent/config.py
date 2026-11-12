@@ -1,8 +1,9 @@
 """Settings: the Config model and where its values are loaded from.
 
 A value comes from the highest of these that sets it: the command line, the
-environment, `config.json`, and the default. `config.json` also lists the MCP
-servers, which only it can do.
+environment, `config.json`, and the default. The environment has one variable,
+`OPENAI_API_KEY`, the one the OpenAI SDK reads; everything else is a flag or a key in
+`config.json`, which also lists the MCP servers.
 
 How it is built, and why:
 
@@ -10,15 +11,15 @@ How it is built, and why:
   keyword arguments (pydantic-settings' highest source) by field name; `None` is a
   value (`--reasoning-effort default`). There is no `.env` and no flag for the key (it
   would show in the process list).
-- The file is the user's, never one in the working directory: whoever controls a
-  project could set `base_url`, and the key and every prompt would go there. For the
-  same reason `_Environment` drops `mcpServers` (a server is a program), which
-  pydantic-settings would read from a JSON variable. `load_config` gives the path to a
-  subclass through `json_file`, since it is only known at run time.
-- Three fields have the environment's names as aliases (`OPENAI_*`), so `_ConfigFile`
-  renames those keys; the others are read from the variable named like the field, in
-  any case. `extra="forbid"`: a key that is not a setting names itself in the error,
-  and a file that is not a JSON object is a `ValidationError` too (`_fail`), so
+- The environment is read for the key only (`_Environment`). A variable for the base
+  URL would send the key and every prompt wherever a project's `.envrc` said, one for
+  the servers would start a program of its own, and the common names (`MODEL`,
+  `BASE_URL`) are exported by other programs. The file is the user's, never one in the
+  working directory, and only `--config` names another. `load_config` gives the path
+  to a subclass through `json_file`, since it is only known at run time.
+- The file's keys are the fields' names (`mcp_servers` is `mcpServers`, as in other
+  tools' MCP files). `extra="forbid"`: a key that is not a setting names itself in the
+  error, and a file that is not a JSON object is a `ValidationError` too (`_fail`), so
   `main()` has one path for every mistake.
 - `api_key` may be `${NAME}`. It is filled in on the value that won, so a placeholder
   the environment overrode is never looked at.
@@ -83,57 +84,36 @@ class _ConfigFile(JsonConfigSettingsSource):
 
 
 class _Environment(EnvSettingsSource):
-    """The environment, by the names it knows the settings by.
+    """The environment, for the API key only, as `OPENAI_API_KEY` (not `API_KEY`).
 
-    `OPENAI_MODEL`, `OPENAI_API_KEY` and `OPENAI_BASE_URL` are read, but not the bare
-    `MODEL`, `API_KEY` and `BASE_URL` that `validate_by_name` (which lets config.json
-    use the field names) would also accept: other programs export those, and the key
-    and every prompt would go to the `BASE_URL` of one of them.
-
-    The MCP servers are not read from the environment at all (`MCPSERVERS`, as a JSON
-    variable): a server is a program muagent runs, and a `.envrc` in a project could
-    start one. Only the user's own config.json may. The field is not even looked at,
-    so a stray `MCPSERVERS=x` is not a JSON error either.
+    No other field is even looked at, so a stray `MCPSERVERS=x` or `MAX_TURNS=x` in
+    the environment is not an error either.
     """
 
     def get_field_value(
         self, field: FieldInfo, field_name: str
     ) -> tuple[Any, str, bool]:
-        if field_name == "mcp_servers":
-            return None, field_name, False
-        return super().get_field_value(field, field_name)
-
-    def __call__(self) -> dict[str, Any]:
-        values = super().__call__()
-        # A value read from a bare name comes back under the field's name; one read
-        # from its alias, under the alias.
-        for name, field in Config.model_fields.items():
-            if field.validation_alias:
-                values.pop(name, None)
-        return values
+        if field_name == "api_key":
+            return os.environ.get("OPENAI_API_KEY"), field_name, False
+        return None, field_name, False
 
 
 class Config(BaseSettings):
     """Configuration for the AI agent."""
 
-    # A field without an alias is read from the environment variable of the same
-    # name, in any case: max_turns from MAX_TURNS. A key that is not a setting is
-    # a mistake in config.json, and says so.
+    # A key that is not a setting is a mistake in config.json, and says so.
     model_config = SettingsConfigDict(
         extra="forbid", json_file_encoding="utf-8", validate_by_name=True
     )
     model: str = Field(
         min_length=1,
         default="gpt-5.4-mini",
-        validation_alias="OPENAI_MODEL",
     )
     api_key: SecretStr = Field(  # a SecretStr stays hidden if the config is printed
         min_length=1,
-        validation_alias="OPENAI_API_KEY",
     )
     base_url: str | None = Field(
         default=None,
-        validation_alias="OPENAI_BASE_URL",
     )
     max_context_tokens: int = Field(
         default=64 * 1024,
@@ -167,7 +147,7 @@ class Config(BaseSettings):
         default=None,
     )
     # Only config.json lists servers: they are nested, and no flag or variable
-    # could say them.
+    # could say them. `mcpServers` in the file, as in other tools' MCP files.
     mcp_servers: dict[Annotated[str, Field(pattern=NAME_PATTERN)], McpServerConfig] = (
         Field(default_factory=dict, validation_alias="mcpServers")
     )
@@ -194,8 +174,8 @@ class Config(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        # Highest first: the flags (passed as keyword arguments), the environment,
-        # the file. A `.env` file is not read.
+        # Highest first: the flags (passed as keyword arguments), the environment (the
+        # key), the file. A `.env` file is not read.
         return init_settings, _Environment(settings_cls), _ConfigFile(settings_cls)
 
 

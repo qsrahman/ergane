@@ -23,9 +23,9 @@ class StreamCut(TurnError):
 
 # What to check, by the status of an API error that has a usual cause.
 _STATUS_HINTS = {
-    401: "Check OPENAI_API_KEY.",
-    403: "Check OPENAI_API_KEY and that it may use this model.",
-    404: "Check OPENAI_MODEL and OPENAI_BASE_URL.",
+    401: "Check the API key (OPENAI_API_KEY, or api_key in config.json).",
+    403: "Check the API key and that it may use this model.",
+    404: "Check the model and base_url in config.json.",
     429: "The account is out of quota, or rate limited.",
 }
 
@@ -62,7 +62,7 @@ def describe_error(exc: Exception) -> str:
             f" {hint}" if hint else ""
         )
     if isinstance(exc, APIConnectionError):
-        return f"{exc} Check OPENAI_BASE_URL and the network."
+        return f"{exc} Check base_url in config.json and the network."
     if isinstance(exc, APIError):
         return f"API error: {exc.message}"
     return f"Agent error: {type(exc).__name__}: {exc}"

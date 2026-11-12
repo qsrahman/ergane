@@ -1136,10 +1136,13 @@ class TestDescribeError:
         ("status", "text"),
         [
             (429, "API error 429 (code_429): message 429 The account is out of quota"),
-            (401, "API error 401 (code_401): message 401 Check OPENAI_API_KEY."),
+            (
+                401,
+                "API error 401 (code_401): message 401 Check the API key (OPENAI_API_KEY",
+            ),
             (
                 404,
-                "API error 404 (code_404): message 404 Check OPENAI_MODEL and OPENAI_BASE_URL.",
+                "API error 404 (code_404): message 404 Check the model and base_url in config.json.",
             ),
             (500, "API error 500 (code_500): message 500"),
         ],
@@ -1162,7 +1165,7 @@ class TestDescribeError:
 
         assert (
             describe_error(exc)
-            == "Connection error. Check OPENAI_BASE_URL and the network."
+            == "Connection error. Check base_url in config.json and the network."
         )
 
     def test_anything_else_gives_its_type_and_message(self):

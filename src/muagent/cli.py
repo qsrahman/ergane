@@ -29,10 +29,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         prog="muagent",
         argument_default=argparse.SUPPRESS,  # a flag not given is not in the result
         description="A minimal terminal chat agent on the OpenAI Responses API.",
-        epilog="Each setting comes from the first of: its flag, its environment "
-        "variable, config.json, its default. Set the key in config.json "
-        '("api_key": "${OPENAI_API_KEY}") or in OPENAI_API_KEY; there is no flag '
-        "for it, since a flag shows in the process list.",
+        epilog="Each setting comes from the first of: its flag, config.json, its "
+        "default. The key is the exception: the environment variable "
+        'OPENAI_API_KEY beats "api_key" in config.json (which may say '
+        '"${NAME}"). There is no flag for it, since a flag shows in the process '
+        "list.",
     )
     parser.add_argument(
         "--version", action="version", version=f"muagent {version('muagent')}"
@@ -40,47 +41,49 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--config", type=Path, metavar="FILE", help="the config file to use"
     )
-    parser.add_argument("--model", metavar="NAME", help="OPENAI_MODEL")
-    parser.add_argument("--base-url", metavar="URL", help="OPENAI_BASE_URL")
+    parser.add_argument("--model", metavar="NAME", help="the model")
+    parser.add_argument(
+        "--base-url", metavar="URL", help="the base URL of an OpenAI-compatible API"
+    )
     parser.add_argument(
         "--streaming",
         action=argparse.BooleanOptionalAction,
-        help="STREAMING: stream the reply as it arrives",
+        help="stream the reply as it arrives",
     )
     parser.add_argument(
         "--max-context-tokens",
         type=int,
         metavar="N",
-        help="MAX_CONTEXT_TOKENS: budget for a whole request",
+        help="budget for a whole request",
     )
     parser.add_argument(
         "--auto-compact",
         action=argparse.BooleanOptionalAction,
-        help="AUTO_COMPACT: summarize the oldest turns when the history gets long",
+        help="summarize the oldest turns when the history gets long",
     )
     parser.add_argument(
         "--compact-at",
         type=float,
         metavar="SHARE",
-        help="COMPACT_AT: share of the context budget at which to summarize",
+        help="share of the context budget at which to summarize",
     )
     parser.add_argument(
         "--keep-recent-tokens",
         type=int,
         metavar="N",
-        help="KEEP_RECENT_TOKENS: tokens of the newest turns kept verbatim",
+        help="tokens of the newest turns kept verbatim",
     )
     parser.add_argument(
         "--max-turns",
         type=int,
         metavar="N",
-        help="MAX_TURNS: most model calls for one prompt",
+        help="most model calls for one prompt",
     )
     parser.add_argument(
         "--reasoning-effort",
         choices=[*EFFORTS, "default"],
         metavar="LEVEL",
-        help=f"REASONING_EFFORT: {', '.join(EFFORTS)}, or default to send none",
+        help=f"{', '.join(EFFORTS)}, or default to send none",
     )
     parser.add_argument(
         "--no-mcp",
@@ -106,9 +109,7 @@ def _exit_with(title: str, exc: ValidationError, file: Path) -> NoReturn:
     for error in exc.errors():
         field = ".".join(str(part) for part in error["loc"])
         print(f"  - {field + ': ' if field else ''}{error['msg']}", file=sys.stderr)
-    if any(
-        e["type"] == "missing" and e["loc"] == ("OPENAI_API_KEY",) for e in exc.errors()
-    ):
+    if any(e["type"] == "missing" and e["loc"] == ("api_key",) for e in exc.errors()):
         print(
             f'No API key. Put "api_key" in {file} (the key itself, or '
             '"${OPENAI_API_KEY}"), or set the OPENAI_API_KEY environment variable.',

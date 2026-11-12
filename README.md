@@ -40,21 +40,21 @@ Put your settings in `~/.config/muagent/config.json` (or `$XDG_CONFIG_HOME/muage
 
 Only the key is required, and it may be written out, or as `${NAME}` to take it from the environment variable `NAME` (a variable that is not set is an error that names it). The servers under `mcpServers` are explained [below](#mcp-servers). A key that is not a setting is an error that names it. There is no `.env` file: put the key in the environment or in this file.
 
-Each setting comes from the first of these that sets it: **its command-line flag, its environment variable, `config.json`, its default.** So a variable overrides the file, and a flag overrides both.
+Each setting comes from the first of these that sets it: **its command-line flag, `config.json`, its default.** The key is the one setting the environment can also give: the variable `OPENAI_API_KEY`, which the OpenAI SDK reads too, beats `api_key` in the file. There are no variables for the rest (not for the base URL, which would let a project's environment send your key and prompts elsewhere).
 
-| File key             | Environment variable | Flag                     | Default               | Description |
-| -------------------- | -------------------- | ------------------------ | --------------------- | ----------- |
-| `api_key`            | `OPENAI_API_KEY`     | none (it would show in the process list) | —       | API key (required) |
-| `base_url`           | `OPENAI_BASE_URL`    | `--base-url URL`         | OpenAI default        | Base URL for an OpenAI-compatible API |
-| `model`              | `OPENAI_MODEL`       | `--model NAME`           | `gpt-5.4-mini`        | Model name |
-| `streaming`          | `STREAMING`          | `--streaming`, `--no-streaming` | `true`         | Stream tokens as they arrive |
-| `max_context_tokens` | `MAX_CONTEXT_TOKENS` | `--max-context-tokens N` | `65536`               | Token budget for one request: the system instructions, the definitions of the tools and the conversation history together (not the reply). Old turns are dropped to fit it, so many or long tool definitions leave less room for the history. Keep it well below the model's context window. |
-| `reasoning_effort`   | `REASONING_EFFORT`   | `--reasoning-effort LEVEL` | unset (model default) | `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`; the flag also takes `default`, to send none over a value in the file. Leave unset for non-reasoning models, which reject it. |
-| `auto_compact`       | `AUTO_COMPACT`       | `--auto-compact`, `--no-auto-compact` | `true`   | Summarize the oldest turns when the history gets long (see [Long conversations](#long-conversations)). |
-| `compact_at`         | `COMPACT_AT`         | `--compact-at SHARE`     | `0.75`                | Share of `max_context_tokens` at which to summarize. |
-| `keep_recent_tokens` | `KEEP_RECENT_TOKENS` | `--keep-recent-tokens N` | `15000`               | About how many tokens of the newest turns stay as they are (at most half of where summarizing starts). |
-| `max_turns`          | `MAX_TURNS`          | `--max-turns N`          | `25`                  | Most model calls for one prompt: the cap on the tool loop. |
-| `mcpServers`         | none                 | `--no-mcp` (start none)  | none                  | The [MCP servers](#mcp-servers). |
+| File key             | Flag                     | Default               | Description |
+| -------------------- | ------------------------ | --------------------- | ----------- |
+| `api_key`            | none (it would show in the process list) | —       | API key (required); `OPENAI_API_KEY` in the environment wins over it |
+| `base_url`           | `--base-url URL`         | OpenAI default        | Base URL for an OpenAI-compatible API |
+| `model`              | `--model NAME`           | `gpt-5.4-mini`        | Model name |
+| `streaming`          | `--streaming`, `--no-streaming` | `true`         | Stream tokens as they arrive |
+| `max_context_tokens` | `--max-context-tokens N` | `65536`               | Token budget for one request: the system instructions, the definitions of the tools and the conversation history together (not the reply). Old turns are dropped to fit it, so many or long tool definitions leave less room for the history. Keep it well below the model's context window. |
+| `reasoning_effort`   | `--reasoning-effort LEVEL` | unset (model default) | `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`; the flag also takes `default`, to send none over a value in the file. Leave unset for non-reasoning models, which reject it. |
+| `auto_compact`       | `--auto-compact`, `--no-auto-compact` | `true`   | Summarize the oldest turns when the history gets long (see [Long conversations](#long-conversations)). |
+| `compact_at`         | `--compact-at SHARE`     | `0.75`                | Share of `max_context_tokens` at which to summarize. |
+| `keep_recent_tokens` | `--keep-recent-tokens N` | `15000`               | About how many tokens of the newest turns stay as they are (at most half of where summarizing starts). |
+| `max_turns`          | `--max-turns N`          | `25`                  | Most model calls for one prompt: the cap on the tool loop. |
+| `mcpServers`         | `--no-mcp` (start none)  | none                  | The [MCP servers](#mcp-servers). |
 
 Two more flags: `--config FILE` reads another file (there is no variable for it, so that a project's environment cannot point muagent at a file of its own), `--version` prints the version, and `--help` lists them all. A file you name that does not exist is an error; the default one may be missing, if the environment and flags give the key.
 
@@ -87,7 +87,7 @@ Command names are case-insensitive. A mistyped command such as `/rest` is report
 
 ## Tools
 
-The model can call tools. A tool that only reads runs at once, and `muagent` prints the call as a dimmed line (on a terminal, unless `NO_COLOR` is set), such as `[add({"a": 17, "b": 25})]`, never wider than the terminal: the middle of long values is left out. A tool that can change things asks first, in one line, such as `Allow save {"path": "notes.txt"}? [y/N/a]`; type `y` to allow this call, or `a` to allow that tool for the rest of the session (it then runs like a read-only one, with its call shown as a line, and `/tools` lists it as allowed; restart muagent to take it back). Anything else is a no. The line is never wider than the terminal: if the arguments do not fit, the middle of their long values is left out (the start and the end stay) and the prompt ends `[y/N/a/?]`; type `?` to see all of it, and it asks again. The result goes back to the model, which says what it found, repeating until the model answers. When a turn grows past `MAX_CONTEXT_TOKENS` while it runs, the oldest tool results are replaced by a short placeholder (the calls stay) so that it can go on; only if the latest results alone are over, it is stopped. If a call fails, the error text goes back to the model so it can correct the call. The Responses API must support function calling.
+The model can call tools. A tool that only reads runs at once, and `muagent` prints the call as a dimmed line (on a terminal, unless `NO_COLOR` is set), such as `[add({"a": 17, "b": 25})]`, never wider than the terminal: the middle of long values is left out. A tool that can change things asks first, in one line, such as `Allow save {"path": "notes.txt"}? [y/N/a]`; type `y` to allow this call, or `a` to allow that tool for the rest of the session (it then runs like a read-only one, with its call shown as a line, and `/tools` lists it as allowed; restart muagent to take it back). Anything else is a no. The line is never wider than the terminal: if the arguments do not fit, the middle of their long values is left out (the start and the end stay) and the prompt ends `[y/N/a/?]`; type `?` to see all of it, and it asks again. The result goes back to the model, which says what it found, repeating until the model answers. When a turn grows past `max_context_tokens` while it runs, the oldest tool results are replaced by a short placeholder (the calls stay) so that it can go on; only if the latest results alone are over, it is stopped. If a call fails, the error text goes back to the model so it can correct the call. The Responses API must support function calling.
 
 `muagent` has no tools of its own: they come from the MCP servers you list in `config.json` (see below). With none, it is a plain chat, and `/tools` says so.
 
@@ -172,7 +172,7 @@ The tests run against a local fake of the Responses API. They ignore your `confi
 
 - Requests are sent with `store=False`, so the server keeps no conversation state. The full history is resent on each turn.
 - A turn, tool calls and their results included, is added to the history once the final response completes with text. An incomplete response keeps the partial reply you already saw; failed or empty responses leave the history unchanged.
-- When the next request would pass `COMPACT_AT` of `MAX_CONTEXT_TOKENS` (instructions, tool definitions and history together), the oldest turns are summarized and the newest kept; see [Long conversations](#long-conversations). Turns that still do not fit are dropped, oldest first. Tokens are estimated at about 4 bytes of UTF-8 per token, which works with any backend's tokenizer.
+- When the next request would pass `compact_at` of `max_context_tokens` (instructions, tool definitions and history together), the oldest turns are summarized and the newest kept; see [Long conversations](#long-conversations). Turns that still do not fit are dropped, oldest first. Tokens are estimated at about 4 bytes of UTF-8 per token, which works with any backend's tokenizer.
 
 [TURN.md](TURN.md) follows one turn through the code: what is sent, what is kept, what you see, and every way a turn can end.
 

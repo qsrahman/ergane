@@ -24,7 +24,7 @@ line, because lines move. Everything is in [`src/muagent/`](src/muagent/).
        _compact_if_due: summarize old turns if long ◄─────┤   (§2a)
        Context.begin_turn: summary + history + prompt ◄───┤
                                                           │
-                       ┌──────────────────────────────────┤   at most MAX_TURNS rounds
+                       ┌──────────────────────────────────┤   at most max_turns rounds
                        │  _send_response    one request; the reply text streams to the screen
                        │  _response_status  failed, incomplete or empty? ──► stop and report it
                        │  tool calls?       none ──► stop: this was the answer
@@ -69,7 +69,7 @@ that `Repl.ask` hands it, which are methods of `Console`:
 
 ## 2. Starting the turn (`Context.begin_turn`)
 
-First, if the next request would be over `COMPACT_AT` (75%) of the budget, the oldest turns
+First, if the next request would be over `compact_at` (75%) of the budget, the oldest turns
 are summarized (§2a). Then:
 
 `begin_turn(prompt, max_tokens)` returns the **items** for the first request: the summary
@@ -77,7 +77,7 @@ message if there is one, a copy of the history, and `{"role": "user", "content":
 not change until the turn is saved, so a turn that fails leaves nothing behind. It
 also remembers the prompt for `/retry` and marks it as not saved.
 
-If the items are over `MAX_CONTEXT_TOKENS`, whole turns are dropped from the front
+If the items are over `max_context_tokens`, whole turns are dropped from the front
 (each up to the next user message) until they fit, and you see
 `[Context trimmed: oldest turns dropped]`. The size is an estimate: the UTF-8 bytes
 of an item's JSON divided by four, with a reasoning item's opaque
@@ -88,9 +88,9 @@ when one failed, this trimming is what keeps the request in the budget.
 ### 2a. Summarizing the oldest turns (`Agent.compact`)
 
 The trigger is an estimate, before the turn: the instructions and tool definitions
-(`_fixed_tokens`), the history with its summary, and the prompt, against `COMPACT_AT` of
-`MAX_CONTEXT_TOKENS`. Past it, `Context.plan_compaction` keeps the newest turns that
-fit in `KEEP_RECENT_TOKENS` (at most half the trigger, and always the newest turn) and
+(`_fixed_tokens`), the history with its summary, and the prompt, against `compact_at` of
+`max_context_tokens`. Past it, `Context.plan_compaction` keeps the newest turns that
+fit in `keep_recent_tokens` (at most half the trigger, and always the newest turn) and
 cuts at the start of a turn, so a tool call stays with its output.
 
 The turns before the cut go to the model as labelled text (`[User]:`, `[Assistant]:`,
@@ -116,7 +116,7 @@ notes about what happened and not instructions: it was written from text that ma
 web page's orders. It is not an item of the history (`Context.summary`), so the messages
 still alternate and `/undo` and `/retry` work on the turns after it.
 
-`MAX_CONTEXT_TOKENS` is a budget for the whole request, not only the history, so the
+`max_context_tokens` is a budget for the whole request, not only the history, so the
 items are given what is left of it after the part every request carries: the
 instructions and the definitions of the tools (`Agent._fixed_tokens`, estimated the
 same way). A long tool list therefore leaves less room for the history. The reply is
@@ -128,22 +128,22 @@ Every request is built the same way, and is the only place the API is called:
 
 | Field          | Value                                                                                                  |
 |----------------|--------------------------------------------------------------------------------------------------------|
-| `model`        | `OPENAI_MODEL`                                                                                         |
+| `model`        | the `model` setting                                                                                    |
 | `instructions` | the system prompt (`SYSTEM_PROMPT` if the agent has tools, else `SYSTEM_PROMPT_NO_TOOLS`), then the OS and the date |
 | `input`        | **all** the items: the history, this prompt, and everything this turn has produced so far              |
 | `tools`        | the schema of every tool, if there are any                                                             |
-| `reasoning`    | `{"effort": …}`, only if `REASONING_EFFORT` is set                                                      |
+| `reasoning`    | `{"effort": …}`, only if `reasoning_effort` is set                                                      |
 | `store`        | `false`                                                                                                |
 
 Because `store` is false, nothing lives on the server: **each round resends everything**.
 That is why a turn with tools gets expensive, and why there is a budget check after
 every round.
 
-With `STREAMING=true` the text deltas go to `on_text` as they arrive and the final
+With `streaming` on the text deltas go to `on_text` as they arrive and the final
 response is taken from the stream's last event (`completed`, `incomplete` or
 `failed`). If the stream ends without one, the turn ends with the reason from the
 server's last `error` event (`Stream error: CODE: MESSAGE`) or `Stream ended without
-a final response`. With `STREAMING=false` the whole text goes to `on_text` once. In
+a final response`. With `streaming` off the whole text goes to `on_text` once. In
 both modes the text is shown **before** the status is checked, so a partial reply is
 never hidden.
 
@@ -225,7 +225,7 @@ After each round with tool calls the loop checks, in this order:
 1. **The budget.** `_next_request_tokens` takes the `usage.input_tokens` the server
    reported for the request it just answered, which is exact, plus an estimate of the
    items added since (everything is estimated if the server sent no usage). Over
-   `MAX_CONTEXT_TOKENS` first shortens tool results: those of the rounds before the one
+   `max_context_tokens` first shortens tool results: those of the rounds before the one
    that just ran, oldest first. A result over 8,000 characters keeps its first 4,000 and
    last 1,000 with `[... N characters hidden; call the tool again if you need them ...]`
    (the start says what it is, the end often how it went); what is still too much after
@@ -239,14 +239,14 @@ After each round with tool calls the loop checks, in this order:
    effects, so the turn is kept, closed with `[Stopped after N model calls: its results
    passed the context budget]` and its results dropped (or every later request would
    carry them), and it ends with `This turn grew past the context budget (about X of Y
-   tokens). Ask for less, or raise MAX_CONTEXT_TOKENS`.
+   tokens). Ask for less, or raise max_context_tokens`.
 
    The server's count includes the instructions and the tool definitions, so it
    measures the same thing as the trimming in §2, the whole request, but exactly. A
    one-word prompt is about 9 tokens of history and about 600 to the server with no
    tools, and the 42 small tools of the example below add about 3,000 more (by the
    estimate); real servers describe their tools at more length.
-2. **The cap.** After `MAX_TURNS` rounds (25 by default) that all ended in tool calls,
+2. **The cap.** After `max_turns` rounds (25 by default) that all ended in tool calls,
    the turn is saved with a closing assistant note and ends with
    `Stopped after N model calls without a final answer`.
 
@@ -276,8 +276,8 @@ only the replies. Calls and outputs are removed together, for the same reason as
 | refused, or no text                                   | no, unless a round already ran | `[Refused: …]`, `[No text in response]`                |
 | the stream breaks before any text: tried again, twice at most | if a try works, as usual | `[… trying again (1 of 2)]`, then the reply |
 | the stream keeps breaking, or breaks after some text, or ends with an `error` event | no, unless a round already ran | `[Stream ended without a final response]`, `[Stream cut off: …]` or `[Stream error: …]` |
-| `MAX_TURNS` rounds of tool calls                      | yes, with a closing note| `[Stopped after N model calls without a final answer]`        |
-| the turn outgrows `MAX_CONTEXT_TOKENS`                | older, then the latest results are shortened and the turn goes on; if even that does not fit, kept with a note and its results dropped | `[Context full: older tool results dropped]`, `[… this round's tool results shortened]`, or `[This turn grew past the context budget …]` |
+| `max_turns` rounds of tool calls                      | yes, with a closing note| `[Stopped after N model calls without a final answer]`        |
+| the turn outgrows `max_context_tokens`                | older, then the latest results are shortened and the turn goes on; if even that does not fit, kept with a note and its results dropped | `[Context full: older tool results dropped]`, `[… this round's tool results shortened]`, or `[This turn grew past the context budget …]` |
 | Ctrl-C                                                | yes after a completed round or while tools run; no in the first model call | `[Cancelled]`                           |
 | the server refuses a request as too long (once a turn) | as usual, if the retry works | `[The request was too long for the model; trying again, shorter]`: before the first round the oldest turns are summarized, later the earlier results are shortened; then it is sent again |
 | the API or the network fails (after the SDK's retries)| no, unless a round already ran | `[API error …]` or `[Agent error: Type: message]`                         |

@@ -10,10 +10,9 @@ from muagent.cli import main, parse_args
 
 def test_main_wires_config_agent_and_repl(monkeypatch: pytest.MonkeyPatch, capsys):
     monkeypatch.setenv("OPENAI_API_KEY", "test")
-    monkeypatch.setenv("OPENAI_MODEL", "wired-model")
     monkeypatch.setattr("builtins.input", lambda _prompt: "/exit")
 
-    main([])
+    main(["--model", "wired-model"])
 
     out = capsys.readouterr().out
     assert "model: wired-model" in out
@@ -33,7 +32,7 @@ def test_a_missing_key_says_where_to_put_it(tmp_path, capsys):
         main([])
 
     err = capsys.readouterr().err
-    assert "  - OPENAI_API_KEY: Field required" in err
+    assert "  - api_key: Field required" in err
     assert f'No API key. Put "api_key" in {tmp_path / "muagent" / "config.json"}' in err
     assert "or set the OPENAI_API_KEY environment variable" in err
 
@@ -69,10 +68,9 @@ def test_a_directory_as_the_config_file_is_reported(tmp_path, capsys):
 
 def test_another_mistake_gets_no_such_help(monkeypatch, capsys):
     monkeypatch.setenv("OPENAI_API_KEY", "test")
-    monkeypatch.setenv("MAX_TURNS", "0")
 
     with pytest.raises(SystemExit):
-        main([])
+        main(["--max-turns", "0"])
 
     assert "No API key" not in capsys.readouterr().err
 
@@ -81,26 +79,11 @@ def test_main_names_a_bad_setting_by_its_key(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
     monkeypatch.setenv("OPENAI_API_KEY", "test")
-    monkeypatch.setenv("MAX_TURNS", "0")
 
     with pytest.raises(SystemExit):
-        main([])
+        main(["--max-turns", "0"])
 
     assert "  - max_turns:" in capsys.readouterr().err
-
-
-def test_settings_are_read_from_the_environment_in_any_case(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    from muagent.config import load_config
-
-    monkeypatch.setenv("OPENAI_API_KEY", "test")
-    monkeypatch.setenv("MAX_TURNS", "7")
-    monkeypatch.setenv("streaming", "false")
-
-    config = load_config()
-
-    assert (config.max_turns, config.streaming) == (7, False)
 
 
 class RecordingRepl:
@@ -240,10 +223,9 @@ class TestMcpServers:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
     ):
         write_config_json(tmp_path, {"fake": FAKE_SERVER})
-        monkeypatch.setenv("OPENAI_MODEL", "banner-model")
         monkeypatch.setattr("builtins.input", lambda _prompt: "/exit")
 
-        main([])
+        main(["--model", "banner-model"])
 
         first_line = capsys.readouterr().out.splitlines()[0]
         # The server's 17.
@@ -338,22 +320,18 @@ class TestFlags:
 
         assert exc.value.code == 2
 
-    def test_a_flag_wins_over_the_environment_and_the_file(
-        self, monkeypatch, tmp_path: Path
-    ):
+    def test_a_flag_wins_over_the_file(self, tmp_path: Path):
         (tmp_path / "muagent").mkdir()
         (tmp_path / "muagent" / "config.json").write_text(
             json.dumps({"model": "file-model", "max_turns": 5})
         )
-        monkeypatch.setenv("OPENAI_MODEL", "env-model")
-        monkeypatch.setenv("MAX_TURNS", "6")
 
         main(["--model", "flag-model"])
 
         agent = RecordingRepl.agent
         assert agent is not None
-        assert agent.config.model == "flag-model"  # flag > env > file
-        assert agent.config.max_turns == 6  # env > file
+        assert agent.config.model == "flag-model"  # flag > file
+        assert agent.config.max_turns == 5  # the file, with no flag
 
     def test_default_as_the_effort_sends_none_over_the_file(self, tmp_path: Path):
         (tmp_path / "muagent").mkdir()

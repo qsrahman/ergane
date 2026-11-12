@@ -9,7 +9,6 @@ from openai import OpenAI
 from fake_api import FakeResponsesHandler
 from helpers import make_config
 from muagent.agent import Agent
-from muagent.config import Config
 from muagent.tools import Tool
 
 
@@ -24,9 +23,8 @@ def isolate_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
-    # Taken from Config itself, so a new setting needs no change here.
-    for name, field in Config.model_fields.items():
-        monkeypatch.delenv(str(field.validation_alias or name.upper()), raising=False)
+    # The one variable muagent reads (see config._Environment).
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
 
 @pytest.fixture
