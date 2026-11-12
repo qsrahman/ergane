@@ -1,5 +1,6 @@
 import pytest
 from prompt_toolkit.document import Document
+from prompt_toolkit.formatted_text import fragment_list_to_text, to_formatted_text
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
@@ -321,6 +322,37 @@ class TestReplConfirm:
         assert "[Cancelled]" in capsys.readouterr().out
 
 
+class TestToolbar:
+    """The line under the prompt: the model, the effort and the context."""
+
+    def toolbar(self, tmp_path, **config) -> str:
+        agent = Agent(make_config(**config))
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, tmp_path / "history", input=pipe, output=DummyOutput()
+            )
+            assert session is not None
+            Repl(agent, COMMANDS, session)
+            assert callable(session.bottom_toolbar)
+            return str(session.bottom_toolbar())
+
+    def test_it_names_the_model_and_the_budget(self, tmp_path):
+        text = self.toolbar(tmp_path, model="m1", max_context_tokens=10000)
+
+        assert text.startswith(" m1 | context ~")
+        assert text.endswith("% of 10,000")
+        assert "effort" not in text
+
+    def test_it_names_the_effort_when_there_is_one(self, tmp_path):
+        assert " | effort: high | " in self.toolbar(tmp_path, reasoning_effort="high")
+
+    def test_the_servers_count_is_not_marked_as_an_estimate(self):
+        agent = Agent(make_config(max_context_tokens=10000))
+        agent.context.counted = 2500
+
+        assert Repl(agent, COMMANDS)._toolbar().endswith("context 25% of 10,000")  # pyright: ignore[reportPrivateUsage]
+
+
 class TestTerminalSession:
     """The line editor, driven through a pipe the way prompt_toolkit's docs test it."""
 
@@ -412,6 +444,31 @@ class TestTerminalSession:
             found = session.completer.get_completions(Document("/re"), None)  # pyright: ignore[reportArgumentType]
 
             assert sorted(c.text for c in found) == ["/reset", "/retry"]
+
+    def test_a_command_is_completed_with_what_it_does(self, tmp_path):
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, tmp_path / "history", input=pipe, output=DummyOutput()
+            )
+            assert session is not None and session.completer is not None
+            found = list(session.completer.get_completions(Document("/und"), None))  # pyright: ignore[reportArgumentType]
+
+        assert [c.text for c in found] == ["/undo"]
+        assert (
+            fragment_list_to_text(to_formatted_text(found[0].display_meta))
+            == COMMANDS["/undo"].description
+        )
+
+    def test_the_editor_and_the_hint_are_on(self, tmp_path):
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, tmp_path / "history", input=pipe, output=DummyOutput()
+            )
+
+        assert session is not None
+        assert session.enable_open_in_editor is True
+        assert session.enable_suspend is True
+        assert "/help" in str(session.placeholder)
 
     def test_redirected_input_is_read_with_plain_input(self, tmp_path):
         # Under pytest stdin is not a terminal.

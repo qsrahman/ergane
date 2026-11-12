@@ -93,6 +93,11 @@ def help_(repl: Repl, args: str) -> None:
             ),
             ("Tab, Up, Down", "Complete a command, recall earlier prompts"),
             ("Ctrl-C", "Clear the line; on an empty line, press twice to quit"),
+            ("Ctrl-R", "Search the earlier prompts"),
+            (
+                "Ctrl-X Ctrl-E",
+                "Edit the prompt in $EDITOR, and send it when that closes",
+            ),
             ("Ctrl-D", "Quit; press twice once there is a conversation"),
             *keys,
         ]

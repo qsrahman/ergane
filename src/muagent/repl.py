@@ -19,6 +19,7 @@ from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.output import Output
+from prompt_toolkit.styles import Style
 
 from muagent.agent import Agent
 from muagent.commands import Command
@@ -32,6 +33,12 @@ from muagent.mcp_client import ServerStatus
 # to send one of them (or Esc followed by Enter) for the key to tell them apart.
 for _sequence in ("\x1b[13;2u", "\x1b[27;2;13~"):
     ANSI_SEQUENCES[_sequence] = (Keys.Escape, Keys.ControlM)
+
+# Colour is the terminal's own (the ANSI names), and prompt_toolkit drops it all when
+# NO_COLOR is set. The toolbar is not reversed, which would make it a loud bar.
+_STYLE = Style.from_dict(
+    {"bottom-toolbar": "noreverse ansibrightblack", "placeholder": "ansibrightblack"}
+)
 
 _KEYS = KeyBindings()
 
@@ -65,14 +72,17 @@ class _CommandCompleter(Completer):
     def get_completions(self, document: Document, complete_event: CompleteEvent):
         name, space, rest = document.text_before_cursor.lstrip().partition(" ")
         if not space:
-            words, typed = list(self.commands), name
+            # A command is shown with what it does, so no one has to run /help.
+            words = {n: c.description for n, c in self.commands.items()}
+            typed = name
         elif name in self.commands:
-            words, typed = self.commands[name].arguments, rest
+            words = dict.fromkeys(self.commands[name].arguments, "")
+            typed = rest
         else:
             return
-        for word in words:
+        for word, meta in words.items():
             if word.startswith(typed):
-                yield Completion(word, -len(typed))
+                yield Completion(word, -len(typed), display_meta=meta)
 
 
 def _history_file(path: Path) -> History:
@@ -116,6 +126,12 @@ def terminal_session(
         auto_suggest=AutoSuggestFromHistory(),
         prompt_continuation=". ",  # lines added by hand or pasted line up under "> "
         key_bindings=_KEYS,
+        style=_STYLE,
+        placeholder="Message, or /help for commands. Alt-Enter adds a line.",
+        # Ctrl-X Ctrl-E edits a long prompt in $EDITOR and sends it when the editor
+        # closes; Ctrl-Z suspends muagent (Ctrl-R, searching the history, is built in).
+        enable_open_in_editor=True,
+        enable_suspend=True,
         input=input,
         output=output,
     )
@@ -151,10 +167,26 @@ class Repl:
             self.console.ask = PromptSession(
                 input=session.app.input, output=session.app.output
             ).prompt
+            session.bottom_toolbar = self._toolbar
         self.servers = servers
         self.running = False
         self.commands = commands
         self.session = session
+
+    def _toolbar(self) -> str:
+        """The line under the prompt: the model, the effort and how full the context
+        is, as `/context` counts it."""
+        agent = self.agent
+        config = agent.config
+        used = agent.request_tokens()
+        estimated = "" if agent.context.counted is not None else "~"
+        effort = (
+            f" | effort: {config.reasoning_effort}" if config.reasoning_effort else ""
+        )
+        return (
+            f" {config.model}{effort} | context {estimated}"
+            f"{used * 100 // config.max_context_tokens}% of {config.max_context_tokens:,}"
+        )
 
     def run(self) -> None:
         """Read and handle prompts until the user quits."""
