@@ -49,7 +49,7 @@ that `Repl.ask` hands it, which are methods of `Console`:
 
 - `Repl.run` reads a prompt with the prompt_toolkit session (plain `input("> ")` when input or
   output is redirected) and strips it. A pasted block arrives as one prompt, newlines
-  included, and so does a prompt with lines added by hand (Alt-Enter, Ctrl-J). A blank line is skipped. End of input (Ctrl-D) ends muagent. Ctrl-C clears the line being typed; on an empty line it
+  included, and so does a prompt with lines added by hand (Alt-Enter, Ctrl-J). A blank line is skipped. End of input (Ctrl-D) ends muagent, but at a terminal, once there is a conversation, it asks for a second Ctrl-D first (`[Press Ctrl-D again, or type /exit, to quit]`, counted together with Ctrl-C). Ctrl-C clears the line being typed; on an empty line it
   asks for a second Ctrl-C in a row (`[Press Ctrl-C again, or type /exit, to quit]`), and any prompt
   in between starts the count again.
 - `Repl.handle` lowercases the first word and looks it up among the slash commands.
@@ -168,7 +168,7 @@ never started (the SDK already tried).
 | any other status but `completed` (or none)     | `Response not completed: STATUS`                  |
 | has text, or has a tool call                   | fine                                              |
 | neither, but a refusal                         | `Refused: …`                                      |
-| neither                                        | `No text in response`                             |
+| neither                                        | `No text in response` (after one more try, `[The model sent an empty reply; trying again]`) |
 
 A problem ends the turn on the spot, even if the response also asked for tool calls:
 those calls are not run. A response with tool calls and no text is fine, because only

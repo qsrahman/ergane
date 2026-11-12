@@ -317,6 +317,17 @@ class TestContextCommand:
         )
         assert "last request" not in out  # nothing has been sent yet
 
+    def test_the_total_is_the_servers_count_while_it_holds(
+        self, monkeypatch, make_agent, capsys
+    ):
+        agent = make_agent(MAX_CONTEXT_TOKENS=10000)
+        agent.context.counted = 2500
+
+        run_repl(monkeypatch, agent, ["/context", "/exit"])
+
+        out = capsys.readouterr().out
+        assert "  total          2,500 of 10,000 (25%) (counted by the server)\n" in out
+
     def test_it_adds_the_count_of_the_server_once_there_is_one(
         self, monkeypatch, make_agent, capsys
     ):

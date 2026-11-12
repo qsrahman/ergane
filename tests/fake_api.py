@@ -197,7 +197,7 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     """Minimal fake of POST /v1/responses.
 
     The most recent user message selects the scenario: "incomplete", "failed",
-    "empty" (completed with no output), "refusal", "cancelled" (text, but a
+    "empty" (completed with no output), "empty_once" (the same, only for the first time a request comes), "refusal", "cancelled" (text, but a
     status other than completed or incomplete), "nostatus" (a reply without a
     status, as some compatible servers send), "truncated" (a stream that ends
     without a terminal event), "reset" (the connection is reset instead),
@@ -230,6 +230,12 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
             scenario = (
                 scenario.removeprefix("tool_then_") if tool_output_sent else "tool_call"
             )
+        if scenario == "empty_once":
+            seen = any(
+                earlier["input"] == body["input"]
+                for earlier in self.server.requests[:-1]  # pyright: ignore[reportAttributeAccessIssue]
+            )
+            scenario = "hello" if seen else "empty"  # answered the second time
         if scenario.startswith("status_"):
             code = int(scenario.removeprefix("status_"))
             data = json.dumps(

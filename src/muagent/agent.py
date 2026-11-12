@@ -64,6 +64,10 @@ INTERRUPTED = "interrupted by the user"
 # connection: it happened, 25 rounds into reading a codebase.
 STREAM_RETRIES = 2
 
+# What a response with neither text nor a call is reported as. Some compatible models
+# now and then answer with nothing; asking again once usually gets a reply.
+NO_TEXT = "No text in response"
+
 
 @dataclass
 class _Turn:
@@ -73,6 +77,7 @@ class _Turn:
     items: ResponseInputParam  # the request's input, which grows with each round
     rounds: int = 0  # rounds that got a response and ran its tools
     refused: bool = False  # the server refused a request as too long, and we tried
+    emptied: bool = False  # a response had nothing in it, and we asked again
 
 
 class Agent:
@@ -173,6 +178,10 @@ class Agent:
             if response is None:  # the request was shortened: ask again
                 continue
             problem = self._response_status(response)
+            if problem == NO_TEXT and not turn.emptied:
+                turn.emptied = True
+                on_notice("The model sent an empty reply; trying again")
+                continue
             calls = [item for item in response.output if item.type == "function_call"]
             if problem or not calls:
                 break
@@ -346,12 +355,9 @@ class Agent:
         config = self.config
         if not config.auto_compact or self.compact_failures >= COMPACT_FAILURES:
             return
-        # What the server counted at the end of the last turn, if the history is
-        # still as it was; the instructions and the tools are in that count.
-        history = self.context.counted
-        if history is None:
-            history = self._fixed_tokens() + self.context.estimate()
-        next_request = history + estimate_tokens({"role": "user", "content": prompt})
+        next_request = self.request_tokens() + estimate_tokens(
+            {"role": "user", "content": prompt}
+        )
         if next_request <= config.compact_at * config.max_context_tokens:
             return
         try:
@@ -472,6 +478,14 @@ class Agent:
     def _fixed_tokens(self) -> int:
         """The instructions and the definitions of the tools, together."""
         return sum(self._fixed_estimate())
+
+    def request_tokens(self) -> int:
+        """The tokens the next request would have, before the new prompt: what the
+        server counted at the end of the last turn while the history is as it was
+        (the instructions and the tools are in that count), otherwise an estimate."""
+        if self.context.counted is not None:
+            return self.context.counted
+        return self._fixed_tokens() + self.context.estimate()
 
     def context_estimate(self) -> tuple[int, int, int]:
         """Estimate the tokens of the instructions, the tool definitions and the
@@ -728,4 +742,4 @@ class Agent:
             for part in item.content
             if part.type == "refusal"
         )
-        return f"Refused: {refusal}" if refusal else "No text in response"
+        return f"Refused: {refusal}" if refusal else NO_TEXT

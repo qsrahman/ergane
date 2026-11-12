@@ -110,6 +110,31 @@ class TestAgentRunTurn:
 
         assert capsys.readouterr() == ("", "")
 
+    def test_an_empty_reply_is_asked_for_again_once(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = make_agent(STREAMING=streaming)
+        notices: list[str] = []
+
+        agent.run_turn("empty_once", on_notice=notices.append)
+
+        assert notices == ["The model sent an empty reply; trying again"]
+        assert len(fake_server.requests) == 2
+        assert agent.context.items[-1]["content"] == "Hello world"  # type: ignore[index]
+
+    def test_a_second_empty_reply_is_the_error(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = make_agent(STREAMING=streaming)
+        notices: list[str] = []
+
+        with pytest.raises(TurnError, match="No text in response"):
+            agent.run_turn("empty", on_notice=notices.append)
+
+        assert len(notices) == 1
+        assert len(fake_server.requests) == 2
+        assert agent.context.items == []
+
     @pytest.mark.parametrize(
         ("prompt", "message"),
         [

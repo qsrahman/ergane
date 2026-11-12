@@ -168,14 +168,25 @@ class Repl:
         )
 
         self.running = True
-        interrupted = False  # the last prompt ended in Ctrl-C
+        interrupted = False  # the last prompt ended in Ctrl-C or Ctrl-D
         while self.running:
             try:
                 prompt = (
                     self.session.prompt("> ") if self.session else input("> ")
                 ).strip()
             except EOFError:
-                break
+                # Redirected input ends here. At a terminal a stray Ctrl-D must not
+                # end a conversation that lives only in memory.
+                context = self.agent.context
+                if (
+                    interrupted
+                    or not self.session
+                    or not (context.items or context.summary)
+                ):
+                    break
+                interrupted = True
+                self.console.notice("Press Ctrl-D again, or type /exit, to quit")
+                continue
             except KeyboardInterrupt:
                 # The conversation lives only in memory: one stray Ctrl-C must not
                 # end it.

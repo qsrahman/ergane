@@ -51,6 +51,12 @@ class TestRepl:
         assert repl(stop if isinstance(stop, list) else [stop]) == []
         assert capsys.readouterr().out.endswith("Bye.\n")
 
+    def test_end_of_input_quits_at_once_when_it_is_not_a_terminal(self, repl):
+        def talk(prompt, context):
+            context.items.append({"role": "user", "content": prompt})
+
+        assert repl(["hi", EOFError()], turn=talk) == ["hi"]
+
     def test_one_ctrl_c_at_the_prompt_does_not_quit(self, repl, capsys):
         assert repl([KeyboardInterrupt(), "hi", "/exit"]) == ["hi"]
         assert "[Press Ctrl-C again, or type /exit, to quit]" in capsys.readouterr().out
@@ -319,9 +325,11 @@ class TestTerminalSession:
     """The line editor, driven through a pipe the way prompt_toolkit's docs test it."""
 
     @staticmethod
-    def read(tmp_path, typed: str) -> tuple[list[str], str]:
+    def read(tmp_path, typed: str, conversation: bool = False) -> tuple[list[str], str]:
         """Run a Repl whose session reads `typed`; return the prompts and the history."""
         agent = Agent(make_config())
+        if conversation:
+            agent.context.items = make_context(1)
         prompts: list[str] = []
         agent.run_turn = lambda prompt, **_: prompts.append(prompt)  # pyright: ignore[reportAttributeAccessIssue]
         history = tmp_path / "state" / "history"
@@ -338,6 +346,23 @@ class TestTerminalSession:
 
         assert prompts == ["def"]
         assert "Press Ctrl-C again" not in capsys.readouterr().out
+
+    def test_ctrl_d_quits_at_once_when_there_is_no_conversation(self, tmp_path, capsys):
+        self.read(tmp_path, "\x04")
+
+        out = capsys.readouterr().out
+        assert "Press Ctrl-D again" not in out and out.endswith("Bye.\n")
+
+    def test_ctrl_d_in_a_conversation_asks_for_a_second_press(self, tmp_path, capsys):
+        prompts, _ = self.read(tmp_path, "\x04x\r/exit\r", conversation=True)
+
+        assert prompts == ["x"]
+        assert "[Press Ctrl-D again, or type /exit, to quit]" in capsys.readouterr().out
+
+    def test_two_ctrl_d_in_a_row_quit(self, tmp_path, capsys):
+        self.read(tmp_path, "\x04\x04", conversation=True)
+
+        assert capsys.readouterr().out.endswith("Bye.\n")
 
     def test_ctrl_c_on_an_empty_line_asks_for_a_second_press(self, tmp_path, capsys):
         prompts, _ = self.read(tmp_path, "\x03x\r/exit\r")

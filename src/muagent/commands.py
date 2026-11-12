@@ -93,6 +93,7 @@ def help_(repl: Repl, args: str) -> None:
             ),
             ("Tab, Up, Down", "Complete a command, recall earlier prompts"),
             ("Ctrl-C", "Clear the line; on an empty line, press twice to quit"),
+            ("Ctrl-D", "Quit; press twice once there is a conversation"),
             *keys,
         ]
     repl.console.columns(keys)
@@ -196,13 +197,18 @@ def context_(repl: Repl, args: str) -> None:
     """Show how much of the context budget the next request would use."""
     agent = repl.agent
     instructions, tools, history = agent.context_estimate()
-    total = instructions + tools + history
+    counted = agent.context.counted is not None
+    total = agent.request_tokens()
     budget = agent.config.max_context_tokens
     rows = [
         ("instructions", f"~{instructions:,}"),
         (f"tools ({len(agent.tools)})", f"~{tools:,}"),
         ("history", f"~{history:,}"),
-        ("total", f"~{total:,} of {budget:,} ({total * 100 // budget}%)"),
+        (
+            "total",
+            f"{'' if counted else '~'}{total:,} of {budget:,} ({total * 100 // budget}%)"
+            + (" (counted by the server)" if counted else ""),
+        ),
     ]
     if agent.config.auto_compact:
         trigger = int(agent.config.compact_at * budget)
