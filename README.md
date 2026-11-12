@@ -17,11 +17,22 @@ A minimal terminal chat agent built on the OpenAI [Responses API](https://platfo
 
 ## Setup
 
+muagent is not on PyPI, so it is installed from a checkout.
+
+**As a command**, so that `muagent` works from any directory:
+
 ```bash
-uv sync
+uv tool install ".[mcp]"
+muagent --version
 ```
 
-To use [MCP servers](#mcp-servers), install the extra too: `uv sync --extra mcp` (or `pip install 'muagent[mcp]'`).
+`[mcp]` is the extra that [MCP servers](#mcp-servers) need; leave it out (`uv tool install .`) if you will use none, and a server in `config.json` is then reported as needing the `mcp` package. If the shell cannot find `muagent`, run `uv tool update-shell` and open a new shell: it puts uv's tool directory on your `PATH`.
+
+- After pulling changes: `uv tool install --reinstall ".[mcp]"`.
+- To have edits to the checkout take effect at once, install with `--editable`: `uv tool install --editable ".[mcp]"`.
+- To remove it: `uv tool uninstall muagent`.
+
+**From the checkout**, for development: `uv sync --extra mcp`, then `uv run muagent`.
 
 Put your settings in `~/.config/muagent/config.json` (or `$XDG_CONFIG_HOME/muagent/config.json`). A `config.json` in the directory you run `muagent` from is not read, so a project you open cannot change where your API key and prompts are sent.
 
@@ -61,10 +72,10 @@ Two more flags: `--config FILE` reads another file (there is no variable for it,
 ## Usage
 
 ```bash
-uv run muagent
+muagent
 ```
 
-`uv run python -m muagent` also works.
+From a checkout that is not installed as a command: `uv run muagent` (or `uv run python -m muagent`).
 
 Type a prompt at `>` and press Enter. Up and Down recall earlier prompts, which are kept in `~/.local/state/muagent/history` (or `$XDG_STATE_HOME/muagent/history`) in plain text; delete the file to forget them. The directory (which also holds the server logs) is made readable by you only (`0700`, the file `0600`), since a prompt can hold whatever you pasted. Paste several lines and they stay one prompt; press Enter to send it. To add a line by hand, press Alt-Enter (Esc, then Enter) or Ctrl-J (the new lines start with `. `); Shift-Enter does it too in a terminal that sends it as its own key (kitty's keyboard protocol, or xterm's modifyOtherKeys), but most send a plain Enter for it, and then it sends the prompt. The question before a tool runs (`Allow … [y/N]`) is read by the same editor, but is not kept in the history. When input or output is redirected (`echo hi | muagent`), plain `input()` reads the prompts instead. To quit, use `/exit`, `/quit`, Ctrl-D, or Ctrl-C twice on an empty prompt: the conversation lives only in memory, so one stray Ctrl-C must not end it. A single Ctrl-C clears what you have typed, or, on an empty line, asks you to press it again. `/help` lists the keys as well as the commands.
 
