@@ -232,10 +232,14 @@ After each round with tool calls the loop checks, in this order:
    that is replaced by `[output dropped to fit the context]`. The notice is
    `[Context full: older tool results dropped]`. The calls stay, so the model sees what
    it did and every call keeps an output, and the turn goes on (the model may call
-   again for what it needs). If the
-   latest round's results alone are over, nothing older is left to drop and the turn
-   ends with `This turn grew past the context budget (about X of Y tokens). Ask for
-   less, or raise MAX_CONTEXT_TOKENS`, saving nothing.
+   again for what it needs). If that is not enough, the latest round's own results
+   are shortened the same way (start and end kept; notice `[Context full: this round's
+   tool results shortened]`), never replaced by the placeholder, since the model has
+   yet to read them. If even that is not enough, the calls have run and may have had
+   effects, so the turn is kept, closed with `[Stopped after N model calls: its results
+   passed the context budget]` and its results dropped (or every later request would
+   carry them), and it ends with `This turn grew past the context budget (about X of Y
+   tokens). Ask for less, or raise MAX_CONTEXT_TOKENS`.
 
    The server's count includes the instructions and the tool definitions, so it
    measures the same thing as the trimming in §2, the whole request, but exactly. A
@@ -273,7 +277,7 @@ only the replies. Calls and outputs are removed together, for the same reason as
 | the stream breaks before any text: tried again, twice at most | if a try works, as usual | `[… trying again (1 of 2)]`, then the reply |
 | the stream keeps breaking, or breaks after some text, or ends with an `error` event | no, unless a round already ran | `[Stream ended without a final response]`, `[Stream cut off: …]` or `[Stream error: …]` |
 | `MAX_TURNS` rounds of tool calls                      | yes, with a closing note| `[Stopped after N model calls without a final answer]`        |
-| the turn outgrows `MAX_CONTEXT_TOKENS`                | older results are dropped and the turn goes on; no if the latest round alone is over | `[Context full: older tool results dropped]`, or `[This turn grew past the context budget …]` |
+| the turn outgrows `MAX_CONTEXT_TOKENS`                | older, then the latest results are shortened and the turn goes on; if even that does not fit, kept with a note and its results dropped | `[Context full: older tool results dropped]`, `[… this round's tool results shortened]`, or `[This turn grew past the context budget …]` |
 | Ctrl-C                                                | yes after a completed round or while tools run; no in the first model call | `[Cancelled]`                           |
 | the server refuses a request as too long (once a turn) | as usual, if the retry works | `[The request was too long for the model; trying again, shorter]`: before the first round the oldest turns are summarized, later the earlier results are shortened; then it is sent again |
 | the API or the network fails (after the SDK's retries)| no, unless a round already ran | `[API error …]` or `[Agent error: Type: message]`                         |

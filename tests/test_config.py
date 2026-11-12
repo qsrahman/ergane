@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -174,6 +175,65 @@ class TestLoadConfig:
         assert load_config().model == "from-home"
 
 
+class TestBareNames:
+    """validate_by_name lets config.json say `model`; the environment must not."""
+
+    @pytest.mark.parametrize("name", ["MODEL", "API_KEY", "BASE_URL", "MCP_SERVERS"])
+    def test_a_bare_variable_other_programs_may_export_is_ignored(
+        self, monkeypatch, name
+    ):
+        monkeypatch.setenv("OPENAI_API_KEY", "right-key")
+        monkeypatch.setenv(name, "http://other.example/v1" if "URL" in name else "x")
+
+        config = load_config()
+
+        assert config.model == "gpt-5.4-mini" and config.base_url is None
+        assert config.api_key.get_secret_value() == "right-key"
+        assert config.mcp_servers == {}
+
+    def test_a_bare_api_key_does_not_stand_in_for_the_key(self, monkeypatch):
+        monkeypatch.setenv("API_KEY", "some-other-programs-key")
+
+        with pytest.raises(ValidationError, match="OPENAI_API_KEY"):
+            load_config()
+
+    @pytest.mark.parametrize("name", ["MCPSERVERS", "MCP_SERVERS", "mcpServers"])
+    def test_a_stray_variable_for_the_servers_is_not_even_parsed(
+        self, monkeypatch, name
+    ):
+        monkeypatch.setenv("OPENAI_API_KEY", "k")
+        monkeypatch.setenv(name, "not json")
+
+        assert load_config().mcp_servers == {}
+
+    def test_the_names_the_openai_sdk_uses_still_work(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "k")
+        monkeypatch.setenv("OPENAI_MODEL", "m")
+        monkeypatch.setenv("OPENAI_BASE_URL", "http://localhost:1/v1")
+
+        config = load_config()
+
+        assert (config.model, config.base_url) == ("m", "http://localhost:1/v1")
+
+    def test_a_setting_without_an_alias_is_read_from_its_own_name(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "k")
+        monkeypatch.setenv("MAX_TURNS", "7")
+
+        assert load_config().max_turns == 7
+
+    def test_the_file_may_use_either_name(self, tmp_path: Path):
+        write_json(
+            tmp_path / "muagent" / "config.json",
+            {"api_key": "k", "model": "by-name", "base_url": "http://a/v1"},
+        )
+        assert load_config().model == "by-name"
+        write_json(
+            tmp_path / "muagent" / "config.json",
+            {"OPENAI_API_KEY": "k", "OPENAI_MODEL": "by-alias"},
+        )
+        assert load_config().model == "by-alias"
+
+
 class TestNamedFile:
     def test_a_file_the_user_names_is_read_instead(self, tmp_path: Path):
         write_json(tmp_path / "muagent" / "config.json", {"api_key": "k", "model": "a"})
@@ -196,6 +256,35 @@ class TestNamedFile:
     ):
         with pytest.raises(FileNotFoundError, match="nowhere.json"):
             load_config(tmp_path / "nowhere.json")
+
+
+class TestUnreadableFile:
+    @pytest.fixture
+    def user_file(self, tmp_path: Path) -> Path:
+        return tmp_path / "muagent" / "config.json"
+
+    def test_a_file_that_is_not_utf8_is_a_config_error(self, user_file: Path):
+        user_file.parent.mkdir(parents=True)
+        user_file.write_bytes(b"\xff\xfe{")
+
+        with pytest.raises(ValidationError, match=r"config\.json is not UTF-8"):
+            load_config()
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root can read any file")
+    def test_a_file_that_cannot_be_read_is_a_config_error(self, user_file: Path):
+        write_json(user_file, {"api_key": "k"})
+        user_file.chmod(0o000)
+        try:
+            with pytest.raises(
+                ValidationError, match=r"cannot read .*Permission denied"
+            ):
+                load_config()
+        finally:
+            user_file.chmod(0o644)
+
+    def test_a_directory_the_user_named_is_refused(self, tmp_path: Path):
+        with pytest.raises(IsADirectoryError, match="is a directory"):
+            load_config(tmp_path)
 
 
 class TestMistakes:

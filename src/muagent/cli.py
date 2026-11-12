@@ -130,7 +130,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         flags["reasoning_effort"] = None
     try:
         config = load_config(path, **flags)
-    except FileNotFoundError as exc:
+    except OSError as exc:  # the file the user named is missing, or a directory
         print(exc, file=sys.stderr)
         raise SystemExit(1) from None
     except ValidationError as exc:

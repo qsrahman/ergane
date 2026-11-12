@@ -48,6 +48,25 @@ def test_the_help_for_a_missing_key_names_the_file_in_use(tmp_path, capsys):
     assert f'Put "api_key" in {other}' in capsys.readouterr().err
 
 
+def test_a_config_file_that_is_not_text_is_reported_not_a_traceback(tmp_path, capsys):
+    bad = tmp_path / "bad.json"
+    bad.write_bytes(b"\xff\xfe{")
+
+    with pytest.raises(SystemExit) as exc:
+        main(["--config", str(bad)])
+
+    assert exc.value.code == 1
+    assert "bad.json is not UTF-8" in capsys.readouterr().err
+
+
+def test_a_directory_as_the_config_file_is_reported(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["--config", str(tmp_path)])
+
+    assert exc.value.code == 1
+    assert "is a directory, not a file" in capsys.readouterr().err
+
+
 def test_another_mistake_gets_no_such_help(monkeypatch, capsys):
     monkeypatch.setenv("OPENAI_API_KEY", "test")
     monkeypatch.setenv("MAX_TURNS", "0")

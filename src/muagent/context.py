@@ -135,7 +135,9 @@ def answer_open_calls(items: ResponseInputParam) -> None:
             )
 
 
-def drop_outputs(items: ResponseInputParam, upto: int, needed: int) -> int:
+def drop_outputs(
+    items: ResponseInputParam, upto: int, needed: int, *, placeholders: bool = True
+) -> int:
     """Shorten, then drop, tool results among the first `upto` items, oldest
     first, until `needed` tokens (estimated) are freed or none is left.
 
@@ -145,7 +147,8 @@ def drop_outputs(items: ResponseInputParam, upto: int, needed: int) -> int:
 
     A long result is first shortened to its start and end (PRUNE_CHARS), which
     often frees enough and leaves the model something to read; only what is
-    still needed after that is replaced by the placeholder.
+    still needed after that is replaced by the placeholder, unless `placeholders` is
+    false.
 
     Returns:
         The estimated number of tokens freed.
@@ -165,7 +168,8 @@ def drop_outputs(items: ResponseInputParam, upto: int, needed: int) -> int:
                 plain[i] = replaced
 
     replace(lambda output: len(output) > PRUNE_CHARS, shorten)
-    replace(lambda output: output != DROPPED_OUTPUT, lambda output: DROPPED_OUTPUT)
+    if placeholders:
+        replace(lambda output: output != DROPPED_OUTPUT, lambda output: DROPPED_OUTPUT)
     return freed
 
 

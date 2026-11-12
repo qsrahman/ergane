@@ -285,6 +285,21 @@ class Agent:
                 on_notice("Context full: older tool results dropped")
             used -= freed
         if used > budget:
+            # Only the latest round is left: shorten its results, but keep their
+            # start and end, which is what the model needs to read.
+            freed = drop_outputs(
+                turn.items, len(turn.items), used - budget, placeholders=False
+            )
+            if freed:
+                on_notice("Context full: this round's tool results shortened")
+            used -= freed
+        if used > budget:
+            # Still over. The calls have run and may have had effects: keep the turn,
+            # with its results dropped, or every later request would carry them.
+            drop_outputs(turn.items, len(turn.items), used)
+            self._keep_stopped_turn(
+                turn.items, turn.rounds, "its results passed the context budget"
+            )
             raise TurnError(
                 f"This turn grew past the context budget (about {used} of "
                 f"{budget} tokens). Ask for less, or raise MAX_CONTEXT_TOKENS"

@@ -650,23 +650,63 @@ class TestAgentToolLoop:
         kept = [i for i in agent.context.items if i.get("type") == "function_call"]
         assert len(kept) == len(outputs({"input": agent.context.items})) == 4
 
-    def test_a_result_that_alone_outgrows_the_context_budget_stops_the_turn(
+    def test_a_result_that_alone_outgrows_the_budget_is_shortened_and_the_turn_goes_on(
         self, make_agent, fake_server, streaming
     ):
         def huge(path: str) -> str:
             """Read a text file."""
-            return "x" * MAX_OUTPUT_CHARS  # about 5,000 estimated tokens
+            # Exactly the most a tool may return, so that nothing else cuts it.
+            return "head" + "x" * (MAX_OUTPUT_CHARS - 8) + "tail"
 
         agent = make_agent(
-            tools=[tool_with(huge)], STREAMING=streaming, MAX_CONTEXT_TOKENS=3000
+            tools=[tool_with(huge)],
+            STREAMING=streaming,
+            MAX_CONTEXT_TOKENS=3000,
+            MAX_TURNS=2,
+            AUTO_COMPACT=False,
+        )
+        notices: list[str] = []
+
+        with pytest.raises(TurnError, match="^Stopped after 2 model calls"):
+            agent.run_turn("tool_loop", on_notice=notices.append)
+
+        sent = fake_server.requests[1]["input"][-1]["output"]
+        assert sent.startswith("head") and sent.endswith("tail") and "hidden" in sent
+        assert "Context full: this round's tool results shortened" in notices
+
+    def test_a_round_that_cannot_fit_even_shortened_keeps_the_turn_without_its_results(
+        self, make_agent, fake_server, streaming
+    ):
+        ran: list[str] = []
+
+        def write_file(path: str) -> str:
+            """Pretend to write a file, and return a lot of text."""
+            ran.append(path)
+            return "x" * MAX_OUTPUT_CHARS
+
+        agent = make_agent(
+            tools=[tool_with(write_file)],
+            STREAMING=streaming,
+            MAX_CONTEXT_TOKENS=500,
+            AUTO_COMPACT=False,
         )
 
         with pytest.raises(TurnError, match="grew past the context budget"):
             agent.run_turn("tool_loop")
 
-        # Nothing older to drop, and the latest result is what the model must read.
-        assert len(fake_server.requests) == 1
-        assert agent.context.items == []
+        # The tool ran; the model must know, and the history must stay small.
+        assert ran and len(fake_server.requests) == 1
+        items = agent.context.items
+        assert [i.get("type") or i["role"] for i in items] == [
+            "user",
+            "function_call",
+            "function_call_output",
+            "assistant",
+        ]
+        assert items[2]["output"] == DROPPED_OUTPUT
+        assert items[3]["content"] == (
+            "[Stopped after 1 model calls: its results passed the context budget]"
+        )
 
     def test_a_model_that_never_stops_calling_tools_is_stopped_and_the_turn_kept(
         self, make_agent, fake_server, streaming

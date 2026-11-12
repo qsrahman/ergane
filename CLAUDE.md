@@ -72,6 +72,8 @@ exits with status 1. Read the docstring of `config.py` for how, and why.
 | `REASONING_EFFORT` (`reasoning_effort`) | unset | unset sends no `reasoning`, since non-reasoning models reject it |
 | `MAX_TURNS` (`max_turns`) | `25` | most model calls per prompt |
 
+The environment is read by the SDK's names (`OPENAI_*`) and the setting's own name for the
+rest; the bare `MODEL`, `API_KEY` and `BASE_URL` that other programs export are ignored.
 MCP servers are `mcpServers` in the same file (`Config.mcp_servers`), and only there: a
 server is a program, so neither the environment nor a project's files may define one.
 Each server's stderr goes to `$XDG_STATE_HOME/muagent/NAME.log`; the state directory holds
@@ -120,8 +122,9 @@ What must stay true:
   arguments `check` rejects is answered without asking.
 - **Trimming never drops the summary or the newest user message.** The budget is for the
   whole request; the in-turn check uses the server's `usage.input_tokens` plus an
-  estimate of what was added, shortens old tool results before dropping them, and fails
-  only when the latest round alone is over.
+  estimate of what was added, shortens old tool results before dropping them, then the
+  latest round's, and fails only when even that does not fit; the turn is then kept with
+  a note and its results dropped, like any turn after a completed round.
 - **The agent prints nothing.** What the user should see goes through `on_text`,
   `on_notice`, `on_call` or `confirm`, and the console prints it through `_emit`.
 - **Credentials and programs come only from the user's own files:** no config, `.env` or

@@ -31,6 +31,7 @@ from typing import Annotated, Any, NoReturn, get_args
 
 from openai.types.shared import ReasoningEffort
 from pydantic import Field, SecretStr, ValidationError, field_validator
+from pydantic.fields import FieldInfo
 from pydantic_settings import (
     BaseSettings,
     EnvSettingsSource,
@@ -68,27 +69,47 @@ class _ConfigFile(JsonConfigSettingsSource):
             data = super()._read_file(file_path)
         except json.JSONDecodeError as exc:
             _fail("json_invalid", ctx={"error": f"{file_path}: {exc}"})
+        except UnicodeDecodeError:
+            _fail("value_error", ctx={"error": ValueError(f"{file_path} is not UTF-8")})
+        except OSError as exc:
+            reason = exc.strerror or type(exc).__name__
+            _fail(
+                "value_error",
+                ctx={"error": ValueError(f"cannot read {file_path}: {reason}")},
+            )
         if not isinstance(data, dict):
             _fail("dict_type", input=data)
-        renamed = {
-            name: str(field.validation_alias)
-            for name, field in Config.model_fields.items()
-            if field.validation_alias
-        }
-        return {renamed.get(key, key): value for key, value in data.items()}
+        return data
 
 
 class _Environment(EnvSettingsSource):
-    """The environment, without the MCP servers.
+    """The environment, by the names it knows the settings by.
 
-    A server is a program muagent runs. pydantic-settings would read the field from
-    a JSON variable (`MCPSERVERS`), and then a `.envrc` in a project could start
-    programs: only the user's own config.json may.
+    `OPENAI_MODEL`, `OPENAI_API_KEY` and `OPENAI_BASE_URL` are read, but not the bare
+    `MODEL`, `API_KEY` and `BASE_URL` that `validate_by_name` (which lets config.json
+    use the field names) would also accept: other programs export those, and the key
+    and every prompt would go to the `BASE_URL` of one of them.
+
+    The MCP servers are not read from the environment at all (`MCPSERVERS`, as a JSON
+    variable): a server is a program muagent runs, and a `.envrc` in a project could
+    start one. Only the user's own config.json may. The field is not even looked at,
+    so a stray `MCPSERVERS=x` is not a JSON error either.
     """
+
+    def get_field_value(
+        self, field: FieldInfo, field_name: str
+    ) -> tuple[Any, str, bool]:
+        if field_name == "mcp_servers":
+            return None, field_name, False
+        return super().get_field_value(field, field_name)
 
     def __call__(self) -> dict[str, Any]:
         values = super().__call__()
-        values.pop("mcpServers", None)  # the key is the alias
+        # A value read from a bare name comes back under the field's name; one read
+        # from its alias, under the alias.
+        for name, field in Config.model_fields.items():
+            if field.validation_alias:
+                values.pop(name, None)
         return values
 
 
@@ -98,7 +119,9 @@ class Config(BaseSettings):
     # A field without an alias is read from the environment variable of the same
     # name, in any case: max_turns from MAX_TURNS. A key that is not a setting is
     # a mistake in config.json, and says so.
-    model_config = SettingsConfigDict(extra="forbid", json_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        extra="forbid", json_file_encoding="utf-8", validate_by_name=True
+    )
     model: str = Field(
         min_length=1,
         default="gpt-5.4-mini",
@@ -244,23 +267,23 @@ def load_config(path: Path | None = None, **flags: object) -> Config:
         The settings.
 
     Raises:
-        FileNotFoundError: If the user named a file that does not exist.
+        OSError: If the user named a file that does not exist (`FileNotFoundError`) or
+            a directory.
         ValidationError: If a setting is missing or invalid, or the file is not a
             JSON object.
     """
-    named = _named_file(path)
-    if named is not None and not named.exists():
-        raise FileNotFoundError(f"Config file not found: {named}")
     file = config_file(path)
+
+    named = path is not None or bool(os.environ.get("MUAGENT_CONFIG"))
+    if named and not file.exists():
+        raise FileNotFoundError(f"Config file not found: {file}")
+    if named and file.is_dir():  # pydantic-settings would skip it without a word
+        raise IsADirectoryError(f"Config path is a directory, not a file: {file}")
 
     class Loaded(Config):  # the settings class is told its file by its config
         model_config = SettingsConfigDict(json_file=file)
 
-    names = {
-        name: str(field.validation_alias or name)
-        for name, field in Config.model_fields.items()
-    }
-    return Loaded(**{names[name]: value for name, value in flags.items()})  # pyright: ignore[reportArgumentType]
+    return Loaded(**flags)  # pyright: ignore[reportArgumentType]
 
 
 # ReasoningEffort is Optional[Literal[...]]; these are the Literal's values.
