@@ -1269,6 +1269,24 @@ class TestContextEstimate:
 
         assert agent.last_input_tokens == USAGE_INPUT_TOKENS
 
+    def test_the_count_and_the_reply_are_kept_for_the_next_request(
+        self, make_agent, streaming
+    ):
+        agent = make_agent(STREAMING=streaming)
+
+        agent.run_turn("usage")
+
+        reply = {"role": "assistant", "content": TEXT}
+        assert agent.context.counted == USAGE_INPUT_TOKENS + estimate_tokens(reply)
+
+    def test_a_reply_without_a_count_leaves_no_count(self, make_agent, streaming):
+        agent = make_agent(STREAMING=streaming)
+        agent.run_turn("usage")
+
+        agent.run_turn("hello")
+
+        assert agent.context.counted is None
+
     def test_instructions_tools_and_history_are_estimated_apart(
         self, make_agent, streaming
     ):

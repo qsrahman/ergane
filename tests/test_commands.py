@@ -97,6 +97,18 @@ class TestCommandsWithAgent:
         ]
         assert len(agent.context.items) == 4
 
+    def test_switching_the_model_forgets_the_servers_count(
+        self, monkeypatch, make_agent
+    ):
+        agent = make_agent()
+        agent.context.counted = 1000
+
+        run_repl(monkeypatch, agent, ["/model", "/exit"])
+        assert agent.context.counted == 1000  # only showing it changes nothing
+
+        run_repl(monkeypatch, agent, ["/model Other-Model", "/exit"])
+        assert agent.context.counted is None
+
     def test_model_shows_and_switches_the_model(
         self, monkeypatch, make_agent, fake_server, capsys
     ):

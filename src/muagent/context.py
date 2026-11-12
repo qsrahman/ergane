@@ -190,6 +190,9 @@ class Context:
         self.summary: str | None = None  # of the turns that came before items
         self.last_prompt: str | None = None  # the prompt most recently begun
         self.last_saved = False  # whether that prompt's turn is in items
+        # What the server counted for the instructions, the tools and the history as
+        # the last turn left it; None when that is not known or no longer true.
+        self.counted: int | None = None
 
     def summary_message(self) -> ResponseInputParam:
         """The summary as the message that goes first in a request, or nothing.
@@ -255,7 +258,7 @@ class Context:
             start = turn_start
         return [*summary, *items[start:]], start > 0
 
-    def save_turn(self, items: ResponseInputParam) -> None:
+    def save_turn(self, items: ResponseInputParam, counted: int | None = None) -> None:
         """Make a finished turn the new history.
 
         The finished turn is kept whole, so a follow-up can refer to what the tools
@@ -268,6 +271,9 @@ class Context:
             items: The whole history after the turn: the input returned by
                 begin_turn(), followed by everything the model produced, such as its
                 reply.
+            counted: The tokens the server counted for the last request, plus an
+                estimate of the reply, if it counted; what the save drops is taken
+                off, since that is no longer sent.
         """
         summary = self.summary_message()
         if summary and items[: len(summary)] == summary:
@@ -283,6 +289,13 @@ class Context:
         ]
         self.items = [*earlier, *items[turn:]]
         self.last_saved = True
+        if counted is None:
+            self.counted = None
+        else:
+            dropped = sum(estimate_tokens(item) for item in items) - sum(
+                estimate_tokens(item) for item in self.items
+            )
+            self.counted = counted - dropped
 
     def plan_compaction(self, keep_tokens: int) -> int:
         """Choose how much of the oldest history to summarize.
@@ -322,12 +335,14 @@ class Context:
         """
         self.items = self.items[count:]
         self.summary = summary
+        self.counted = None
 
     def reset(self) -> None:
         """Forget the whole history, the summary too."""
         self.items = []
         self.summary = None
         self.last_saved = False
+        self.counted = None
 
     def rewind(self) -> str | None:
         """Get ready to send the last prompt again: drop its turn if it was saved.
@@ -350,5 +365,6 @@ class Context:
             if _is_user_message(item):
                 self.items = self.items[:i]
                 self.last_saved = False
+                self.counted = None
                 return True
         return False

@@ -194,9 +194,19 @@ class Agent:
         # round it is kept with a note, like the stop at the cap.
         cut_off = response.status == "incomplete"
         if response.output_text and (problem is None or cut_off):
-            self.context.save_turn(
-                [*turn.items, {"role": "assistant", "content": response.output_text}]
+            reply: ResponseInputParam = [
+                {"role": "assistant", "content": response.output_text}
+            ]
+            # The server's count of this request and the reply, which the next
+            # request starts with (see Context.counted).
+            counted = (
+                self._next_request_tokens(
+                    response, [*turn.items, *reply], len(turn.items)
+                )
+                if response.usage is not None
+                else None
             )
+            self.context.save_turn([*turn.items, *reply], counted)
         elif problem and turn.rounds:
             self._keep_stopped_turn(turn.items, turn.rounds, problem)
         if problem:
@@ -336,11 +346,12 @@ class Agent:
         config = self.config
         if not config.auto_compact or self.compact_failures >= COMPACT_FAILURES:
             return
-        next_request = (
-            self._fixed_tokens()
-            + self.context.estimate()
-            + estimate_tokens({"role": "user", "content": prompt})
-        )
+        # What the server counted at the end of the last turn, if the history is
+        # still as it was; the instructions and the tools are in that count.
+        history = self.context.counted
+        if history is None:
+            history = self._fixed_tokens() + self.context.estimate()
+        next_request = history + estimate_tokens({"role": "user", "content": prompt})
         if next_request <= config.compact_at * config.max_context_tokens:
             return
         try:

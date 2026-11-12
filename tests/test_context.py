@@ -466,3 +466,48 @@ class TestTranscript:
         text = transcript(items)
 
         assert text == "[Tool result]: " + "o" * 2000 + " [... 1,000 more characters]"
+
+
+class TestContextCounted:
+    """What the server counted at the end of a turn, kept for the next request."""
+
+    def saved(self, counted: int | None = 5000) -> Context:
+        context = Context()
+        draft, _ = context.begin_turn("read notes.txt", ROOMY)
+        context.save_turn([*draft, *TOOL_TURN[1:]], counted)
+        return context
+
+    def test_the_count_is_kept_with_the_turn(self):
+        assert self.saved().counted == 5000
+
+    def test_a_turn_saved_without_a_count_has_none(self):
+        assert self.saved(None).counted is None
+
+    def test_what_the_save_drops_is_taken_off(self):
+        context = self.saved()
+        draft, _ = context.begin_turn("and again", ROOMY)
+
+        # The first turn's tool work is dropped by this save, so it is not sent again.
+        context.save_turn([*draft, *TOOL_TURN[1:]], 9000)
+
+        dropped = sum(estimate_tokens(item) for item in TOOL_TURN[1:4])
+        assert context.counted == 9000 - dropped
+
+    @pytest.mark.parametrize(
+        "change",
+        [
+            lambda context: context.undo(),
+            lambda context: context.rewind(),
+            lambda context: context.reset(),
+            lambda context: context.compact(1, "notes"),
+        ],
+        ids=["undo", "rewind", "reset", "compact"],
+    )
+    def test_a_change_to_the_history_forgets_it(self, change):
+        context = self.saved()
+        draft, _ = context.begin_turn("and again", ROOMY)
+        context.save_turn([*draft, *TOOL_TURN[1:]], 9000)
+
+        change(context)
+
+        assert context.counted is None

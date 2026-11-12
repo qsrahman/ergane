@@ -57,6 +57,31 @@ class TestCompaction:
         assert agent.context.summary == "## Goal\nNOTES 8"
         assert agent.context.items[0]["content"].startswith("q8")
 
+    def test_the_servers_count_decides_when_to_summarize(
+        self, make_agent, fake_server, streaming
+    ):
+        # The estimate is under the trigger; what the server counted is over it.
+        agent = self.agent(make_agent, streaming, old_turns(8))
+        agent.context.counted = 3000
+        notices: list[str] = []
+
+        agent.run_turn("go", on_notice=notices.append)
+
+        assert notices[0] == "Summarizing earlier messages…"
+
+    def test_a_small_count_from_the_server_keeps_the_history(
+        self, make_agent, fake_server, streaming
+    ):
+        # The estimate is over the trigger; what the server counted is under it.
+        agent = self.agent(make_agent, streaming)
+        agent.context.counted = 500
+        notices: list[str] = []
+
+        agent.run_turn("go", on_notice=notices.append)
+
+        assert notices == []
+        assert len(fake_server.requests) == 1
+
     def test_the_summary_is_asked_for_as_labelled_text_with_tool_results_cut(
         self, make_agent, fake_server, streaming
     ):

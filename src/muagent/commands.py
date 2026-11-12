@@ -144,6 +144,7 @@ def model(repl: Repl, args: str) -> str:
     """Show the model, or switch with /model NAME."""
     if args:
         repl.agent.config.model = args
+        repl.agent.context.counted = None  # another model may count differently
     return f"Model: {repl.agent.config.model}"
 
 
