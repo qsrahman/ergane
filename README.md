@@ -175,3 +175,7 @@ The tests run against a local fake of the Responses API. They ignore your `confi
 - When the next request would pass `COMPACT_AT` of `MAX_CONTEXT_TOKENS` (instructions, tool definitions and history together), the oldest turns are summarized and the newest kept; see [Long conversations](#long-conversations). Turns that still do not fit are dropped, oldest first. Tokens are estimated at about 4 bytes of UTF-8 per token, which works with any backend's tokenizer.
 
 [TURN.md](TURN.md) follows one turn through the code: what is sent, what is kept, what you see, and every way a turn can end.
+
+## License
+
+[MIT](LICENSE)
