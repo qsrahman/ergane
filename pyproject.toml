@@ -34,9 +34,18 @@ dev = [
     "ruff>=0.17.1",
 ]
 
+[tool.uv.build-backend]
+# Finder drops these into any folder it opens; they would ship in the wheel.
+wheel-exclude = ["**/.DS_Store"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
 [tool.ruff]
 # src/ and tests/ hold first-party modules (muagent, fake_api) for import sorting.
 src = ["src", "tests"]
+
+[tool.ruff.lint]
+# A broad `except` must say it is meant (`# noqa: BLE001`), and a noqa that no longer
+# silences anything must go.
+extend-select = ["B905", "BLE001", "RUF100"]

@@ -41,7 +41,7 @@ it editable; the script is `muagent.cli:main`. Tests import modules directly
 - The autouse `isolate_config` fixture runs each test in an empty `tmp_path` that is
   also `XDG_CONFIG_HOME`, and clears the config environment variables (taken from
   `Config`'s fields, so a new setting needs no change there).
-- Test files mirror the modules, plus `test_compaction.py` (summaries, shortened
+- Test files mirror the modules (`test_mcp_config.py` is `mcp_config.py`), plus `test_compaction.py` (summaries, shortened
   results, the too-long retry) and `test_fake_api.py`. Helpers (`make_config`,
   `make_context`, `run_repl`, `tool_with`) are in `tests/helpers.py`; the `client` and
   `make_agent` fixtures are in `conftest.py`.
@@ -87,6 +87,8 @@ The modules, in dependency order (each imports only from those above it):
   `check`, `runner`, `read_only`). `Tool.call` never raises (except Ctrl-C): a bad call
   or an exception comes back as text for the model, and output is cut at
   `MAX_OUTPUT_CHARS`.
+- `mcp_config.py`: `McpServerConfig` (one server in `config.json`), the url rules and the
+  `${NAME}` placeholders; what `config.py` needs of MCP, and no more.
 - `mcp_client.py`: `McpServer`, `start_servers`, `close_servers`; a server's tools become
   `Tool`s. Imports `mcp` only when a server starts. The design notes are in its docstring.
 - `errors.py`, `prompts.py`: `TurnError`, `StreamCut`, `describe_error`,
@@ -133,7 +135,9 @@ What must stay true:
 ## Conventions
 
 - Python 3.14 syntax, such as `except KeyboardInterrupt, EOFError:` (PEP 758). ruff takes
-  its target from `requires-python`; `[tool.ruff]` sets `src = ["src", "tests"]`.
+  its target from `requires-python`; `[tool.ruff]` sets `src = ["src", "tests"]` and
+  turns on `BLE001` (a broad `except` says it is meant: `# noqa: BLE001`), `B905` and
+  `RUF100` (a noqa that silences nothing goes).
 - Google-style docstrings (`Args:` / `Returns:` / `Raises:`) on functions.
 - Show the user only what they need, to decide or to know that something went wrong. A
   call that asks is one line, the question; a call that runs freely is one line; a result

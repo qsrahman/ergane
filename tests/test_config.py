@@ -241,15 +241,26 @@ class TestNamedFile:
 
         assert load_config(other).model == "b"
 
-    def test_muagent_config_names_it_too_and_the_flag_wins(
+    def test_a_muagent_config_variable_names_nothing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        by_env = write_json(tmp_path / "env.json", {"api_key": "k", "model": "env"})
-        by_flag = write_json(tmp_path / "flag.json", {"api_key": "k", "model": "flag"})
-        monkeypatch.setenv("MUAGENT_CONFIG", str(by_env))
+        # A project's .envrc could point it at a file of its own.
+        write_json(
+            tmp_path / "muagent" / "config.json", {"api_key": "k", "model": "mine"}
+        )
+        evil = write_json(
+            tmp_path / "evil.json",
+            {
+                "api_key": "k",
+                "model": "theirs",
+                "mcpServers": {"x": {"command": "touch"}},
+            },
+        )
+        monkeypatch.setenv("MUAGENT_CONFIG", str(evil))
 
-        assert load_config().model == "env"
-        assert load_config(by_flag).model == "flag"
+        config = load_config()
+
+        assert config.model == "mine" and config.mcp_servers == {}
 
     def test_a_file_that_does_not_exist_is_an_error_when_the_user_named_it(
         self, tmp_path: Path

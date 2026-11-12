@@ -4,7 +4,7 @@ import pytest
 from openai.types.responses import ResponseInputParam
 
 from helpers import make_context
-from muagent.context import Context, estimate_tokens
+from muagent.context import Context, estimate_tokens, transcript
 
 ROOMY = 10_000  # a token budget that the tests which don't trim never reach
 
@@ -417,3 +417,52 @@ class TestCompaction:
 
         assert context.rewind() == "new"
         assert context.items == [] and context.summary == "NOTES"
+
+
+class TestTranscript:
+    def test_messages_and_tool_work_are_labelled_text(self):
+        items: ResponseInputParam = [
+            {"role": "user", "content": "look at it"},
+            {
+                "type": "function_call",
+                "call_id": "c",
+                "name": "read",
+                "arguments": "{}",
+            },
+            {"type": "function_call_output", "call_id": "c", "output": "contents"},
+            {"role": "assistant", "content": "done"},
+        ]
+
+        assert transcript(items) == (
+            "[User]: look at it\n[Tool call]: read({})\n"
+            "[Tool result]: contents\n[Assistant]: done"
+        )
+
+    def test_a_message_the_model_made_is_read_from_its_parts(self):
+        # What a tool round's preamble is, as model_dump() leaves it in the history.
+        items = cast(
+            ResponseInputParam,
+            [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Let me ", "annotations": []},
+                        {"type": "output_text", "text": "look.", "annotations": []},
+                        {"type": "refusal", "refusal": "no"},
+                    ],
+                }
+            ],
+        )
+
+        assert transcript(items) == "[Assistant]: Let me look."
+
+    def test_reasoning_is_left_out_and_long_results_are_cut(self):
+        items: ResponseInputParam = [
+            {"type": "reasoning", "id": "r", "summary": [], "encrypted_content": "E"},
+            {"type": "function_call_output", "call_id": "c", "output": "o" * 3000},
+        ]
+
+        text = transcript(items)
+
+        assert text == "[Tool result]: " + "o" * 2000 + " [... 1,000 more characters]"

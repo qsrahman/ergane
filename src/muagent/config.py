@@ -40,7 +40,7 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
-from muagent.mcp_client import (
+from muagent.mcp_config import (
     NAME_PATTERN,
     McpServerConfig,
     UnsetVariableError,
@@ -237,24 +237,18 @@ def private_state_dir() -> Path:
     return path
 
 
-def _named_file(path: Path | None) -> Path | None:
-    """The file the user named, by `path` or by `MUAGENT_CONFIG`."""
-    if path is None and os.environ.get("MUAGENT_CONFIG"):
-        return Path(os.environ["MUAGENT_CONFIG"])
-    return path
-
-
 def config_file(path: Path | None = None) -> Path:
     """The config file in use: the one the user named, or `config.json` in
     `user_config_dir()`, which may not exist."""
-    return _named_file(path) or user_config_dir() / "config.json"
+    return path or user_config_dir() / "config.json"
 
 
 def load_config(path: Path | None = None, **flags: object) -> Config:
     """Load the settings: the flags, then the environment, then the file.
 
-    The file is `path`, or the one `MUAGENT_CONFIG` names, or `config.json` in
-    `user_config_dir()`; the last may be missing. It is never looked for in the
+    The file is `path` (`--config`; no variable names one, since a project's `.envrc`
+    could then point muagent at a file of its own, with servers and a base URL), or
+    `config.json` in `user_config_dir()`, which may be missing. It is never looked for in the
     current directory: whoever controls a project could set the base URL, and the
     API key and every prompt would go wherever they chose.
 
@@ -274,7 +268,7 @@ def load_config(path: Path | None = None, **flags: object) -> Config:
     """
     file = config_file(path)
 
-    named = path is not None or bool(os.environ.get("MUAGENT_CONFIG"))
+    named = path is not None
     if named and not file.exists():
         raise FileNotFoundError(f"Config file not found: {file}")
     if named and file.is_dir():  # pydantic-settings would skip it without a word

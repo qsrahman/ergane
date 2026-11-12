@@ -4,6 +4,7 @@ the REPL, and closes the servers whatever happens."""
 import argparse
 import sys
 from collections.abc import Sequence
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -32,6 +33,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "variable, config.json, its default. Set the key in config.json "
         '("api_key": "${OPENAI_API_KEY}") or in OPENAI_API_KEY; there is no flag '
         "for it, since a flag shows in the process list.",
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"muagent {version('muagent')}"
     )
     parser.add_argument(
         "--config", type=Path, metavar="FILE", help="the config file to use"

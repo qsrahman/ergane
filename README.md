@@ -56,7 +56,7 @@ Each setting comes from the first of these that sets it: **its command-line flag
 | `max_turns`          | `MAX_TURNS`          | `--max-turns N`          | `25`                  | Most model calls for one prompt: the cap on the tool loop. |
 | `mcpServers`         | none                 | `--no-mcp` (start none)  | none                  | The [MCP servers](#mcp-servers). |
 
-Two more flags: `--config FILE` reads another file (so does the variable `MUAGENT_CONFIG`; the flag wins), and `--help` lists them all. A file you name that does not exist is an error; the default one may be missing, if the environment and flags give the key.
+Two more flags: `--config FILE` reads another file (there is no variable for it, so that a project's environment cannot point muagent at a file of its own), `--version` prints the version, and `--help` lists them all. A file you name that does not exist is an error; the default one may be missing, if the environment and flags give the key.
 
 ## Usage
 

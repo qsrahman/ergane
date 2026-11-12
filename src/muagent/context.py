@@ -304,7 +304,7 @@ class Context:
         ends = [*starts[1:], len(self.items)]
         kept = 0
         cut = len(self.items)
-        for start, end in zip(reversed(starts), reversed(ends)):
+        for start, end in zip(reversed(starts), reversed(ends), strict=True):
             turn = sum(estimate_tokens(item) for item in self.items[start:end])
             if cut < len(self.items) and kept + turn > keep_tokens:
                 break

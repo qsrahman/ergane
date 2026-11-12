@@ -293,6 +293,16 @@ class TestMcpServers:
         assert exc.value.code == 130
 
 
+def test_version_prints_the_version_of_the_package_and_exits(capsys):
+    from importlib.metadata import version
+
+    with pytest.raises(SystemExit) as exc:
+        main(["--version"])
+
+    assert exc.value.code == 0
+    assert capsys.readouterr().out == f"muagent {version('muagent')}\n"
+
+
 class TestFlags:
     @pytest.fixture(autouse=True)
     def api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
