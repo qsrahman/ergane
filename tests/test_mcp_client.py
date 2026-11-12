@@ -20,8 +20,10 @@ from fake_api import TEXT
 from muagent.mcp_client import (
     McpServer,
     McpServerError,
+    ServerStatus,
     _expand,
     _list_tools,
+    close_servers,
     start_servers,
 )
 from muagent.mcp_config import McpServerConfig
@@ -957,6 +959,59 @@ class TestConnectionLost:
             server.close()
             process.terminate()
             process.wait(10)
+
+
+class TestReport:
+    """What became of each server, for /servers: the notices are shown once."""
+
+    def fake(self, **values):
+        return McpServerConfig(command=sys.executable, args=[FAKE], **values)
+
+    def test_every_server_has_a_status_in_the_order_of_the_file(self, tmp_path):
+        configs = {
+            "good": self.fake(tools=["add", "read_file"]),
+            "off": self.fake(enable=False),
+            "bad": McpServerConfig(command="/no/such/server"),
+            "unset": self.fake(env={"K": "${NOT_SET_ANYWHERE}"}),
+        }
+        notices: list[str] = []
+        report: list[ServerStatus] = []
+
+        servers, found = start_servers(
+            configs, tmp_path, notices.append, environ={}, report=report
+        )
+        try:
+            by = {status.name: status for status in report}
+            assert list(by) == list(configs)
+            assert by["good"].state == "running"
+            assert by["good"].tools == ("good__add", "good__read_file")
+            assert by["good"].hidden == 15 and by["good"].log == tmp_path / "good.log"
+            assert [t.name for t in found] == ["good__add", "good__read_file"]
+            assert by["off"].state == "off" and by["off"].tools == ()
+            assert by["bad"].state == "failed" and by["unset"].state == "failed"
+            assert "FileNotFoundError" in by["bad"].detail
+            assert "NOT_SET_ANYWHERE" in by["unset"].detail
+            # The detail is the notice that was shown, to be shown again.
+            assert notices == [by["bad"].detail, by["unset"].detail]
+        finally:
+            close_servers(servers)
+
+    def test_a_url_server_has_no_log(self, tmp_path):
+        with serve_http() as url:
+            report: list[ServerStatus] = []
+            servers, _ = start_servers(
+                {"web": McpServerConfig(url=url, tools=["add"])},
+                tmp_path,
+                lambda text: None,
+                report=report,
+            )
+            try:
+                assert report[0].state == "running" and report[0].log is None
+            finally:
+                close_servers(servers)
+
+    def test_the_report_is_optional(self, tmp_path):
+        assert start_servers({}, tmp_path, print) == ([], [])
 
 
 class TestStartingTogether:

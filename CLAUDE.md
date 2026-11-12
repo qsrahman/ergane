@@ -92,7 +92,8 @@ The modules, in dependency order (each imports only from those above it):
 - `mcp_config.py`: `McpServerConfig` (one server in `config.json`), the url rules and the
   `${NAME}` placeholders; what `config.py` needs of MCP, and no more.
 - `mcp_client.py`: `McpServer`, `start_servers`, `close_servers`; a server's tools become
-  `Tool`s. Imports `mcp` only when a server starts. The design notes are in its docstring.
+  `Tool`s, and a `ServerStatus` per server (`start_servers(..., report=[])`) records what
+  became of it, for `/servers`. Imports `mcp` only when a server starts. The design notes are in its docstring.
 - `errors.py`, `prompts.py`: `TurnError`, `StreamCut`, `describe_error`,
   `is_context_overflow`; the three prompts as text. They import nothing of muagent.
 - `config.py`: `Config`, `load_config()`, `EFFORTS`, the XDG directories.

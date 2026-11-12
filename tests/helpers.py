@@ -1,11 +1,14 @@
 """Plain helper functions shared by the tests (fixtures live in conftest.py)."""
 
+from collections.abc import Sequence
+
 import pytest
 from openai.types.responses import ResponseInputParam
 
 from muagent.agent import Agent
 from muagent.commands import COMMANDS
 from muagent.config import Config
+from muagent.mcp_client import ServerStatus
 from muagent.repl import Repl
 from muagent.tools import Tool
 
@@ -23,7 +26,12 @@ def make_config(**values) -> Config:
     return Config(**{"api_key": "test", "model": "gpt-4o", **values})  # pyright: ignore[reportCallIssue]
 
 
-def run_repl(monkeypatch: pytest.MonkeyPatch, agent: Agent, inputs: list) -> None:
+def run_repl(
+    monkeypatch: pytest.MonkeyPatch,
+    agent: Agent,
+    inputs: list,
+    servers: Sequence[ServerStatus] = (),
+) -> None:
     """Run a Repl over scripted input.
 
     Each entry is either a line of input or an exception that input() raises.
@@ -37,7 +45,7 @@ def run_repl(monkeypatch: pytest.MonkeyPatch, agent: Agent, inputs: list) -> Non
         return line
 
     monkeypatch.setattr("builtins.input", fake_input)
-    Repl(agent, COMMANDS).run()
+    Repl(agent, COMMANDS, servers=servers).run()
 
 
 def tool_with(function) -> Tool:

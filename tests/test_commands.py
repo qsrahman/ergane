@@ -1,10 +1,13 @@
 import sys
+from pathlib import Path
 
 import pytest
 
 from fake_api import TEXT
 from helpers import run_repl
 from muagent.commands import COMMANDS, Command, command
+from muagent.context import estimate_tokens
+from muagent.mcp_client import ServerStatus
 from muagent.tools import Tool
 
 
@@ -407,6 +410,56 @@ class TestCompactCommands:
         run_repl(monkeypatch, make_agent(AUTO_COMPACT=False), ["/context", "/exit"])
 
         assert "off (/compact does it by hand)" in capsys.readouterr().out
+
+
+class TestServersCommand:
+    def servers(self):
+        return [
+            ServerStatus("web", "running", tools=("web__a", "web__b"), hidden=3),
+            ServerStatus(
+                "files", "running", tools=("files__x",), log=Path.home() / "f.log"
+            ),
+            ServerStatus("bad", "failed", "MCP server 'bad' failed to start: X"),
+            ServerStatus("old", "off", "enable is false"),
+        ]
+
+    def test_it_says_when_there_are_none(self, monkeypatch, make_agent, capsys):
+        run_repl(monkeypatch, make_agent(), ["/servers", "/exit"])
+
+        assert "[No MCP servers]" in capsys.readouterr().out
+
+    def test_every_server_gets_a_line_with_what_became_of_it(
+        self, monkeypatch, make_agent, capsys
+    ):
+        def tool(name: str) -> Tool:
+            def function() -> str:
+                """Do nothing."""
+                return ""
+
+            function.__name__ = name
+            return Tool.from_function(function)
+
+        names = ("web__a", "web__b", "files__x")
+        agent = make_agent(tools=[tool(name) for name in names])
+
+        run_repl(monkeypatch, agent, ["/servers", "/exit"], self.servers())
+
+        out = capsys.readouterr().out
+        assert '  web    running, 2 tools (3 left out by "tools"), ~' in out
+        assert "  files  running, 1 tool, ~" in out and ", log ~/f.log" in out
+        assert "  bad    failed: MCP server 'bad' failed to start: X" in out
+        assert "  old    off: enable is false" in out
+
+    def test_the_tokens_are_those_of_the_definitions_the_model_gets(
+        self, monkeypatch, make_agent, capsys
+    ):
+        agent = make_agent(tools=[LOOK])
+        status = [ServerStatus("s", "running", tools=("look",))]
+
+        run_repl(monkeypatch, agent, ["/servers", "/exit"], status)
+
+        tokens = estimate_tokens(LOOK.param())  # type: ignore[arg-type]
+        assert f"~{tokens:,} tokens" in capsys.readouterr().out
 
 
 class TestToolsCommand:

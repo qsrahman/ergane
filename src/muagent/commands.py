@@ -4,12 +4,14 @@ import inspect
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from openai.types.shared import ReasoningEffort
 from pydantic import TypeAdapter, ValidationError
 
 from muagent.config import EFFORTS
+from muagent.context import estimate_tokens
 from muagent.errors import TurnError, describe_error
 
 if TYPE_CHECKING:
@@ -212,6 +214,37 @@ def context_(repl: Repl, args: str) -> None:
         )
     repl.console.columns(rows)
     repl.console.blank()
+
+
+@command("/servers")
+def servers_(repl: Repl, args: str) -> str | None:
+    """List the MCP servers: which run, which failed, and what their tools cost."""
+    if not repl.servers:
+        return "No MCP servers"
+    tools = repl.agent.tools
+    home = str(Path.home())
+    rows = []
+    for server in repl.servers:
+        if server.state == "running":
+            tokens = sum(
+                estimate_tokens(tools[name].param())
+                for name in server.tools
+                if name in tools
+            )
+            count = len(server.tools)
+            text = f"running, {count} tool{'s' if count != 1 else ''}"
+            if server.hidden:
+                text += f' ({server.hidden} left out by "tools")'
+            text += f", ~{tokens:,} tokens"
+        else:
+            text = f"{server.state}: {server.detail}"
+        if server.log:
+            log = str(server.log)
+            text += f", log {'~' + log[len(home) :] if log.startswith(home) else log}"
+        rows.append((server.name, text))
+    repl.console.columns(rows)
+    repl.console.blank()
+    return None
 
 
 @command("/tools")

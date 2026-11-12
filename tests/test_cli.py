@@ -91,7 +91,7 @@ class RecordingRepl:
 
     agent = None
 
-    def __init__(self, agent, commands, session=None, console=None):
+    def __init__(self, agent, commands, session=None, console=None, servers=()):
         RecordingRepl.agent = agent
 
     def run(self):
@@ -248,6 +248,40 @@ class TestMcpServers:
         assert blank == "" and banner.startswith("muagent | model: ")
         assert out.endswith("Bye.\n")
 
+    def test_servers_tells_again_what_became_of_a_server_that_failed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+    ):
+        write_config_json(
+            tmp_path,
+            {
+                "broken": {"command": "/no/such/server"},
+                "good": {**FAKE_SERVER, "tools": ["add"]},
+                "off": {**FAKE_SERVER, "enable": False},
+            },
+        )
+        inputs = iter(["/servers", "/exit"])
+        monkeypatch.setattr("builtins.input", lambda _prompt: next(inputs))
+
+        main([])
+
+        out = capsys.readouterr().out
+        assert out.count("failed to start: FileNotFoundError") == 2  # shown, and again
+        assert '  good    running, 1 tool (16 left out by "tools"), ~' in out
+        assert "  off     off: enable is false" in out
+        # A program that failed may have said why on stderr, so its log is named.
+        assert "good.log" in out and "broken.log" in out
+
+    def test_servers_with_no_mcp_says_they_were_not_started(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+    ):
+        write_config_json(tmp_path, {"fake": FAKE_SERVER})
+        inputs = iter(["/servers", "/exit"])
+        monkeypatch.setattr("builtins.input", lambda _prompt: next(inputs))
+
+        main(["--no-mcp"])
+
+        assert "  fake  off: --no-mcp" in capsys.readouterr().out
+
     def test_a_mistake_in_mcp_json_is_reported_and_muagent_exits(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ):
@@ -264,7 +298,7 @@ class TestMcpServers:
     def test_ctrl_c_while_the_servers_start_exits_quietly(
         self, monkeypatch: pytest.MonkeyPatch
     ):
-        def interrupted(*args):
+        def interrupted(*args, **kwargs):
             raise KeyboardInterrupt
 
         monkeypatch.setattr("muagent.cli.start_servers", interrupted)

@@ -6,7 +6,7 @@ prompts. With input or output redirected there is no session and `input()` reads
 """
 
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
@@ -24,6 +24,7 @@ from muagent.agent import Agent
 from muagent.commands import Command
 from muagent.console import Console
 from muagent.errors import TurnError, describe_error
+from muagent.mcp_client import ServerStatus
 
 # A terminal asked for Shift-Enter (kitty's keyboard protocol, or xterm's
 # modifyOtherKeys) sends one of these, which prompt_toolkit does not know. They are
@@ -129,6 +130,7 @@ class Repl:
         commands: Mapping[str, Command],
         session: PromptSession[str] | None = None,
         console: Console | None = None,
+        servers: Sequence[ServerStatus] = (),
     ) -> None:
         """Create a REPL for an agent.
 
@@ -139,6 +141,7 @@ class Repl:
                 `terminal_session`); without one, `input()` does.
             console: What prints; one that already printed (the start-up notices)
                 keeps the state that separates its output from the next.
+            servers: What became of the MCP servers at start, for `/servers`.
         """
         self.agent = agent
         self.console = console or Console()
@@ -148,6 +151,7 @@ class Repl:
             self.console.ask = PromptSession(
                 input=session.app.input, output=session.app.output
             ).prompt
+        self.servers = servers
         self.running = False
         self.commands = commands
         self.session = session

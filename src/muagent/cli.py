@@ -14,7 +14,7 @@ from muagent.agent import Agent
 from muagent.commands import COMMANDS
 from muagent.config import EFFORTS, config_file, load_config, private_state_dir
 from muagent.console import Console
-from muagent.mcp_client import close_servers, start_servers
+from muagent.mcp_client import ServerStatus, close_servers, start_servers
 from muagent.repl import Repl, terminal_session
 
 
@@ -143,9 +143,15 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     console = Console()
     state = private_state_dir()
+    statuses: list[ServerStatus] = []
+    if no_mcp:
+        statuses = [ServerStatus(n, "off", "--no-mcp") for n in config.mcp_servers]
     try:
         servers, mcp_tools = start_servers(
-            {} if no_mcp else config.mcp_servers, state, console.notice
+            {} if no_mcp else config.mcp_servers,
+            state,
+            console.notice,
+            report=statuses,
         )
     except KeyboardInterrupt:
         raise SystemExit(130) from None
@@ -154,6 +160,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         session = terminal_session(COMMANDS, state / "history")
         # The banner is separated from the notices of servers that failed by the
         # console itself, which is why it is the same one.
-        Repl(Agent(config, tools=mcp_tools), COMMANDS, session, console).run()
+        agent = Agent(config, tools=mcp_tools)
+        Repl(agent, COMMANDS, session, console, statuses).run()
     finally:
         close_servers(servers)

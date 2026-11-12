@@ -54,6 +54,7 @@ import threading
 import time
 from collections.abc import Callable, Coroutine, Iterable, Mapping
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
@@ -87,6 +88,21 @@ _PING_SECONDS = 5
 # How often a server whose connection was lost is started again in one session. A
 # server that dies at once would otherwise be started at every call.
 _MAX_RESTARTS = 3
+
+
+@dataclass(frozen=True)
+class ServerStatus:
+    """What became of one server in config.json when muagent started, for `/servers`.
+
+    A server that failed is reported once, as a notice, and would be forgotten.
+    """
+
+    name: str
+    state: str  # "running", "failed" or "off"
+    detail: str = ""  # why it failed, or why it is off
+    tools: tuple[str, ...] = ()  # the names of the tools it offers the model
+    hidden: int = 0  # tools it has that its `tools` setting leaves out
+    log: Path | None = None  # where its stderr went, for a program
 
 
 class McpServerError(Exception):
@@ -241,6 +257,7 @@ class McpServer:
         self._closed = False  # close() was called: do not start it again
         self._restarts = 0
         self._active = 0.0  # when the server last answered
+        self.hidden = 0  # tools it has that the config leaves out, after tools()
 
     def start(self) -> None:
         """Start the server and connect to it. Call `close()` when done.
@@ -478,7 +495,9 @@ class McpServer:
                     f"MCP server {self.name!r} has no tool {', '.join(unknown)} "
                     f"(it has: {', '.join(sorted(have))})"
                 )
-            definitions = [d for d in definitions if d.name in self._config.tools]
+            kept = [d for d in definitions if d.name in self._config.tools]
+            self.hidden = len(definitions) - len(kept)
+            definitions = kept
         taken = set() if taken is None else taken
         return [
             self._make_tool(_tool_name(self.name, d.name, taken), d)
@@ -624,6 +643,7 @@ def start_servers(
     on_notice: Callable[[str], None],
     *,
     environ: Mapping[str, str] = os.environ,
+    report: list[ServerStatus] | None = None,
 ) -> tuple[list[McpServer], list[Tool]]:
     """Start the servers, all at once, and collect their tools.
 
@@ -639,15 +659,29 @@ def start_servers(
         log_dir: Where each server's stderr goes, in a file named after it.
         on_notice: Called with a line about each server that fails.
         environ: Where the `${NAME}` placeholders of the servers are filled in from.
+        report: If given, a `ServerStatus` for every server in `configs` is added to
+            it, in their order: the notices of the ones that failed are gone once
+            they are shown, and `/servers` tells them again.
 
     Returns:
         The servers that are running, which the caller must close, and their tools.
     """
+    statuses: dict[str, ServerStatus] = {}
+
+    def log_of(name: str) -> Path | None:
+        path = log_dir / f"{name}.log"
+        return path if configs[name].command and path.exists() else None
+
+    def failed_with(name: str, message: str) -> None:
+        on_notice(message)
+        statuses[name] = ServerStatus(name, "failed", message, log=log_of(name))
+
     # Each server, or why it cannot be started, in the order of the file.
     entries: list[tuple[str, McpServer | str]] = []
     try:
         for name, config in configs.items():
             if not config.enable:
+                statuses[name] = ServerStatus(name, "off", "enable is false")
                 continue
             try:
                 server = McpServer(
@@ -665,23 +699,33 @@ def start_servers(
         taken: set[str] = set()  # names are unique across the servers too
         for name, entry in entries:
             if isinstance(entry, str):
-                on_notice(entry)
+                failed_with(name, entry)
                 continue
             try:
                 entry.connect()
                 found = entry.tools(taken)
             except Exception as exc:  # noqa: BLE001
                 failed.append(entry)
-                on_notice(
+                failed_with(
+                    name,
                     str(exc)
                     if isinstance(exc, McpServerError)
-                    else f"MCP server {name!r} failed: {type(exc).__name__}: {exc}"
+                    else f"MCP server {name!r} failed: {type(exc).__name__}: {exc}",
                 )
                 continue
             running.append(entry)
             tools += found
+            statuses[name] = ServerStatus(
+                name,
+                "running",
+                tools=tuple(tool.name for tool in found),
+                hidden=entry.hidden,
+                log=log_of(name),
+            )
         close_servers(failed)
     except BaseException:
         close_servers(entry for _, entry in entries if not isinstance(entry, str))
         raise
+    if report is not None:
+        report.extend(statuses[name] for name in configs)
     return running, tools

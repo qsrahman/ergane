@@ -74,6 +74,7 @@ Type a prompt at `>` and press Enter. Up and Down recall earlier prompts, which 
 | `/retry`          | Resend the last prompt; if its reply was saved, it is replaced                   |
 | `/undo`           | Remove the last exchange from the history                                        |
 | `/tools`          | List the tools offered to the model, by whether they ask first  |
+| `/servers`        | List the MCP servers: which run (with how many tools, and the tokens their definitions take), which failed and why, and which are off |
 | `/compact [FOCUS]` | Summarize the earlier turns now; `FOCUS` says what the summary must keep |
 | `/summary`        | Show the summary that stands for the earliest turns |
 | `/context`        | Show how much of the context budget the next request would use: the instructions, the tool definitions and the history (estimates), and the count the server gave for the last request |
@@ -138,7 +139,7 @@ def add(a: int, b: int) -> str:
 
 Write `${NAME}` in `args`, `env` or `headers` to use the environment variable `NAME`, so that keys stay out of the file: `"env": { "API_KEY": "${MY_API_KEY}" }`. A server whose variable is not set is skipped, with a notice that names the variable. The server gets only the variables you list, not the rest of your environment.
 
-The names are letters, digits, `_` and `-`. A server's tools are offered to the model as `name__tool`; `/tools` lists them. The servers start at the same time, so a few slow ones do not add up. A server that starts is not announced (the first line shows how many tools there are); one that fails to start is reported and left out; one that stops while you work (it exits, or a remote one goes away) makes the call that finds out return an error that names it, and is started again for the next call, up to three times in a session (the call that failed is not repeated, since it may have done part of its work); the others carry on. A server that never answers delays the start by its `startup_timeout`, not by the sum of them. The stderr of a program goes to `~/.local/state/muagent/NAME.log` (or `$XDG_STATE_HOME/muagent/NAME.log`), where you will find why it failed.
+The names are letters, digits, `_` and `-`. A server's tools are offered to the model as `name__tool`; `/tools` lists them. The servers start at the same time, so a few slow ones do not add up. A server that starts is not announced (the first line shows how many tools there are); one that fails to start is reported and left out (`/servers` tells it again, with the log to read); one that stops while you work (it exits, or a remote one goes away) makes the call that finds out return an error that names it, and is started again for the next call, up to three times in a session (the call that failed is not repeated, since it may have done part of its work); the others carry on. A server that never answers delays the start by its `startup_timeout`, not by the sum of them. The stderr of a program goes to `~/.local/state/muagent/NAME.log` (or `$XDG_STATE_HOME/muagent/NAME.log`), where you will find why it failed.
 
 A few things to know before you add a server:
 
