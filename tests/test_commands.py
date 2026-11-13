@@ -186,6 +186,16 @@ class TestCommandsWithAgent:
 
     def test_help_lists_every_registered_command(self, monkeypatch, make_agent, capsys):
         run_repl(monkeypatch, make_agent(), self.inputs("/help"))
+    def test_help_lists_the_commands_in_order(self, monkeypatch, make_agent, capsys):
+        run_repl(monkeypatch, make_agent(), self.inputs("/help"))
+
+        names = [
+            line.split()[0]
+            for line in capsys.readouterr().out.splitlines()
+            if line.startswith("  /")
+        ]
+        assert names == sorted(COMMANDS)
+
 
         out = capsys.readouterr().out
         for name, cmd in COMMANDS.items():

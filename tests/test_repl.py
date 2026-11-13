@@ -415,6 +415,22 @@ class TestTerminalSession:
         assert "Ctrl-C             Clear the line; on an empty line, press twice" in out
         assert '"Allow …?": y allows, a allows the tool for the session' in out
 
+    def test_help_lists_the_keys_in_order(self, tmp_path, capsys):
+        self.read(tmp_path, "/help\r/exit\r")
+
+        out = capsys.readouterr().out
+        keys = [
+            "Alt-Enter",
+            "Ctrl-C",
+            "Ctrl-D",
+            "Ctrl-R",
+            "Ctrl-X",
+            "Tab, Up",
+            "y, a, ?",
+        ]
+        positions = [out.index(f"  {key}") for key in keys]
+        assert positions == sorted(positions)
+
     def test_a_line_added_by_hand_has_a_marker_under_the_prompt(self, tmp_path):
         with create_pipe_input() as pipe:
             session = terminal_session(

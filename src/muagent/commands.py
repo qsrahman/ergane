@@ -101,7 +101,7 @@ def help_(repl: Repl, args: str) -> None:
             ("Ctrl-D", "Quit; press twice once there is a conversation"),
             *keys,
         ]
-    repl.console.columns(keys)
+    repl.console.columns(sorted(keys, key=lambda row: row[0].lower()))
     repl.console.blank()
 
 
