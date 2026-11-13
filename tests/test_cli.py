@@ -141,7 +141,7 @@ class TestMcpServers:
 
         assert RecordingRepl.agent is not None
         names = list(RecordingRepl.agent.tools)
-        assert len(names) == 19  # the fake server's
+        assert len(names) == 18  # the fake server's
         assert "fake__add" in names
         assert (tmp_path / "muagent" / "fake.log").exists()
 
@@ -230,9 +230,9 @@ class TestMcpServers:
         main(["--model", "banner-model"])
 
         first_line = capsys.readouterr().out.splitlines()[0]
-        # The server's 19.
+        # The server's 18.
         assert first_line == (
-            "muagent | model: banner-model | 19 tools | /help lists commands"
+            "muagent | model: banner-model | 18 tools | /help lists commands"
         )
 
     def test_a_server_that_fails_does_not_stop_muagent(
@@ -268,7 +268,7 @@ class TestMcpServers:
 
         out = capsys.readouterr().out
         assert out.count("failed to start: FileNotFoundError") == 2  # shown, and again
-        assert '  good    running, 1 tool (18 left out by "tools"), ~' in out
+        assert '  good    running, 1 tool (17 left out by "tools"), ~' in out
         assert "  off     off: enable is false" in out
         # A program that failed may have said why on stderr, so its log is named.
         assert "good.log" in out and "broken.log" in out

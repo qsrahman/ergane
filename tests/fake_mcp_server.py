@@ -87,14 +87,6 @@ def client(ctx: Context) -> str:
 
 
 @server.tool()
-async def grow(ctx: Context) -> str:
-    """Add a tool called `extra` to the server and say that its tools changed."""
-    server.add_tool(lambda: "extra", name="extra", description="Added later.")
-    await ctx.session.send_tool_list_changed()
-    return "grown"
-
-
-@server.tool()
 def pid() -> str:
     """Return the process id of the server."""
     return str(os.getpid())

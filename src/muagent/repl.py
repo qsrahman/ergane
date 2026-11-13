@@ -165,9 +165,8 @@ class Repl:
             console: What prints; one that already printed (the start-up notices)
                 keeps the state that separates its output from the next.
             servers: What became of the MCP servers at start, for `/servers`.
-            hub: The running MCP servers, which `/reconnect` starts again and whose
-                changed tools are followed before each turn; its statuses are the
-                servers `/servers` lists.
+            hub: The running MCP servers, which `/reconnect` starts again; its
+                statuses are the servers `/servers` lists.
         """
         self.agent = agent
         self.console = console or Console()
@@ -271,7 +270,7 @@ class Repl:
             self.console.blank()
 
     def apply(self, update: ServerUpdate) -> None:
-        """Give the agent the tools and the notes of a server that changed, and say so.
+        """Give the agent the tools and the notes of a server started again, and say so.
 
         Args:
             update: What the hub returned for the server.
@@ -291,10 +290,6 @@ class Repl:
         console = self.console
         console.blank()
         try:
-            # Between turns, never in the middle of one: its tools must stay as they were.
-            if self.hub is not None:
-                for update in self.hub.refresh():
-                    self.apply(update)
             self.agent.run_turn(
                 prompt,
                 on_text=console.write,

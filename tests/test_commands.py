@@ -1,5 +1,4 @@
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -616,33 +615,3 @@ class TestReconnectCommand:
 
         assert agent.tools == {} and agent.server_notes == {}
         assert "failed to start: FileNotFoundError" in capsys.readouterr().out
-
-
-class TestToolsChangedBetweenTurns:
-    def test_the_next_turn_has_the_tools_the_server_announced(
-        self, monkeypatch, make_agent, fake_server, tmp_path, capsys
-    ):
-        hub = McpHub(
-            {
-                "fake": McpServerConfig(
-                    command=sys.executable, args=[FAKE], instructions=True
-                )
-            },
-            tmp_path,
-        )
-        try:
-            agent = make_agent(tools=hub.start(lambda notice: None))
-            agent.tools["fake__grow"].call("{}")
-            deadline = time.monotonic() + 5
-            while not hub.servers["fake"].tools_changed and time.monotonic() < deadline:
-                time.sleep(0.05)
-
-            run_repl(monkeypatch, agent, ["hi", "/exit"], hub=hub)
-
-            sent = [tool["name"] for tool in fake_server.requests[0]["tools"]]
-            assert "fake__extra" in sent
-            assert (
-                "[MCP server 'fake' changed its tools: now " in capsys.readouterr().out
-            )
-        finally:
-            hub.close()
