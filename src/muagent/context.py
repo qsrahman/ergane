@@ -9,12 +9,18 @@ newest turn, which stays so that a follow-up can refer to what the tools found.
 
 import json
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
 
-from openai.types.responses import ResponseInputParam
+from openai.types.responses import (
+    ResponseFunctionCallOutputItemListParam,
+    ResponseInputImageContentParam,
+    ResponseInputParam,
+    ResponseInputTextContentParam,
+)
 
 from muagent.errors import TurnError
+from muagent.tools import Image
 
 # What stands in for a tool result that was dropped to make room (see drop_outputs).
 DROPPED_OUTPUT = "[output dropped to fit the context]"
@@ -37,6 +43,52 @@ def _is_user_message(item: object) -> bool:
     return isinstance(item, dict) and item.get("role") == "user"
 
 
+# A picture is counted as this many tokens, whatever the bytes of its base64: the API
+# charges for its size and detail, not for its length as text.
+IMAGE_TOKENS = 1000
+
+IMAGE_DROPPED = "[image dropped to fit the context]"
+
+
+def function_output(
+    text: str, images: Sequence[Image] = ()
+) -> str | ResponseFunctionCallOutputItemListParam:
+    """What a function call's output is for a result: the text, or, with pictures, the
+    list of parts that the Responses API takes."""
+    if not images:
+        return text
+    text_part: ResponseInputTextContentParam = {"type": "input_text", "text": text}
+    pictures: list[ResponseInputImageContentParam] = [
+        {
+            "type": "input_image",
+            "image_url": f"data:{image.mime_type};base64,{image.data}",
+            "detail": "auto",
+        }
+        for image in images
+    ]
+    return [text_part, *pictures]
+
+
+def output_text(output: str | Sequence[Mapping[str, str]]) -> str:
+    """The text of a function call's output, with `[image]` where a picture is."""
+    if isinstance(output, str):
+        return output
+    return "\n".join(
+        part.get("text", "") if part["type"] == "input_text" else "[image]"
+        for part in output
+    )
+
+
+def _text_parts(output: Sequence[Mapping[str, str]]) -> str:
+    return "\n".join(part["text"] for part in output if part["type"] == "input_text")
+
+
+def _has_images(output: object) -> bool:
+    return isinstance(output, list) and any(
+        part.get("type") == "input_image" for part in output
+    )
+
+
 def estimate_tokens(item: Mapping[str, object]) -> int:
     """Estimate the number of tokens in one history item, or any JSON-like mapping.
 
@@ -52,7 +104,18 @@ def estimate_tokens(item: Mapping[str, object]) -> int:
         The estimated number of tokens.
     """
     counted = {k: v for k, v in item.items() if k != "encrypted_content"}
-    return len(json.dumps(counted, ensure_ascii=False).encode()) // 4 + 1
+    images = 0
+    output = counted.get("output")
+    if isinstance(output, list):  # a result with pictures: their bytes are not text
+        parts = []
+        for part in output:
+            if part.get("type") == "input_image":
+                images += 1
+                part = {**part, "image_url": ""}
+            parts.append(part)
+        counted["output"] = parts
+    text = len(json.dumps(counted, ensure_ascii=False).encode()) // 4
+    return text + images * IMAGE_TOKENS + 1
 
 
 def _cut(text: str, chars: int) -> str:
@@ -82,9 +145,8 @@ def transcript(items: ResponseInputParam) -> str:
         if item.get("type") == "function_call":
             lines.append(f"[Tool call]: {item['name']}({_cut(item['arguments'], 500)})")
         elif item.get("type") == "function_call_output":
-            lines.append(
-                f"[Tool result]: {_cut(item['output'], TRANSCRIPT_RESULT_CHARS)}"
-            )
+            result = _cut(output_text(item["output"]), TRANSCRIPT_RESULT_CHARS)
+            lines.append(f"[Tool result]: {result}")
         elif item.get("role") in ("user", "assistant"):
             content = item["content"]
             if not isinstance(content, str):  # the model's own message items
@@ -145,10 +207,11 @@ def drop_outputs(
     output, which the API requires. An item is replaced, not edited: the items
     of earlier turns are shared with the history.
 
-    A long result is first shortened to its start and end (PRUNE_CHARS), which
-    often frees enough and leaves the model something to read; only what is
-    still needed after that is replaced by the placeholder, unless `placeholders` is
-    false.
+    A picture goes first: it is the most for the least the model loses (the text
+    that came with it stays). Then a long result is shortened to its start and end
+    (PRUNE_CHARS), which often frees enough and leaves the model something to read;
+    only what is still needed after that is replaced by the placeholder, unless
+    `placeholders` is false.
 
     Returns:
         The estimated number of tokens freed.
@@ -156,7 +219,7 @@ def drop_outputs(
     plain = cast(list[dict[str, Any]], items)
     freed = 0
 
-    def replace(wanted: Callable[[str], bool], new: Callable[[str], str]) -> None:
+    def replace(wanted: Callable[[Any], bool], new: Callable[[Any], str]) -> None:
         nonlocal freed
         for i in range(upto):
             item = plain[i]
@@ -167,7 +230,10 @@ def drop_outputs(
                 freed += estimate_tokens(item) - estimate_tokens(replaced)
                 plain[i] = replaced
 
-    replace(lambda output: len(output) > PRUNE_CHARS, shorten)
+    replace(_has_images, lambda output: f"{_text_parts(output)}\n{IMAGE_DROPPED}")
+    replace(
+        lambda output: isinstance(output, str) and len(output) > PRUNE_CHARS, shorten
+    )
     if placeholders:
         replace(lambda output: output != DROPPED_OUTPUT, lambda output: DROPPED_OUTPUT)
     return freed

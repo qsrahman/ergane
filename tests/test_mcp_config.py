@@ -40,6 +40,7 @@ class TestLoadServers:
         assert servers["plain"].startup_timeout == 30
         assert servers["plain"].call_timeout == 300
         assert servers["plain"].instructions is False
+        assert servers["plain"].images is False
         assert servers["full"].args == ["a", "b"]
         assert servers["full"].env == {"K": "v"}
         assert servers["full"].read_only is True

@@ -25,6 +25,22 @@ from pydantic.json_schema import GenerateJsonSchema
 MAX_OUTPUT_CHARS = 20 * 1024
 
 
+@dataclass(frozen=True)
+class Image:
+    """A picture a tool returns for the model to look at."""
+
+    data: str  # base64
+    mime_type: str
+
+
+@dataclass(frozen=True)
+class ToolOutput:
+    """What a tool returns when it is more than text: the text, and pictures."""
+
+    text: str
+    images: tuple[Image, ...] = ()
+
+
 class _NoTitles(GenerateJsonSchema):
     """Leave the 'title' keys that pydantic adds to each property out of the schema."""
 
@@ -64,7 +80,9 @@ class Tool:
     # Checks the model's arguments, given as JSON text, without running the tool:
     # a description of what is wrong with them, or None if they are valid.
     check: Callable[[str], str | None]
-    runner: Callable[[str], str]  # arguments as JSON text -> result; may raise
+    # Arguments as JSON text -> result, which is text or, with pictures, a ToolOutput;
+    # may raise.
+    runner: Callable[[str], str | ToolOutput]
     read_only: bool  # False if it may change anything outside the program
 
     @classmethod
@@ -140,6 +158,10 @@ class Tool:
         }
 
     def call(self, arguments: str) -> str:
+        """The text of `call_output`: what most callers want."""
+        return self.call_output(arguments).text
+
+    def call_output(self, arguments: str) -> ToolOutput:
         """Run the tool for a model's call.
 
         Any failure comes back as text, not as an exception, so that it can be sent
@@ -149,19 +171,24 @@ class Tool:
             arguments: The model's arguments, as the JSON text it produced.
 
         Returns:
-            What the tool returned, cut to MAX_OUTPUT_CHARS, or a description of
-            what went wrong.
+            What the tool returned, its text cut to MAX_OUTPUT_CHARS, or a
+            description of what went wrong.
         """
         if problem := self.check(arguments):
-            return problem
+            return ToolOutput(problem)
         try:
             result = self.runner(arguments)
         except Exception as exc:  # noqa: BLE001
-            return f"Error: {type(exc).__name__}: {exc}"
-        if len(result) <= MAX_OUTPUT_CHARS:
-            return result
-        cut = len(result) - MAX_OUTPUT_CHARS
-        return f"{result[:MAX_OUTPUT_CHARS]}\n[output truncated: {cut} more characters]"
+            return ToolOutput(f"Error: {type(exc).__name__}: {exc}")
+        if isinstance(result, str):
+            result = ToolOutput(result)
+        text = result.text
+        if len(text) > MAX_OUTPUT_CHARS:
+            cut = len(text) - MAX_OUTPUT_CHARS
+            text = (
+                f"{text[:MAX_OUTPUT_CHARS]}\n[output truncated: {cut} more characters]"
+            )
+        return ToolOutput(text, result.images)
 
 
 @overload

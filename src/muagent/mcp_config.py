@@ -69,6 +69,11 @@ class McpServerConfig(BaseModel):
     # can be steered by it (gpt-oss:20b followed an order hidden in it 3 times in 5,
     # framed as notes or not). A call that is not read-only still asks first.
     instructions: bool = False
+    # Give the model the pictures a tool returns (a screenshot, say), not just a note that
+    # there was one. Off unless the user says so: a picture costs tokens in every later
+    # request until it is dropped, and a model without vision, or a compatible server
+    # that does not take them in a tool's output, would fail.
+    images: bool = False
     startup_timeout: float = Field(default=30, gt=0)  # seconds
     call_timeout: float = Field(default=300, gt=0)  # seconds
 

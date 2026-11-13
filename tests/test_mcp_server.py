@@ -438,6 +438,52 @@ def block_result(*content, structured=None, is_error=False):
     )
 
 
+class TestPictures:
+    """What the model is given of a picture a tool returns: only if the config says so."""
+
+    def test_a_server_whose_config_says_so_gives_the_picture(self, make_server):
+        server = make_server(images=True)
+        tool = {t.name: t for t in server.tools()}["fake__picture"]
+
+        result = tool.call_output("{}")
+
+        assert result.text == "[image: image/png]"
+        assert [(i.mime_type, len(i.data) > 0) for i in result.images] == [
+            ("image/png", True)
+        ]
+
+    def test_otherwise_it_is_a_note_that_there_was_one(self, make_server):
+        server = make_server()
+        tool = {t.name: t for t in server.tools()}["fake__picture"]
+
+        assert tool.call_output("{}").images == ()
+
+    def test_only_the_kinds_of_picture_the_api_takes(self):
+        import mcp_types
+
+        from muagent.mcp_server import _images
+
+        def block(mime: str):
+            return mcp_types.ImageContent(type="image", data="aGk=", mime_type=mime)
+
+        result = block_result(block("image/png"), block("image/svg+xml"))
+
+        assert [i.mime_type for i in _images(result)] == ["image/png"]
+
+    def test_a_picture_too_large_is_left_out(self, monkeypatch):
+        import mcp_types
+
+        from muagent.mcp_server import _images
+
+        monkeypatch.setattr("muagent.mcp_server._MAX_IMAGE_CHARS", 4)
+        big = mcp_types.ImageContent(type="image", data="x" * 5, mime_type="image/png")
+        small = mcp_types.ImageContent(
+            type="image", data="x" * 4, mime_type="image/png"
+        )
+
+        assert [len(i.data) for i in _images(block_result(big, small))] == [4]
+
+
 class TestResultText:
     def test_a_text_file_the_server_embedded_is_text(self):
         import mcp_types

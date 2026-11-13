@@ -59,7 +59,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
 from muagent.mcp_config import NAME_CHARS, NAME_PATTERN, McpServerConfig
-from muagent.tools import Tool, invalid_arguments
+from muagent.tools import Image, Tool, ToolOutput, invalid_arguments
 
 if TYPE_CHECKING:
     from mcp import ClientSession
@@ -74,6 +74,11 @@ _MAX_NAME_CHARS = 128
 # own value). A call is not waited for longer than this, so a `call_timeout` above it
 # raises it too.
 _HTTP_READ_SECONDS = 300
+
+# The kinds of picture the Responses API takes, and the most of one (as base64) that is
+# passed on: it is in every request until it is dropped.
+_IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
+_MAX_IMAGE_CHARS = 5_000_000
 
 # How long a server gets to stop on its own before it is cancelled.
 _STOP_SECONDS = 10
@@ -150,6 +155,20 @@ def _text(result: CallToolResult) -> str:
         parts.append(json.dumps(result.structured_content))
     text = "\n".join(parts)
     return f"Error: {text}" if result.is_error else text
+
+
+def _images(result: CallToolResult) -> tuple[Image, ...]:
+    """The pictures of a result that the model can be given: of a kind the API takes,
+    and not so large that one would fill a request."""
+    from mcp_types import ImageContent
+
+    return tuple(
+        Image(block.data, block.mime_type)
+        for block in result.content
+        if isinstance(block, ImageContent)
+        and block.mime_type in _IMAGE_TYPES
+        and len(block.data) <= _MAX_IMAGE_CHARS
+    )
 
 
 def _required_keys_check(schema: Mapping[str, Any]) -> Callable[[str], str | None]:
@@ -547,15 +566,15 @@ class McpServer:
         ]
 
     def _make_tool(self, name: str, definition: ToolDefinition) -> Tool:
-        def runner(arguments: str) -> str:
-            return _text(
-                self._submit(
-                    lambda session: session.call_tool(
-                        definition.name, json.loads(arguments)
-                    ),
-                    self._config.call_timeout,
-                )
+        def runner(arguments: str) -> str | ToolOutput:
+            result = self._submit(
+                lambda session: session.call_tool(
+                    definition.name, json.loads(arguments)
+                ),
+                self._config.call_timeout,
             )
+            images = _images(result) if self._config.images else ()
+            return ToolOutput(_text(result), images) if images else _text(result)
 
         return Tool(
             name,

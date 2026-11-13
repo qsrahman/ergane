@@ -43,6 +43,7 @@ from muagent.context import (
     drop_outputs,
     estimate_tokens,
     extract_summary,
+    function_output,
     transcript,
 )
 from muagent.errors import StreamCut, TurnError, describe_error, is_context_overflow
@@ -780,11 +781,11 @@ class Agent:
                 answer = confirm(tool, call.arguments) if asks else True
                 if answer == "always":
                     self.always_allowed.add(tool.name)
-                output = (
-                    tool.call(call.arguments)
-                    if answer
-                    else "The user denied this call."
-                )
+                if answer:
+                    result = tool.call_output(call.arguments)
+                    output = function_output(result.text, result.images)
+                else:
+                    output = "The user denied this call."
             items.append(
                 {
                     "type": "function_call_output",

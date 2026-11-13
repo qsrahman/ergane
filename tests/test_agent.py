@@ -24,7 +24,7 @@ from muagent.agent import (
 from muagent.context import DROPPED_OUTPUT, estimate_tokens
 from muagent.errors import TurnError, describe_error
 from muagent.prompts import SERVER_NOTES, SYSTEM_PROMPT, SYSTEM_PROMPT_NO_TOOLS
-from muagent.tools import MAX_OUTPUT_CHARS, Tool
+from muagent.tools import MAX_OUTPUT_CHARS, Image, Tool, ToolOutput
 
 
 @pytest.mark.parametrize("streaming", [True, False])
@@ -42,6 +42,38 @@ class TestAgentRunTurn:
         assert instructions.startswith(prompt)
         assert "- Operating system: " in instructions
         assert instructions.endswith(f"- Current date: {date.today().isoformat()}\n")
+
+    def test_a_picture_from_a_tool_goes_to_the_model_and_stays_in_the_history(
+        self, make_agent, fake_server, streaming
+    ):
+        picture = Image("aGk=", "image/png")
+        shot = Tool(
+            "read_file",
+            "Take a screenshot.",
+            {"type": "object", "properties": {}},
+            lambda arguments: None,
+            lambda arguments: ToolOutput("the page", (picture,)),
+            True,
+        )
+        agent = make_agent(tools=[shot], STREAMING=streaming)
+
+        agent.run_turn("tool_call")
+
+        output = [
+            {"type": "input_text", "text": "the page"},
+            {
+                "type": "input_image",
+                "image_url": "data:image/png;base64,aGk=",
+                "detail": "auto",
+            },
+        ]
+        sent = fake_server.requests[1]["input"][-1]
+        assert sent == {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": output,
+        }
+        assert agent.context.items[2]["output"] == output  # type: ignore[index]
 
     def test_what_servers_say_follows_the_prompt_and_comes_before_the_environment(
         self, make_agent, fake_server, streaming

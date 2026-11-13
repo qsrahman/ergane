@@ -4,7 +4,7 @@ from typing import Annotated, Any
 import pytest
 from pydantic import Field
 
-from muagent.tools import MAX_OUTPUT_CHARS, Tool, tool
+from muagent.tools import MAX_OUTPUT_CHARS, Image, Tool, ToolOutput, tool
 
 
 def add(a: int, b: int = 1) -> str:
@@ -274,6 +274,37 @@ class TestToolFromParts:
         assert self.make(runner).call('{"text": "hi"}') == (
             "Error: ConnectionError: server went away"
         )
+
+
+class TestPictures:
+    PICTURE = Image("aGk=", "image/png")
+
+    def make(self, runner) -> Tool:
+        return Tool("remote__shot", "", ECHO_SCHEMA, lambda a: None, runner, True)
+
+    def test_a_tool_may_return_pictures_with_its_text(self):
+        tool = self.make(lambda arguments: ToolOutput("a screenshot", (self.PICTURE,)))
+
+        assert tool.call_output("{}") == ToolOutput("a screenshot", (self.PICTURE,))
+
+    def test_call_is_the_text_of_the_output(self):
+        tool = self.make(lambda arguments: ToolOutput("a screenshot", (self.PICTURE,)))
+
+        assert tool.call("{}") == "a screenshot"
+
+    def test_text_is_returned_as_text_without_pictures(self):
+        assert self.make(lambda arguments: "plain").call_output("{}") == ToolOutput(
+            "plain"
+        )
+
+    def test_the_text_is_cut_and_the_pictures_are_kept(self):
+        long = "x" * (MAX_OUTPUT_CHARS + 5)
+        tool = self.make(lambda arguments: ToolOutput(long, (self.PICTURE,)))
+
+        result = tool.call_output("{}")
+
+        assert result.text.endswith("[output truncated: 5 more characters]")
+        assert result.images == (self.PICTURE,)
 
 
 class TestDecorator:
