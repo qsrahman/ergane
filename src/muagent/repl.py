@@ -68,6 +68,8 @@ class _CommandCompleter(Completer):
 
     def __init__(self, commands: Mapping[str, Command]) -> None:
         self.commands = commands
+        # Set by the Repl that uses this editor: some arguments come from it.
+        self.repl: Repl | None = None
 
     def get_completions(self, document: Document, complete_event: CompleteEvent):
         name, space, rest = document.text_before_cursor.lstrip().partition(" ")
@@ -76,7 +78,10 @@ class _CommandCompleter(Completer):
             words = {n: self.commands[n].description for n in sorted(self.commands)}
             typed = name
         elif name in self.commands:
-            words = dict.fromkeys(self.commands[name].arguments, "")
+            arguments = self.commands[name].arguments
+            if callable(arguments):
+                arguments = arguments(self.repl) if self.repl is not None else ()
+            words = dict.fromkeys(arguments, "")
             typed = rest
         else:
             return
@@ -177,6 +182,8 @@ class Repl:
                 input=session.app.input, output=session.app.output
             ).prompt
             session.bottom_toolbar = self._toolbar
+            if isinstance(session.completer, _CommandCompleter):
+                session.completer.repl = self
         self.hub = hub
         self.servers = hub.statuses if hub is not None else servers
         self.running = False

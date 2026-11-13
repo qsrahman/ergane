@@ -559,6 +559,39 @@ class TestTerminalSession:
             found = session.completer.get_completions(Document(text), None)  # pyright: ignore[reportArgumentType]
             return [c.text for c in found] if ordered else sorted(c.text for c in found)
 
+    def test_the_servers_are_completed_after_reconnect(self, tmp_path):
+        hub = McpHub({}, tmp_path)
+        hub.statuses[:] = [
+            ServerStatus("web", "running"),
+            ServerStatus("bad", "failed", "boom"),
+            ServerStatus("old", "off", "enable is false"),
+        ]
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, tmp_path / "history", input=pipe, output=DummyOutput()
+            )
+            assert session is not None and session.completer is not None
+            Repl(Agent(make_config()), COMMANDS, session, hub=hub)
+
+            def found(text: str) -> list[str]:
+                words = session.completer.get_completions(Document(text), None)  # pyright: ignore[reportOptionalMemberAccess, reportArgumentType]
+                return [c.text for c in words]
+
+            assert found("/reconnect ") == ["web", "bad"]  # not the one that is off
+            assert found("/reconnect b") == ["bad"]
+
+    def test_no_server_is_offered_when_there_are_none(self, tmp_path):
+        assert self.complete(tmp_path, "/reconnect ") == []  # no Repl is using it
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, tmp_path / "history", input=pipe, output=DummyOutput()
+            )
+            assert session is not None and session.completer is not None
+            Repl(Agent(make_config()), COMMANDS, session)  # a Repl without servers
+
+            words = session.completer.get_completions(Document("/reconnect "), None)  # pyright: ignore[reportArgumentType]
+            assert list(words) == []
+
     def test_the_levels_are_completed_after_effort(self, tmp_path):
         assert self.complete(tmp_path, "/effort h") == ["high"]
         assert "default" in self.complete(tmp_path, "/effort ")

@@ -2,7 +2,7 @@
 
 import inspect
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 # A command handler gets the REPL and the text after the command name (or ""). It
 # returns a short status message for the REPL to show, or None.
 Handler = Callable[["Repl", str], str | None]
+Arguments = tuple[str, ...] | Callable[["Repl"], Iterable[str]]
 
 # Lowercase, because input is lowercased before the lookup; and a leading slash, so
 # that a plain prompt can never be mistaken for a command.
@@ -32,13 +33,15 @@ class Command:
 
     handler: Handler
     description: str
-    arguments: tuple[str, ...] = ()  # what the line editor completes after the name
+    # What the line editor completes after the name: words, or a function of the REPL
+    # for words only it knows (the servers to start again).
+    arguments: Arguments = ()
 
 
 COMMANDS: dict[str, Command] = {}
 
 
-def command(name: str, arguments: tuple[str, ...] = ()) -> Callable[[Handler], Handler]:
+def command(name: str, arguments: Arguments = ()) -> Callable[[Handler], Handler]:
     """Register a handler as a slash command. Stack it to give a command aliases.
 
     The first line of the handler's docstring is the description that /help shows.
@@ -46,7 +49,8 @@ def command(name: str, arguments: tuple[str, ...] = ()) -> Callable[[Handler], H
     Args:
         name: The command as typed: a slash, then lowercase letters, digits and
             hyphens.
-        arguments: The words the line editor offers after the name.
+        arguments: The words the line editor offers after the name, or a function
+            that returns them, given the REPL.
 
     Returns:
         A decorator that registers the handler and returns it unchanged.
@@ -227,7 +231,14 @@ def context_(repl: Repl, args: str) -> None:
     repl.console.blank()
 
 
-@command("/reconnect")
+def _servers_to_start(repl: Repl) -> list[str]:
+    """The servers `/reconnect` may start again: the ones that are not switched off."""
+    if repl.hub is None:
+        return []
+    return [s.name for s in repl.hub.statuses if s.state != "off"]
+
+
+@command("/reconnect", _servers_to_start)
 def reconnect(repl: Repl, args: str) -> str | None:
     """Start the MCP servers that failed again, or the server NAME if one is given."""
     hub = repl.hub
