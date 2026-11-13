@@ -411,6 +411,16 @@ class TestHttp:
         assert by_name["web__add"].call('{"a": 1, "b": 2}') == "3"
         assert not any(tool.read_only for tool in by_name.values())
 
+    def test_a_call_may_take_longer_than_the_read_timeout_if_call_timeout_allows(
+        self, make_server, http_url, monkeypatch
+    ):
+        # The server says nothing for 1.5 s; the read timeout alone would end the call.
+        monkeypatch.setattr("muagent.mcp_client._HTTP_READ_SECONDS", 0.5)
+        server = self.make(make_server, http_url, call_timeout=10)
+        by_name = {tool.name: tool for tool in server.tools()}
+
+        assert by_name["web__slow"].call('{"seconds": 1.5}') == "done"
+
     def test_headers_are_sent_with_every_request(self, make_server, http_url):
         server = self.make(make_server, http_url, headers={"Authorization": "Bearer t"})
         header = {tool.name: tool for tool in server.tools()}["web__header"]
@@ -1150,6 +1160,17 @@ class TestHub:
         assert set(update.removed) == set(by_name)
         assert update.message == f"MCP server 'fake' is running: {len(tools)} tools"
         assert update.instructions == "Dates are YYYY-MM-DD."
+
+    def test_reconnecting_keeps_what_the_log_said(self, hub, tmp_path):
+        tools = hub.start(lambda notice: None)
+        {tool.name: tool for tool in tools}["fake__chatty"].call("{}")
+        log = tmp_path / "fake.log"
+        before = log.read_text()
+        assert "fake server log line" in before
+
+        hub.reconnect("fake")
+
+        assert log.read_text().startswith(before)
 
     def test_a_server_that_failed_can_start_when_the_cause_is_gone(self, tmp_path):
         configs = {"fake": McpServerConfig(command="/no/such/server")}

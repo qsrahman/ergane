@@ -86,6 +86,11 @@ _NAME = re.compile(NAME_PATTERN)
 _DISALLOWED = re.compile(rf"[^{NAME_CHARS}]")
 _MAX_NAME_CHARS = 128
 
+# How long a remote server may be silent before its response is given up on (the SDK's
+# own value). A call is not waited for longer than this, so a `call_timeout` above it
+# raises it too.
+_HTTP_READ_SECONDS = 300
+
 # How long a server gets to stop on its own before it is cancelled.
 _STOP_SECONDS = 10
 
@@ -232,7 +237,14 @@ class McpServer:
     spoken to over streamable HTTP; exactly one of them.
     """
 
-    def __init__(self, name: str, config: McpServerConfig, log: Path) -> None:
+    def __init__(
+        self,
+        name: str,
+        config: McpServerConfig,
+        log: Path,
+        *,
+        append_log: bool = False,
+    ) -> None:
         """Describe a server; `start()` connects to it.
 
         A McpServer is used once: after `close()` it cannot be started again.
@@ -244,6 +256,9 @@ class McpServer:
             log: For a program, the file for its stderr, so that its log lines do not
                 land in the terminal. Opened (and emptied) by `launch()`, closed by
                 `close()`. A url has no stderr, and the file is not touched.
+            append_log: Add to the log instead of emptying it, when the server
+                replaces one that ran before (see `McpHub.reconnect`): why that one
+                stopped is in it.
 
         Raises:
             ValueError: If the name has other characters.
@@ -255,6 +270,7 @@ class McpServer:
         self.name = name
         self._config = config
         self._log_path = log
+        self._append_log = append_log
         self._log: TextIO | None = None
 
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -307,7 +323,8 @@ class McpServer:
             try:
                 self._log_path.parent.mkdir(parents=True, exist_ok=True)
                 # A restart adds to the log: why the server stopped is in it.
-                self._log = log = self._log_path.open("a" if self._restarts else "w")
+                append = self._append_log or self._restarts
+                self._log = log = self._log_path.open("a" if append else "w")
             except OSError as exc:
                 raise McpServerError(
                     f"MCP server {self.name!r}: cannot write its log: {exc}"
@@ -414,7 +431,10 @@ class McpServer:
                     http = await stack.enter_async_context(
                         httpx2.AsyncClient(
                             headers=config.headers,
-                            timeout=httpx2.Timeout(30.0, read=300.0),
+                            timeout=httpx2.Timeout(
+                                30.0,
+                                read=max(_HTTP_READ_SECONDS, config.call_timeout),
+                            ),
                         )
                     )
                     read, write = await stack.enter_async_context(
@@ -655,6 +675,25 @@ def _expand(
     )
 
 
+def _failure_text(name: str, exc: Exception) -> str:
+    """What to tell the user of a server that could not be started."""
+    if isinstance(exc, McpServerError):
+        return str(exc)
+    return f"MCP server {name!r} failed: {type(exc).__name__}: {exc}"
+
+
+def _running_status(
+    name: str, server: McpServer, tools: list[Tool], log: Path | None
+) -> ServerStatus:
+    return ServerStatus(
+        name,
+        "running",
+        tools=tuple(tool.name for tool in tools),
+        hidden=server.hidden,
+        log=log,
+    )
+
+
 def _log_file(config: McpServerConfig, log_dir: Path, name: str) -> Path | None:
     """The file a program's stderr went to, if there is one to point the user at."""
     path = log_dir / f"{name}.log"
@@ -741,22 +780,11 @@ def start_servers(
                 found = entry.tools(taken)
             except Exception as exc:  # noqa: BLE001
                 failed.append(entry)
-                failed_with(
-                    name,
-                    str(exc)
-                    if isinstance(exc, McpServerError)
-                    else f"MCP server {name!r} failed: {type(exc).__name__}: {exc}",
-                )
+                failed_with(name, _failure_text(name, exc))
                 continue
             running.append(entry)
             tools += found
-            statuses[name] = ServerStatus(
-                name,
-                "running",
-                tools=tuple(tool.name for tool in found),
-                hidden=entry.hidden,
-                log=log_of(name),
-            )
+            statuses[name] = _running_status(name, entry, found, log_of(name))
         close_servers(failed)
     except BaseException:
         close_servers(entry for _, entry in entries if not isinstance(entry, str))
@@ -861,18 +889,17 @@ class McpHub:
         server = None
         try:
             server = McpServer(
-                name, _expand(name, config, self.environ), self.log_dir / f"{name}.log"
+                name,
+                _expand(name, config, self.environ),
+                self.log_dir / f"{name}.log",
+                append_log=True,  # the log of the one that ran before says why it ended
             )
             server.start()
             tools = server.tools(self._taken(name))
         except Exception as exc:  # noqa: BLE001
             if server is not None:
                 server.close()
-            message = (
-                str(exc)
-                if isinstance(exc, McpServerError)
-                else f"MCP server {name!r} failed: {type(exc).__name__}: {exc}"
-            )
+            message = _failure_text(name, exc)
             self._set_status(
                 ServerStatus(
                     name,
@@ -884,13 +911,7 @@ class McpHub:
             return ServerUpdate(name, before.tools, [], None, message)
         self.servers[name] = server
         self._set_status(
-            ServerStatus(
-                name,
-                "running",
-                tools=tuple(tool.name for tool in tools),
-                hidden=server.hidden,
-                log=_log_file(config, self.log_dir, name),
-            )
+            _running_status(name, server, tools, _log_file(config, self.log_dir, name))
         )
         count = f"{len(tools)} tool{'s' if len(tools) != 1 else ''}"
         return ServerUpdate(
