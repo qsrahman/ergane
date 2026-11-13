@@ -21,7 +21,7 @@ line, because lines move. Everything is in [`src/muagent/`](src/muagent/).
               anything else     ▼
                             Repl.ask ── blank line ──► Agent.run_turn(prompt, on_text, on_notice, confirm, on_call)
                                                           │
-       _compact_if_due: summarize old turns if long ◄─────┤   (§2a)
+       Compactor.compact_if_due: summarize if long ◄──────┤   (§2a)
        Context.begin_turn: summary + history + prompt ◄───┤
                                                           │
                        ┌──────────────────────────────────┤   at most max_turns rounds
@@ -85,7 +85,7 @@ of an item's JSON divided by four, with a reasoning item's opaque
 prompt can still be over the limit. The summary is never dropped. With summaries off, or
 when one failed, this trimming is what keeps the request in the budget.
 
-### 2a. Summarizing the oldest turns (`Agent.compact`)
+### 2a. Summarizing the oldest turns (`Compactor.compact`, in `compaction.py`)
 
 The trigger is an estimate, before the turn: the instructions and tool definitions
 (`_fixed_tokens`), the history with its summary, and the prompt, against `compact_at` of
@@ -397,7 +397,8 @@ the model still answered.
 | the request and the stream            | `Agent._send_response`                                       |
 | calls and permissions                 | `Agent._run_tools`, `Tool` in [`tools.py`](src/muagent/tools.py) |
 | history, summary, trimming, saving    | `Context` in [`context.py`](src/muagent/context.py)          |
-| summarizing, too-long retry           | `Agent.compact`, `_shrink` in [`agent.py`](src/muagent/agent.py) |
+| summarizing                           | `Compactor` in [`compaction.py`](src/muagent/compaction.py) |
+| the too-long retry                    | `_shrink` in [`agent.py`](src/muagent/agent.py) |
 | pruning, transcript, summary check    | `drop_outputs`, `transcript`, `extract_summary` in [`context.py`](src/muagent/context.py) |
 | errors and how they are worded        | [`errors.py`](src/muagent/errors.py)                         |
 | everything printed                    | `Console` in [`console.py`](src/muagent/console.py)          |

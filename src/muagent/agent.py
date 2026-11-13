@@ -15,11 +15,8 @@ change it:
   Ollama's cloud proxy lost a connection 100 s into a request and a turn of 25 rounds
   was thrown away. Tools run only after a complete response, so a retry repeats a
   request, never an action.
-- Summaries (`compact`) change nothing unless the summary is good, and a failure
-  never stops the turn. The design follows research into opencode, Codex, OpenClaw, pi,
-  Qwen Code and DeepSeek Harness. Not done: a separate summary model, a summary
-  request that shares the chat's cache, splitting one oversized turn, and a stored
-  transcript with undo.
+- Summaries (`compact`, in `compaction.py`) change nothing unless the summary is good,
+  and a failure never stops the turn.
 """
 
 import platform
@@ -37,16 +34,15 @@ from openai.types.responses import (
 from openai.types.responses.response_create_params import ResponseCreateParamsBase
 from openai.types.shared import ReasoningEffort
 
+from muagent.compaction import SUMMARY_MAX_TOKENS, Compactor
 from muagent.context import (
     Context,
     answer_open_calls,
     drop_outputs,
     estimate_tokens,
-    extract_summary,
     function_output,
-    transcript,
 )
-from muagent.errors import StreamCut, TurnError, describe_error, is_context_overflow
+from muagent.errors import StreamCut, TurnError, is_context_overflow
 from muagent.prompts import (
     COMPACT_PROMPT,
     SERVER_NOTES,
@@ -54,12 +50,6 @@ from muagent.prompts import (
     SYSTEM_PROMPT_NO_TOOLS,
 )
 from muagent.tools import Tool
-
-# The summary of old turns may have this many tokens.
-SUMMARY_MAX_TOKENS = 8000
-
-# Summaries that failed one after another, after which none is tried by itself.
-COMPACT_FAILURES = 3
 
 # The reason in the note that closes a turn the user stopped.
 INTERRUPTED = "interrupted by the user"
@@ -154,8 +144,7 @@ class Agent:
         # What the server counted in the last request it answered; None until then,
         # and when a compatible server sends no usage.
         self.last_input_tokens: int | None = None
-        # Summaries that failed one after another (see COMPACT_FAILURES).
-        self.compact_failures = 0
+        self.compactor = Compactor(self.context, config, self._summarize)
         self.tools = {tool.name: tool for tool in tools}
         if len(self.tools) < len(tools):
             raise ValueError("Tool names must be unique")
@@ -209,7 +198,11 @@ class Agent:
                 (see above) before any of these is raised, except the budget one.
             KeyboardInterrupt: On Ctrl-C, after the turn is kept (see above).
         """
-        self._compact_if_due(prompt, on_notice)
+        self.compactor.compact_if_due(
+            self.request_tokens()
+            + estimate_tokens({"role": "user", "content": prompt}),
+            on_notice,
+        )
         # The budget is for the whole request, so the history gets what is left of it
         # after the instructions and the tool definitions, which every request has.
         items, trimmed = self.context.begin_turn(prompt, self._room())
@@ -383,93 +376,27 @@ class Agent:
             [*items, {"role": "assistant", "content": f"[{message}]"}]
         )
 
-    def _tail_budget(self) -> int:
-        """How many tokens of the newest turns a summary leaves as they are: the
-        setting, but no more than half of where summarizing starts, or a small
-        budget would keep everything."""
-        trigger = int(self.config.compact_at * self.config.max_context_tokens)
-        return min(self.config.keep_recent_tokens, trigger // 2)
-
-    def _compact_if_due(self, prompt: str, on_notice: Callable[[str], None]) -> None:
-        """Summarize the oldest turns when the next request would pass `compact_at`
-        of the budget, unless the setting is off or summaries kept failing.
-
-        A failure is told and counted, and does not stop the turn: the turns that do
-        not fit are dropped as before, which is the worst that happens.
-        """
-        config = self.config
-        if not config.auto_compact or self.compact_failures >= COMPACT_FAILURES:
-            return
-        next_request = self.request_tokens() + estimate_tokens(
-            {"role": "user", "content": prompt}
-        )
-        if next_request <= config.compact_at * config.max_context_tokens:
-            return
-        try:
-            self.compact(on_notice)
-        except Exception as exc:  # noqa: BLE001
-            self.compact_failures += 1
-            reason = str(exc) if isinstance(exc, TurnError) else describe_error(exc)
-            paused = (
-                "; summaries are paused until /compact works"
-                if self.compact_failures >= COMPACT_FAILURES
-                else ""
-            )
-            on_notice(f"Could not summarize earlier messages: {reason}{paused}")
-
     def compact(
         self, on_notice: Callable[[str], None], focus: str | None = None
     ) -> bool:
-        """Replace the oldest turns by a summary, keeping the newest as they are.
+        """Replace the oldest turns by a summary (see `Compactor.compact`)."""
+        return self.compactor.compact(on_notice, focus)
 
-        The summary takes in the one there was, so a conversation keeps one. Nothing
-        changes unless the summary is good: the history is the same after a failure.
-
-        Args:
-            on_notice: Called with a line before the model is asked and one after.
-            focus: What the summary should take particular care of, if the user said.
-
-        Returns:
-            False if there is nothing older than what is kept; True if the oldest turns
-            were replaced.
+    def _summarize(
+        self, draft: ResponseInputParam, on_notice: Callable[[str], None]
+    ) -> str:
+        """Ask the model for the text of a summary.
 
         Raises:
-            TurnError: If the model's summary is unusable (see `_extract_summary`).
+            TurnError: If the response has a problem (see `_response_status`).
             Exception: Whatever the API client raises.
-            KeyboardInterrupt: On Ctrl-C, with the history as it was.
         """
-        count = self.context.plan_compaction(self._tail_budget())
-        if count == 0:
-            return False
-        older = self.context.items[:count]
-        before = self.context.estimate()
-        on_notice("Summarizing earlier messages…")
-
-        text = transcript(older)
-        parts = []
-        if self.context.summary:
-            parts.append(f"Previous summary:\n{self.context.summary}")
-        parts.append(f"Conversation:\n{text}")
-        if focus:
-            parts.append(f"Focus: {focus[:800]}")
-        draft: ResponseInputParam = [{"role": "user", "content": "\n\n".join(parts)}]
         response = self._send_response(
             draft, lambda text: None, on_notice, summary=True
         )
         if problem := self._response_status(response):
             raise TurnError(problem)
-        summary = extract_summary(response.output_text, "\n".join(parts))
-
-        turns = sum(
-            1 for item in older if isinstance(item, dict) and item.get("role") == "user"
-        )
-        self.context.compact(count, summary)
-        self.compact_failures = 0
-        on_notice(
-            f"Summarized {turns} earlier turn{'s' if turns != 1 else ''}: "
-            f"about {before:,} to {self.context.estimate():,} tokens of history"
-        )
-        return True
+        return response.output_text
 
     def _shrink(self, turn: _Turn, on_notice: Callable[[str], None]) -> bool:
         """Make the turn's request shorter after the server refused it as too long.

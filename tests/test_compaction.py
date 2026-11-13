@@ -1,12 +1,14 @@
 """Summaries of old turns, shortened tool results, and the retry of a request that
 was too long: the ways the context is kept inside the budget."""
 
+from dataclasses import dataclass
+
 import pytest
 
 from fake_api import TEXT
 from helpers import anchor, tool_with
-from muagent.agent import COMPACT_FAILURES, SUMMARY_MAX_TOKENS
-from muagent.context import PRUNE_CHARS
+from muagent.compaction import COMPACT_FAILURES, SUMMARY_MAX_TOKENS, Compactor
+from muagent.context import PRUNE_CHARS, Context
 from muagent.errors import TurnError, describe_error, is_context_overflow
 from muagent.prompts import COMPACT_PROMPT
 
@@ -140,7 +142,7 @@ class TestCompaction:
         assert notices[1].startswith(
             "Could not summarize earlier messages: API error 400"
         )
-        assert agent.context.summary is None and agent.compact_failures == 1
+        assert agent.context.summary is None and agent.compactor.failures == 1
         assert agent.context.items[-1] == {"role": "assistant", "content": TEXT}
         assert len(agent.context.items) == 22  # the history is whole
 
@@ -210,7 +212,7 @@ class TestCompaction:
 
         agent.context.items = old_turns(10)
         assert agent.compact(lambda text: None)
-        assert agent.compact_failures == 0
+        assert agent.compactor.failures == 0
 
     def test_a_second_summary_updates_the_first(
         self, make_agent, fake_server, streaming
@@ -438,3 +440,106 @@ class TestShorteningResults:
         assert "characters hidden; call the tool again" in outputs[0]
         assert len(outputs[0]) < PRUNE_CHARS
         assert outputs[-1].startswith("head") and "hidden" not in outputs[-1]
+
+
+@dataclass
+class Settings:
+    auto_compact: bool = True
+    compact_at: float = 0.5
+    max_context_tokens: int = 1000
+    keep_recent_tokens: int = 100
+
+
+class TestCompactor:
+    """The summarizing on its own: no agent, no API, only a function that answers."""
+
+    def compactor(self, answer=None, **settings):
+        asked: list[str] = []
+
+        def ask(draft, on_notice):
+            asked.append(draft[0]["content"])
+            if isinstance(answer, Exception):
+                raise answer
+            return answer or "## Goal\nNOTES"
+
+        context = Context()
+        context.items = old_turns(6)
+        return Compactor(context, Settings(**settings), ask), context, asked
+
+    def test_nothing_is_asked_while_the_request_fits(self):
+        compactor, context, asked = self.compactor()
+
+        compactor.compact_if_due(500, lambda text: None)  # 0.5 of 1,000: not over
+
+        assert asked == [] and context.summary is None
+
+    def test_a_request_over_the_trigger_is_summarized(self):
+        compactor, context, asked = self.compactor()
+        notices: list[str] = []
+
+        compactor.compact_if_due(501, notices.append)
+
+        assert len(asked) == 1 and context.summary == "## Goal\nNOTES"
+        assert notices[0] == "Summarizing earlier messages…"
+
+    def test_it_is_off_when_the_setting_says_so(self):
+        compactor, _, asked = self.compactor(auto_compact=False)
+
+        compactor.compact_if_due(10_000, lambda text: None)
+
+        assert asked == []
+
+    def test_the_newest_turns_are_kept_within_the_budget_and_half_the_trigger(self):
+        compactor, _, _ = self.compactor(keep_recent_tokens=10_000)
+
+        assert compactor.tail_budget() == 250  # half of the trigger, 500
+
+    def test_a_failure_is_told_and_counted_and_the_history_is_the_same(self):
+        compactor, context, _ = self.compactor(answer=TurnError("no good"))
+        notices: list[str] = []
+        before = list(context.items)
+
+        compactor.compact_if_due(900, notices.append)
+
+        assert notices[-1] == "Could not summarize earlier messages: no good"
+        assert compactor.failures == 1 and context.items == before
+
+    def test_after_enough_failures_none_is_tried_by_itself(self):
+        compactor, _, asked = self.compactor(answer=TurnError("no good"))
+        notices: list[str] = []
+
+        for _ in range(COMPACT_FAILURES + 2):
+            compactor.compact_if_due(900, notices.append)
+
+        assert len(asked) == COMPACT_FAILURES
+        assert "paused until /compact works" in notices[-1]
+
+    def test_a_summary_that_works_clears_the_failures(self):
+        compactor, _, _ = self.compactor()
+        compactor.failures = 2
+
+        compactor.compact(lambda text: None)
+
+        assert compactor.failures == 0
+
+    def test_a_focus_goes_into_the_request(self):
+        compactor, _, asked = self.compactor()
+
+        compactor.compact(lambda text: None, focus="the schema")
+
+        assert "Focus: the schema" in asked[0]
+
+    def test_it_needs_nothing_of_the_agent(self):
+        # A fresh interpreter: this process has imported everything already.
+        import subprocess
+        import sys
+
+        code = (
+            "import sys, muagent.compaction; "
+            "print([m for m in ('muagent.agent', 'muagent.config') if m in sys.modules])"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, check=True
+        )
+
+        assert result.stdout.strip() == "[]"
