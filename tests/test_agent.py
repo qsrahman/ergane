@@ -163,6 +163,7 @@ class TestAgentRunTurn:
         [
             ("failed", "Response failed: server_error: boom"),
             ("empty", "No text in response"),
+            ("null_output", "No text in response"),
             ("refusal", f"Refused: {REFUSAL}"),
         ],
     )
@@ -804,6 +805,7 @@ class TestAgentToolLoop:
         [
             ("failed", "Response failed: server_error: boom"),
             ("empty", "No text in response"),
+            ("null_output", "No text in response"),
             ("refusal", f"Refused: {REFUSAL}"),
             ("cancelled", "Response not completed: cancelled"),
         ],

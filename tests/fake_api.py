@@ -185,6 +185,8 @@ def final_event(scenario: str, tool_output_sent: bool = False) -> tuple[str, dic
         return "response.completed", make_response("completed", [MESSAGE], usage=usage)
     if scenario == "empty":
         return "response.completed", make_response("completed")
+    if scenario == "null_output":  # some compatible servers send `"output": null`
+        return "response.completed", {**make_response("completed"), "output": None}
     if scenario == "failed":
         return "response.failed", make_response(
             "failed",
@@ -197,7 +199,7 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     """Minimal fake of POST /v1/responses.
 
     The most recent user message selects the scenario: "incomplete", "failed",
-    "empty" (completed with no output), "empty_once" (the same, only for the first time a request comes), "refusal", "cancelled" (text, but a
+    "empty" (completed with no output), "null_output" (the same with `"output": null`), "empty_once" (the same, only for the first time a request comes), "refusal", "cancelled" (text, but a
     status other than completed or incomplete), "nostatus" (a reply without a
     status, as some compatible servers send), "truncated" (a stream that ends
     without a terminal event), "reset" (the connection is reset instead),
@@ -332,7 +334,7 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
         if dies == "reset":
             self.reset()
             return
-        for index, item in enumerate(response["output"]):
+        for index, item in enumerate(response["output"] or []):
             ids = {"item_id": item["id"], "output_index": index}
             if item["type"] == "function_call":
                 started = {**item, "arguments": "", "status": "in_progress"}

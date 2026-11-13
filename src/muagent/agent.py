@@ -74,6 +74,15 @@ STREAM_RETRIES = 2
 NO_TEXT = "No text in response"
 
 
+def _with_output(response: Response) -> Response:
+    """The response, with an empty `output` where a compatible server sent `null`, which
+    `output_text` and everything that reads the output cannot take. A streamed response
+    needs no such care: `responses.stream` rebuilds its output."""
+    if response.output is None:
+        response.output = []
+    return response
+
+
 @dataclass
 class _Turn:
     """The turn that is running: what it has sent and done so far."""
@@ -594,7 +603,7 @@ class Agent:
             params["tools"] = [tool.param() for tool in self.tools.values()]
 
         if not self.config.streaming:
-            response = self.client.responses.create(**params)
+            response = _with_output(self.client.responses.create(**params))
             on_text(response.output_text)
             return response
 

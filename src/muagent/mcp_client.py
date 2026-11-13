@@ -333,6 +333,12 @@ class McpServer:
                 # A restart adds to the log: why the server stopped is in it.
                 append = self._append_log or self._restarts
                 self._log = log = self._log_path.open("a" if append else "w")
+                # Server logs can hold tool arguments and other sensitive text; keep
+                # them to the user who started muagent.
+                try:
+                    self._log_path.chmod(0o600)
+                except OSError:
+                    pass
             except OSError as exc:
                 raise McpServerError(
                     f"MCP server {self.name!r}: cannot write its log: {exc}"
