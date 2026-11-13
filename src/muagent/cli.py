@@ -14,7 +14,7 @@ from muagent.agent import Agent
 from muagent.commands import COMMANDS
 from muagent.config import EFFORTS, config_file, load_config, private_state_dir
 from muagent.console import Console
-from muagent.mcp_client import McpHub, ServerStatus
+from muagent.mcp_hub import McpHub, ServerStatus
 from muagent.repl import Repl, terminal_session
 from muagent.tools import Tool
 

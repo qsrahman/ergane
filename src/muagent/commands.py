@@ -108,7 +108,7 @@ def help_(repl: Repl, args: str) -> None:
 @command("/reset")
 def reset(repl: Repl, args: str) -> str:
     """Clear the conversation history."""
-    repl.agent.context.reset()
+    repl.agent.reset()
     return "History reset"
 
 
@@ -128,7 +128,7 @@ def stop(repl: Repl, args: str) -> None:
 @command("/undo")
 def undo(repl: Repl, args: str) -> str:
     """Remove the last exchange from the history."""
-    removed = repl.agent.context.undo()
+    removed = repl.agent.undo()
     return "Last exchange removed" if removed else "Nothing to undo"
 
 
@@ -138,7 +138,7 @@ def retry(repl: Repl, args: str) -> str | None:
 
     Its exchange is removed from the history first, if it was saved.
     """
-    prompt = repl.agent.context.rewind()
+    prompt = repl.agent.rewind()
     if prompt is None:
         return "Nothing to retry"
     repl.ask(prompt)
@@ -150,7 +150,6 @@ def model(repl: Repl, args: str) -> str:
     """Show the model, or switch with /model NAME."""
     if args:
         repl.agent.config.model = args
-        repl.agent.context.counted = None  # another model may count differently
     return f"Model: {repl.agent.config.model}"
 
 
@@ -189,7 +188,7 @@ def compact_(repl: Repl, args: str) -> str | None:
 @command("/summary")
 def summary_(repl: Repl, args: str) -> str | None:
     """Show the summary that stands for the earliest turns."""
-    summary = repl.agent.context.summary
+    summary = repl.agent.summary
     if summary is None:
         return "No summary yet"
     repl.console.write(f"{summary}\n")
@@ -202,7 +201,7 @@ def context_(repl: Repl, args: str) -> None:
     """Show how much of the context budget the next request would use."""
     agent = repl.agent
     instructions, tools, history = agent.context_estimate()
-    counted = agent.context.counted is not None
+    counted = agent.counted_tokens() is not None
     total = agent.request_tokens()
     budget = agent.config.max_context_tokens
     rows = [

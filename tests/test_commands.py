@@ -5,11 +5,11 @@ from pathlib import Path
 import pytest
 
 from fake_api import TEXT
-from helpers import run_repl
+from helpers import anchor, run_repl
 from muagent.commands import COMMANDS, Command, command
 from muagent.context import estimate_tokens
-from muagent.mcp_client import McpHub, ServerStatus
 from muagent.mcp_config import McpServerConfig
+from muagent.mcp_hub import McpHub, ServerStatus
 from muagent.tools import Tool
 
 
@@ -99,17 +99,19 @@ class TestCommandsWithAgent:
         ]
         assert len(agent.context.items) == 4
 
-    def test_switching_the_model_forgets_the_servers_count(
+    def test_switching_the_model_leaves_the_servers_count_behind(
         self, monkeypatch, make_agent
     ):
         agent = make_agent()
-        agent.context.counted = 1000
+        anchor(agent, 1000)
 
         run_repl(monkeypatch, agent, ["/model", "/exit"])
-        assert agent.context.counted == 1000  # only showing it changes nothing
+        assert agent.counted_tokens() == 1000  # only showing it changes nothing
 
         run_repl(monkeypatch, agent, ["/model Other-Model", "/exit"])
-        assert agent.context.counted is None
+        assert agent.counted_tokens() is None
+        run_repl(monkeypatch, agent, ["/model gpt-4o", "/exit"])
+        assert agent.counted_tokens() == 1000  # the model that counted is back
 
     def test_model_shows_and_switches_the_model(
         self, monkeypatch, make_agent, fake_server, capsys
@@ -333,7 +335,7 @@ class TestContextCommand:
         self, monkeypatch, make_agent, capsys
     ):
         agent = make_agent(MAX_CONTEXT_TOKENS=10000)
-        agent.context.counted = 2500
+        anchor(agent, 2500)
 
         run_repl(monkeypatch, agent, ["/context", "/exit"])
 

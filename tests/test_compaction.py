@@ -4,7 +4,7 @@ was too long: the ways the context is kept inside the budget."""
 import pytest
 
 from fake_api import TEXT
-from helpers import tool_with
+from helpers import anchor, tool_with
 from muagent.agent import COMPACT_FAILURES, SUMMARY_MAX_TOKENS
 from muagent.context import PRUNE_CHARS
 from muagent.errors import TurnError, describe_error, is_context_overflow
@@ -62,7 +62,7 @@ class TestCompaction:
     ):
         # The estimate is under the trigger; what the server counted is over it.
         agent = self.agent(make_agent, streaming, old_turns(8))
-        agent.context.counted = 3000
+        anchor(agent, 3000)
         notices: list[str] = []
 
         agent.run_turn("go", on_notice=notices.append)
@@ -74,7 +74,7 @@ class TestCompaction:
     ):
         # The estimate is over the trigger; what the server counted is under it.
         agent = self.agent(make_agent, streaming)
-        agent.context.counted = 500
+        anchor(agent, 500)
         notices: list[str] = []
 
         agent.run_turn("go", on_notice=notices.append)

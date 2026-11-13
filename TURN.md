@@ -401,6 +401,6 @@ the model still answered.
 | pruning, transcript, summary check    | `drop_outputs`, `transcript`, `extract_summary` in [`context.py`](src/muagent/context.py) |
 | errors and how they are worded        | [`errors.py`](src/muagent/errors.py)                         |
 | everything printed                    | `Console` in [`console.py`](src/muagent/console.py)          |
-| MCP servers                           | [`mcp_client.py`](src/muagent/mcp_client.py), their config in [`mcp_config.py`](src/muagent/mcp_config.py) |
+| MCP servers                           | [`mcp_server.py`](src/muagent/mcp_server.py) (one) and [`mcp_hub.py`](src/muagent/mcp_hub.py) (all of them), their config in [`mcp_config.py`](src/muagent/mcp_config.py) |
 | the prompts                           | [`prompts.py`](src/muagent/prompts.py)                       |
 | the layout of an exchange, pinned     | `TestReplRendering` in [`tests/test_repl.py`](tests/test_repl.py) |

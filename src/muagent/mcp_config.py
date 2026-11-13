@@ -1,7 +1,7 @@
 """How an MCP server is described in config.json, and what may be written in it.
 
 This is the part of the MCP code that `config.py` needs: the model of one server, the
-rules for its url, and the `${NAME}` placeholders. Running a server is `mcp_client.py`.
+rules for its url, and the `${NAME}` placeholders. Running one is `mcp_server.py`, and all of them `mcp_hub.py`.
 """
 
 import re

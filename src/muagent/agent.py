@@ -26,7 +26,7 @@ import platform
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Literal, cast
+from typing import Any, Literal, Protocol, cast
 
 from openai import APIConnectionError, OpenAI
 from openai.types.responses import (
@@ -35,8 +35,8 @@ from openai.types.responses import (
     ResponseInputParam,
 )
 from openai.types.responses.response_create_params import ResponseCreateParamsBase
+from openai.types.shared import ReasoningEffort
 
-from muagent.config import Config
 from muagent.context import (
     Context,
     answer_open_calls,
@@ -74,6 +74,31 @@ STREAM_RETRIES = 2
 NO_TEXT = "No text in response"
 
 
+class _Secret(Protocol):
+    def get_secret_value(self) -> str: ...
+
+
+class AgentSettings(Protocol):
+    """The settings an agent reads, each where it is used, so a change (`/model`)
+    takes effect at once. Written here and not imported from `config.py`, so that the
+    agent needs nothing of how settings are loaded, or of MCP, which `Config` lists.
+    The ones a command may change are plain attributes; the key is only read.
+    """
+
+    model: str
+    reasoning_effort: ReasoningEffort | None
+    base_url: str | None
+    streaming: bool
+    max_context_tokens: int
+    max_turns: int
+    auto_compact: bool
+    compact_at: float
+    keep_recent_tokens: int
+
+    @property
+    def api_key(self) -> _Secret: ...
+
+
 def _with_output(response: Response) -> Response:
     """The response, with an empty `output` where a compatible server sent `null`, which
     `output_text` and everything that reads the output cannot take. A streamed response
@@ -99,7 +124,7 @@ class Agent:
 
     def __init__(
         self,
-        config: Config,
+        config: AgentSettings,
         client: OpenAI | None = None,
         tools: Sequence[Tool] = (),
         server_notes: Mapping[str, str] | None = None,
@@ -107,7 +132,7 @@ class Agent:
         """Create an agent with an empty conversation.
 
         Args:
-            config: The agent configuration.
+            config: The settings the agent reads (`Config` has them all).
             client: The API client; built from the config if omitted.
             tools: The tools the model may call. The agent only ever uses the tools
                 it is given here, and `update_server` changes them.
@@ -234,6 +259,7 @@ class Agent:
                 else None
             )
             self.context.save_turn([*turn.items, *reply], counted)
+            self.context.counted_model = self.config.model
         elif problem and turn.rounds:
             self._keep_stopped_turn(turn.items, turn.rounds, problem)
         if problem:
@@ -530,12 +556,45 @@ class Agent:
         """The instructions and the definitions of the tools, together."""
         return sum(self._fixed_estimate())
 
+    def counted_tokens(self) -> int | None:
+        """What the server counted for the instructions, the tools and the history at
+        the end of the last turn, if that still holds: the history is as it was, and
+        the model is the one that counted (another may count differently)."""
+        context = self.context
+        if context.counted is None or context.counted_model != self.config.model:
+            return None
+        return context.counted
+
+    def reset(self) -> None:
+        """Forget the whole conversation, the summary too."""
+        self.context.reset()
+
+    def undo(self) -> bool:
+        """Drop the last turn; whether there was one."""
+        return self.context.undo()
+
+    def rewind(self) -> str | None:
+        """Drop the last turn if it was saved, and return its prompt (None if there
+        has not been one), to be sent again."""
+        return self.context.rewind()
+
+    @property
+    def summary(self) -> str | None:
+        """The summary that stands for the earliest turns, if there is one."""
+        return self.context.summary
+
+    @property
+    def has_conversation(self) -> bool:
+        """Whether there is anything in the history or the summary to lose."""
+        return bool(self.context.items or self.context.summary)
+
     def request_tokens(self) -> int:
         """The tokens the next request would have, before the new prompt: what the
         server counted at the end of the last turn while the history is as it was
         (the instructions and the tools are in that count), otherwise an estimate."""
-        if self.context.counted is not None:
-            return self.context.counted
+        counted = self.counted_tokens()
+        if counted is not None:
+            return counted
         return self._fixed_tokens() + self.context.estimate()
 
     def context_estimate(self) -> tuple[int, int, int]:

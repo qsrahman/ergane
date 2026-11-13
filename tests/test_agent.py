@@ -988,6 +988,24 @@ def test_the_prompt_keeps_what_the_terminal_depends_on(prompt):
     assert "Markdown" in prompt
 
 
+def test_the_agent_needs_nothing_of_how_settings_are_loaded_or_of_mcp():
+    # A fresh interpreter: this process has imported everything already.
+    import subprocess
+    import sys
+
+    code = (
+        "import sys, muagent.agent; "
+        "loaded = [m for m in ('muagent.config', 'muagent.mcp_config', "
+        "'muagent.mcp_server', 'muagent.mcp_hub') if m in sys.modules]; "
+        "print(loaded)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    )
+
+    assert result.stdout.strip() == "[]"
+
+
 class TestUpdateServer:
     def test_it_swaps_the_tools_and_the_notes_of_a_server(self, make_agent):
         agent = make_agent(tools=[READ_FILE], server_notes={"a": "old"})
@@ -1354,6 +1372,19 @@ class TestContextEstimate:
 
         reply = {"role": "assistant", "content": TEXT}
         assert agent.context.counted == USAGE_INPUT_TOKENS + estimate_tokens(reply)
+
+    def test_the_count_holds_for_the_model_that_made_it(self, make_agent, streaming):
+        agent = make_agent(STREAMING=streaming)
+        agent.run_turn("usage")
+        counted = agent.counted_tokens()
+        assert counted is not None
+
+        agent.config.model = "another-model"
+        assert agent.counted_tokens() is None
+        assert agent.request_tokens() != counted  # estimated again
+
+        agent.config.model = "gpt-4o"
+        assert agent.counted_tokens() == counted
 
     def test_a_reply_without_a_count_leaves_no_count(self, make_agent, streaming):
         agent = make_agent(STREAMING=streaming)

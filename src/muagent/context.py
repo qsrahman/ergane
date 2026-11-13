@@ -193,6 +193,7 @@ class Context:
         # What the server counted for the instructions, the tools and the history as
         # the last turn left it; None when that is not known or no longer true.
         self.counted: int | None = None
+        self.counted_model: str | None = None  # the model that counted it
 
     def summary_message(self) -> ResponseInputParam:
         """The summary as the message that goes first in a request, or nothing.

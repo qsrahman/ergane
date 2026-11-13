@@ -1,5 +1,6 @@
+import sys
 import threading
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -7,8 +8,10 @@ import pytest
 from openai import OpenAI
 
 from fake_api import FakeResponsesHandler
-from helpers import make_config
+from helpers import FAKE, make_config, serve_http
 from muagent.agent import Agent
+from muagent.mcp_config import McpServerConfig
+from muagent.mcp_server import McpServer
 from muagent.tools import Tool
 
 
@@ -61,3 +64,44 @@ def make_agent(client: OpenAI):
         return Agent(make_config(**values), client, tools, server_notes)
 
     return make
+
+
+@pytest.fixture(scope="module")
+def tools(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, Tool]]:
+    """The fake server's tools, from one server shared by the tests that only call it."""
+    log = tmp_path_factory.mktemp("mcp") / "log"
+    server = McpServer(
+        "fake", McpServerConfig(command=sys.executable, args=[FAKE]), log
+    )
+    server.start()
+    yield {tool.name: tool for tool in server.tools()}
+    server.close()
+
+
+@pytest.fixture(scope="module")
+def http_url() -> Iterator[str]:
+    with serve_http() as url:
+        yield url
+
+
+@pytest.fixture
+def make_server(tmp_path: Path) -> Iterator[Callable[..., McpServer]]:
+    """Start servers for a test (the fake one unless told otherwise); stop them after.
+
+    The server's stderr goes to `tmp_path / "mcp.log"`.
+    """
+    started: list[McpServer] = []
+
+    def make(
+        *, start: bool = True, name: str = "fake", log: Path | None = None, **values
+    ) -> McpServer:
+        values = {"command": sys.executable, "args": [FAKE], **values}
+        server = McpServer(name, McpServerConfig(**values), log or tmp_path / "mcp.log")
+        started.append(server)
+        if start:
+            server.start()
+        return server
+
+    yield make
+    for server in started:
+        server.close()

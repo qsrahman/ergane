@@ -148,7 +148,7 @@ class TestMcpServers:
     def test_a_server_at_a_url_in_mcp_json_gives_the_agent_its_tools(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ):
-        from test_mcp_client import serve_http
+        from helpers import serve_http
 
         monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
         with serve_http() as url:

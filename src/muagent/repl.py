@@ -25,7 +25,7 @@ from muagent.agent import Agent
 from muagent.commands import Command
 from muagent.console import Console
 from muagent.errors import TurnError, describe_error
-from muagent.mcp_client import McpHub, ServerStatus, ServerUpdate
+from muagent.mcp_hub import McpHub, ServerStatus, ServerUpdate
 
 # A terminal asked for Shift-Enter (kitty's keyboard protocol, or xterm's
 # modifyOtherKeys) sends one of these, which prompt_toolkit does not know. They are
@@ -189,7 +189,7 @@ class Repl:
         agent = self.agent
         config = agent.config
         used = agent.request_tokens()
-        estimated = "" if agent.context.counted is not None else "~"
+        estimated = "" if agent.counted_tokens() is not None else "~"
         effort = (
             f" | effort: {config.reasoning_effort}" if config.reasoning_effort else ""
         )
@@ -232,12 +232,7 @@ class Repl:
             except EOFError:
                 # Redirected input ends here. At a terminal a stray Ctrl-D must not
                 # end a conversation that lives only in memory.
-                context = self.agent.context
-                if (
-                    interrupted
-                    or not self.session
-                    or not (context.items or context.summary)
-                ):
+                if interrupted or not self.session or not self.agent.has_conversation:
                     break
                 interrupted = True
                 self.console.notice("Press Ctrl-D again, or type /exit, to quit")

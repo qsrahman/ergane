@@ -7,11 +7,11 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
 from fake_api import REFUSAL, STREAM_ERROR, TEXT
-from helpers import make_config, make_context, run_repl
+from helpers import anchor, make_config, make_context, run_repl
 from muagent.agent import Agent
 from muagent.commands import COMMANDS
-from muagent.mcp_client import McpHub, ServerStatus
 from muagent.mcp_config import McpServerConfig
+from muagent.mcp_hub import McpHub, ServerStatus
 from muagent.repl import Repl, terminal_session
 from muagent.tools import Tool
 
@@ -352,7 +352,7 @@ class TestToolbar:
 
     def test_the_servers_count_is_not_marked_as_an_estimate(self):
         agent = Agent(make_config(max_context_tokens=10000))
-        agent.context.counted = 2500
+        anchor(agent, 2500)
 
         assert Repl(agent, COMMANDS)._toolbar().endswith("context 25% of 10,000")  # pyright: ignore[reportPrivateUsage]
 

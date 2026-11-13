@@ -36,8 +36,9 @@ it editable; the script is `muagent.cli:main`. Tests import modules directly
   docstring (failures, broken streams, tool calls, `status_N`, `overflow`, `usage`, and
   a summary that goes wrong in each way). Request bodies are in `fake_server.requests`.
 - `tests/fake_mcp_server.py` is a stdio (or, with a port, HTTP) MCP server on the SDK's
-  own `MCPServer`, with a tool for each case a client must handle; `test_mcp_client.py`
-  starts it as a subprocess.
+  own `MCPServer`, with a tool for each case a client must handle; `test_mcp_server.py` and
+  `test_mcp_hub.py` start it as a subprocess (`FAKE`, `serve_http` in `helpers.py`; the
+  `make_server`, `http_url` and `tools` fixtures in `conftest.py`).
 - The autouse `isolate_config` fixture runs each test in an empty `tmp_path` that is
   also `XDG_CONFIG_HOME`, and clears `OPENAI_API_KEY`, the one variable muagent reads.
 - Test files mirror the modules (`test_mcp_config.py` is `mcp_config.py`), plus `test_compaction.py` (summaries, shortened
@@ -91,10 +92,12 @@ The modules, in dependency order (each imports only from those above it):
   `MAX_OUTPUT_CHARS`.
 - `mcp_config.py`: `McpServerConfig` (one server in `config.json`), the url rules and the
   `${NAME}` placeholders; what `config.py` needs of MCP, and no more.
-- `mcp_client.py`: `McpServer`, `McpHub` (starts the servers, at a terminal in the background, and starts one again for
-  `/reconnect`), `start_servers`, `close_servers`; a server's tools become
-  `Tool`s, and a `ServerStatus` per server (`start_servers(..., report=[])`) records what
-  became of it, for `/servers`. Imports `mcp` only when a server starts. The design notes are in its docstring.
+- `mcp_server.py`: `McpServer`, one connection used from synchronous code; its tools
+  become `Tool`s. Imports `mcp` only when a server starts. The design notes are in its
+  docstring.
+- `mcp_hub.py`: the servers together: `start_servers`, `close_servers`, `McpHub` (starts
+  them, at a terminal in the background, and starts one again for `/reconnect`), and a
+  `ServerStatus` per server, which records what became of it for `/servers`.
 - `errors.py`, `prompts.py`: `TurnError`, `StreamCut`, `describe_error`,
   `is_context_overflow`; the three prompts as text. They import nothing of muagent.
 - `config.py`: `Config`, `load_config()`, `EFFORTS`, the XDG directories.
@@ -102,7 +105,8 @@ The modules, in dependency order (each imports only from those above it):
   functions on a turn's items (`drop_outputs`, `answer_open_calls`, `transcript`,
   `extract_summary`).
 - `agent.py`: `Agent`: `run_turn` (a loop of `_ask` and `_run_round` around a `_Turn`),
-  `compact`, and the API calls.
+  `compact`, and the API calls. It imports nothing of `config.py` or MCP: the settings it
+  reads are `AgentSettings`, which `Config` satisfies (a test pins this).
 - `console.py`: all terminal output, `sanitize()`, and the permission question.
 - `commands.py`: the `@command` registry and the slash commands (imports `Repl` for type
   checking only).
