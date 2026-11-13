@@ -23,7 +23,7 @@ change it:
 """
 
 import platform
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Literal, cast
@@ -46,7 +46,12 @@ from muagent.context import (
     transcript,
 )
 from muagent.errors import StreamCut, TurnError, describe_error, is_context_overflow
-from muagent.prompts import COMPACT_PROMPT, SYSTEM_PROMPT, SYSTEM_PROMPT_NO_TOOLS
+from muagent.prompts import (
+    COMPACT_PROMPT,
+    SERVER_NOTES,
+    SYSTEM_PROMPT,
+    SYSTEM_PROMPT_NO_TOOLS,
+)
 from muagent.tools import Tool
 
 # The summary of old turns may have this many tokens.
@@ -88,6 +93,7 @@ class Agent:
         config: Config,
         client: OpenAI | None = None,
         tools: Sequence[Tool] = (),
+        server_notes: Mapping[str, str] | None = None,
     ) -> None:
         """Create an agent with an empty conversation.
 
@@ -95,7 +101,9 @@ class Agent:
             config: The agent configuration.
             client: The API client; built from the config if omitted.
             tools: The tools the model may call. The agent only ever uses the tools
-                it is given here.
+                it is given here, and `update_server` changes them.
+            server_notes: What MCP servers say about using their tools, by server.
+                They go into the instructions, after the system prompt.
 
         Raises:
             ValueError: If two tools have the same name.
@@ -116,6 +124,7 @@ class Agent:
         self.tools = {tool.name: tool for tool in tools}
         if len(self.tools) < len(tools):
             raise ValueError("Tool names must be unique")
+        self.server_notes = dict(server_notes or {})
 
     def run_turn(
         self,
@@ -454,11 +463,44 @@ class Agent:
         on_notice("The request was too long for the model; trying again, shorter")
         return True
 
+    def update_server(
+        self,
+        removed: Iterable[str],
+        tools: Iterable[Tool],
+        name: str,
+        notes: str | None,
+    ) -> None:
+        """Take away the tools a server offered, add the ones it offers now, and set
+        what it says about using them.
+
+        Call it between turns: the tools of a turn that is running must not change.
+        What the server counted for the last request does not hold any more.
+
+        Args:
+            removed: The names of the tools the server offered before.
+            tools: The tools it offers now.
+            name: The server.
+            notes: What it says about using them, or None.
+        """
+        for tool_name in removed:
+            self.tools.pop(tool_name, None)
+        self.tools.update({tool.name: tool for tool in tools})
+        if notes:
+            self.server_notes[name] = notes
+        else:
+            self.server_notes.pop(name, None)
+        self.context.counted = None
+
     def _instructions(self) -> str:
-        """What every request carries as `instructions`: the system prompt, then the
-        environment, so that the part that never changes comes first and can be
-        cached."""
+        """What every request carries as `instructions`: the system prompt, what the
+        servers say, then the environment, so that the part that rarely changes
+        comes first and can be cached."""
         prompt = SYSTEM_PROMPT if self.tools else SYSTEM_PROMPT_NO_TOOLS
+        if self.server_notes and self.tools:
+            sections = "\n".join(
+                f"## {name}\n{text}\n" for name, text in self.server_notes.items()
+            )
+            prompt = f"{prompt}{SERVER_NOTES}{sections}"
         return (
             f"{prompt}\n"
             "Environment:\n"

@@ -8,7 +8,7 @@ from openai.types.responses import ResponseInputParam
 from muagent.agent import Agent
 from muagent.commands import COMMANDS
 from muagent.config import Config
-from muagent.mcp_client import ServerStatus
+from muagent.mcp_client import McpHub, ServerStatus
 from muagent.repl import Repl
 from muagent.tools import Tool
 
@@ -31,6 +31,7 @@ def run_repl(
     agent: Agent,
     inputs: list,
     servers: Sequence[ServerStatus] = (),
+    hub: McpHub | None = None,
 ) -> None:
     """Run a Repl over scripted input.
 
@@ -45,7 +46,7 @@ def run_repl(
         return line
 
     monkeypatch.setattr("builtins.input", fake_input)
-    Repl(agent, COMMANDS, servers=servers).run()
+    Repl(agent, COMMANDS, servers=servers, hub=hub).run()
 
 
 def tool_with(function) -> Tool:

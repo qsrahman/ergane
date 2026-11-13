@@ -85,6 +85,7 @@ Type a prompt at `>` and press Enter. Up and Down recall earlier prompts, which 
 | `/retry`          | Resend the last prompt; if its reply was saved, it is replaced                   |
 | `/undo`           | Remove the last exchange from the history                                        |
 | `/tools`          | List the tools offered to the model, by whether they ask first  |
+| `/reconnect [NAME]` | Start the MCP servers that failed again, or the server NAME (also one that runs); the conversation stays |
 | `/servers`        | List the MCP servers: which run (with how many tools, and the tokens their definitions take), which failed and why, and which are off |
 | `/compact [FOCUS]` | Summarize the earlier turns now; `FOCUS` says what the summary must keep |
 | `/summary`        | Show the summary that stands for the earliest turns |
@@ -144,13 +145,14 @@ def add(a: int, b: int) -> str:
 | `url`       | The address of a server to connect to, instead of a `command`. `https://`, or `http://` for `localhost`, `127.0.0.1` and `[::1]` only. |
 | `headers`   | Sent with every request to the `url`, for an `Authorization` or an API key. Not in the URL itself: a user name or password there is refused. |
 | `read_only` | `true` lets the server's tools run without asking. Default `false`.                                          |
+| `instructions` | `true` gives the model what the server says about using its tools, in its instructions. Default `false`: the text is the server's, and some models follow an order hidden in it. |
 | `tools`     | Offer only these tools of the server, by the server's own names (see `/tools` for what a server has). The definition of every tool is sent with every request, so a server with many tools you do not use costs context and money. A name the server does not have fails the server, with a notice. Default: all. |
-| `startup_timeout` | Seconds to wait for the server to start and list its tools. Default `20`.                              |
-| `call_timeout` | Seconds a call to one of its tools may take before it is given up on. Default `60`.                       |
+| `startup_timeout` | Seconds to wait for the server to start and list its tools. Default `30`.                              |
+| `call_timeout` | Seconds a call to one of its tools may take before it is given up on. Default `300`.                      |
 
 Write `${NAME}` in `args`, `env` or `headers` to use the environment variable `NAME`, so that keys stay out of the file: `"env": { "API_KEY": "${MY_API_KEY}" }`. A server whose variable is not set is skipped, with a notice that names the variable. The server gets only the variables you list, not the rest of your environment.
 
-The names are letters, digits, `_` and `-`. A server's tools are offered to the model as `name__tool`; `/tools` lists them. The servers start at the same time, so a few slow ones do not add up. A server that starts is not announced (the first line shows how many tools there are); one that fails to start is reported and left out (`/servers` tells it again, with the log to read); one that stops while you work (it exits, or a remote one goes away) makes the call that finds out return an error that names it, and is started again for the next call, up to three times in a session (the call that failed is not repeated, since it may have done part of its work); the others carry on. A server that never answers delays the start by its `startup_timeout`, not by the sum of them. The stderr of a program goes to `~/.local/state/muagent/NAME.log` (or `$XDG_STATE_HOME/muagent/NAME.log`), where you will find why it failed.
+The names are letters, digits, `_` and `-`. A server's tools are offered to the model as `name__tool`; `/tools` lists them. The servers start at the same time, so a few slow ones do not add up. A server that starts is not announced (the first line shows how many tools there are); one that fails to start is reported and left out (`/servers` tells it again, with the log to read, and `/reconnect` starts it again once the cause is fixed, without leaving muagent); one that stops while you work (it exits, or a remote one goes away) makes the call that finds out return an error that names it, and is started again for the next call, up to three times in a session (the call that failed is not repeated, since it may have done part of its work); the others carry on. A server that never answers delays the start by its `startup_timeout`, not by the sum of them. The stderr of a program goes to `~/.local/state/muagent/NAME.log` (or `$XDG_STATE_HOME/muagent/NAME.log`), where you will find why it failed.
 
 A few things to know before you add a server:
 
@@ -158,7 +160,7 @@ A few things to know before you add a server:
 - **Every MCP tool asks before it runs**, showing its arguments (all of them, with `?`), unless you set `read_only` for that server. A server's own claim that a tool is read-only is ignored: it is not something `muagent` can check.
 - **A server at a URL receives what the model sends it**: the arguments of every call, which can hold file contents or other things from your conversation. Connect only to servers you trust with that. `config.json` holds the headers (and perhaps the key) in plain text, so keep it to yourself (`chmod 600`). Redirects to another host are not followed, so the headers go only where you pointed them.
 - **Tool descriptions come from the server** and are read by the model. Add servers you trust.
-- The list of tools is read once, at start.
+- **What a server says about using its tools** (its `instructions`) is kept from the model unless you set `instructions` to `true` for that server. It is then given, framed as notes from the server and not as orders, up to 4,000 characters. The framing is not a guarantee: a model can follow an order hidden in it (a call that is not `read_only` still asks first). Turn it on for servers you trust. The tools are listed at start, and again before the next prompt when a server announces that they changed.
 
 ## Long conversations
 

@@ -23,7 +23,7 @@ from muagent.agent import (
 )
 from muagent.context import DROPPED_OUTPUT, estimate_tokens
 from muagent.errors import TurnError, describe_error
-from muagent.prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_NO_TOOLS
+from muagent.prompts import SERVER_NOTES, SYSTEM_PROMPT, SYSTEM_PROMPT_NO_TOOLS
 from muagent.tools import MAX_OUTPUT_CHARS, Tool
 
 
@@ -42,6 +42,29 @@ class TestAgentRunTurn:
         assert instructions.startswith(prompt)
         assert "- Operating system: " in instructions
         assert instructions.endswith(f"- Current date: {date.today().isoformat()}\n")
+
+    def test_what_servers_say_follows_the_prompt_and_comes_before_the_environment(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = make_agent(
+            tools=[READ_FILE],
+            server_notes={"fake": "Dates are YYYY-MM-DD."},
+            STREAMING=streaming,
+        )
+
+        agent.run_turn("hi")
+
+        instructions = fake_server.requests[0]["instructions"]
+        assert instructions.startswith(SYSTEM_PROMPT + SERVER_NOTES)
+        assert "## fake\nDates are YYYY-MM-DD.\n" in instructions
+        assert instructions.index("## fake") < instructions.index("Environment:")
+
+    def test_what_servers_say_is_left_out_when_there_are_no_tools(
+        self, make_agent, fake_server, streaming
+    ):
+        make_agent(server_notes={"fake": "Dates."}, STREAMING=streaming).run_turn("hi")
+
+        assert "Dates." not in fake_server.requests[0]["instructions"]
 
     def test_what_every_request_carries_counts_the_instructions_and_the_tools(
         self, make_agent, streaming
@@ -961,6 +984,32 @@ def test_the_prompt_keeps_what_the_terminal_depends_on(prompt):
     # The terminal shows LaTeX and Markdown as they are.
     assert "LaTeX" in prompt
     assert "Markdown" in prompt
+
+
+class TestUpdateServer:
+    def test_it_swaps_the_tools_and_the_notes_of_a_server(self, make_agent):
+        agent = make_agent(tools=[READ_FILE], server_notes={"a": "old"})
+        new = Tool.from_function(other)
+
+        agent.update_server(["read_file"], [new], "a", "new")
+
+        assert list(agent.tools) == [new.name]
+        assert agent.server_notes == {"a": "new"}
+
+    def test_a_server_without_notes_loses_them(self, make_agent):
+        agent = make_agent(server_notes={"a": "old", "b": "kept"})
+
+        agent.update_server([], [], "a", None)
+
+        assert agent.server_notes == {"b": "kept"}
+
+    def test_what_the_server_counted_does_not_hold_any_more(self, make_agent):
+        agent = make_agent(tools=[READ_FILE])
+        agent.context.counted = 1000
+
+        agent.update_server([], [Tool.from_function(other)], "a", None)
+
+        assert agent.context.counted is None
 
 
 def test_the_prompt_with_tools_says_what_the_program_does_with_them():

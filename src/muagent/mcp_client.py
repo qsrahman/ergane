@@ -39,8 +39,17 @@ Design notes, for whoever changes this:
   no `cwd` setting); its stderr goes to a log file, or it would land in the terminal.
   A url must be https unless it is loopback, and may not hold credentials; the SDK
   follows redirects only within the url's origin, so the headers go nowhere else.
-- The tools are listed once, at start; changes a server announces later are not
-  followed.
+- A server that announces new tools (`tools/list_changed`) only sets a flag, from its
+  own thread. `McpHub.refresh` lists the flagged servers again and `McpHub.reconnect`
+  starts one again, and both return a `ServerUpdate` instead of touching the agent: the
+  caller applies it between turns, because the tools of a turn must not change under
+  it, and what the server counted for the last request no longer holds. A server that
+  started again is flagged too, as it may offer other tools.
+- A server's `instructions` (what it says about using its tools) go into the model's
+  instructions, framed as notes by the server and not as orders (`SERVER_NOTES`), cut
+  to `_MAX_INSTRUCTION_CHARS`, and given only for a server whose config says
+  `instructions: true`. They are as much the server's words as its tool descriptions,
+  which the model reads already; the frame is for what a server might add.
 """
 
 import asyncio
@@ -55,6 +64,7 @@ import time
 from collections.abc import Callable, Coroutine, Iterable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
+from importlib.metadata import version
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
@@ -84,6 +94,10 @@ _STOP_SECONDS = 10
 # still there: the connection's task does not notice a server that left meanwhile.
 _IDLE_SECONDS = 10
 _PING_SECONDS = 5
+
+# The most of a server's instructions that the model is given: they are in every
+# request, and a server may write pages.
+_MAX_INSTRUCTION_CHARS = 4000
 
 # How often a server whose connection was lost is started again in one session. A
 # server that dies at once would otherwise be started at every call.
@@ -258,6 +272,11 @@ class McpServer:
         self._restarts = 0
         self._active = 0.0  # when the server last answered
         self.hidden = 0  # tools it has that the config leaves out, after tools()
+        # Set by the server's notification that its tools changed; cleared when they
+        # are listed. Set from the server's thread, read from the main one.
+        self._tools_changed = threading.Event()
+        # What the server says about using its tools, once connected.
+        self.instructions: str | None = None
 
     def start(self) -> None:
         """Start the server and connect to it. Call `close()` when done.
@@ -299,6 +318,7 @@ class McpServer:
                 ) from None
         stop = self._stop = asyncio.Event()
         finished = self._finished = threading.Event()
+        self._tools_changed.clear()
         # The time to start is counted from here, so that servers launched together
         # are waited for together, not one timeout after another.
         self._deadline = time.monotonic() + self._config.startup_timeout
@@ -333,6 +353,10 @@ class McpServer:
             self._session = self._ready.result(remaining)
             self._started = True
             self._active = time.monotonic()
+            text = (self._session.instructions or "").strip()
+            if len(text) > _MAX_INSTRUCTION_CHARS:
+                text = text[:_MAX_INSTRUCTION_CHARS] + "…"
+            self.instructions = text or None
         except BaseException as exc:
             if not isinstance(exc, Exception):
                 raise  # Ctrl-C
@@ -370,8 +394,15 @@ class McpServer:
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
         from mcp.client.streamable_http import streamable_http_client
+        from mcp_types import Implementation, ToolListChangedNotification
 
         config = self._config
+        changed = self._tools_changed
+
+        async def on_message(message: Any) -> None:
+            if isinstance(message, ToolListChangedNotification):
+                changed.set()
+
         try:
             async with AsyncExitStack() as stack:
                 if config.url is None:
@@ -399,7 +430,17 @@ class McpServer:
                     read, write = await stack.enter_async_context(
                         streamable_http_client(config.url, http_client=http)
                     )
-                session = await stack.enter_async_context(ClientSession(read, write))
+                # Say who is calling: a server logs it, and some adapt to the client.
+                session = await stack.enter_async_context(
+                    ClientSession(
+                        read,
+                        write,
+                        message_handler=on_message,
+                        client_info=Implementation(
+                            name="muagent", version=version("muagent")
+                        ),
+                    )
+                )
                 await session.initialize()
                 ready.set_result(session)
                 await stop.wait()
@@ -443,6 +484,11 @@ class McpServer:
             self._log.close()
             self._log = None
 
+    @property
+    def tools_changed(self) -> bool:
+        """Whether the server said its tools changed since they were last listed."""
+        return self._tools_changed.is_set()
+
     def _lost(self) -> bool:
         """Whether the connection was up, and has ended without `close()`."""
         return (
@@ -468,6 +514,7 @@ class McpServer:
         try:
             self.launch()
             self.connect()
+            self._tools_changed.set()  # a program that started again may offer others
         except McpServerError as exc:
             self._close(cancel=True)
             raise McpServerError(f"{exc} (restarting it after it stopped)") from None
@@ -486,6 +533,7 @@ class McpServer:
             McpServerError: If the server is not running, or the config lists a
                 tool it does not have (a typo would otherwise offer nothing, silently).
         """
+        self._tools_changed.clear()  # a change announced while listing sets it again
         definitions = self._submit(_list_tools, self._config.startup_timeout)
         if self._config.tools is not None:
             have = {d.name for d in definitions}
@@ -625,6 +673,12 @@ def _expand(
     )
 
 
+def _log_file(config: McpServerConfig, log_dir: Path, name: str) -> Path | None:
+    """The file a program's stderr went to, if there is one to point the user at."""
+    path = log_dir / f"{name}.log"
+    return path if config.command and path.exists() else None
+
+
 def close_servers(servers: Iterable[McpServer]) -> None:
     """Close the servers all at once.
 
@@ -669,8 +723,7 @@ def start_servers(
     statuses: dict[str, ServerStatus] = {}
 
     def log_of(name: str) -> Path | None:
-        path = log_dir / f"{name}.log"
-        return path if configs[name].command and path.exists() else None
+        return _log_file(configs[name], log_dir, name)
 
     def failed_with(name: str, message: str) -> None:
         on_notice(message)
@@ -729,3 +782,185 @@ def start_servers(
     if report is not None:
         report.extend(statuses[name] for name in configs)
     return running, tools
+
+
+@dataclass(frozen=True)
+class ServerUpdate:
+    """What a change to one server means for the agent: the tools it offered (to be
+    taken away), the tools it offers now, and what it says about using them."""
+
+    name: str
+    removed: tuple[str, ...]
+    tools: list[Tool]
+    instructions: str | None
+    message: str  # to tell the user
+
+
+class McpHub:
+    """The servers while muagent runs.
+
+    `start_servers` starts them once. The hub keeps them after that, and so can start
+    one again (`reconnect`: a server that failed to start, or hangs, costs a restart
+    of muagent otherwise, and the conversation with it) and follow a server that says
+    its tools changed (`refresh`). Neither touches the agent: they return what to
+    change, and the caller applies it, so that the tools do not change in the middle
+    of a turn.
+    """
+
+    def __init__(
+        self,
+        configs: Mapping[str, McpServerConfig],
+        log_dir: Path,
+        *,
+        environ: Mapping[str, str] = os.environ,
+    ) -> None:
+        self.configs = configs
+        self.log_dir = log_dir
+        self.environ = environ
+        self.statuses: list[
+            ServerStatus
+        ] = []  # in the order of the file, kept in place
+        self.servers: dict[str, McpServer] = {}  # the ones that run
+
+    def start(self, on_notice: Callable[[str], None]) -> list[Tool]:
+        """Start the servers (see `start_servers`) and return their tools."""
+        running, tools = start_servers(
+            self.configs,
+            self.log_dir,
+            on_notice,
+            environ=self.environ,
+            report=self.statuses,
+        )
+        self.servers = {server.name: server for server in running}
+        return tools
+
+    def instructions(self) -> dict[str, str]:
+        """What the running servers say about using their tools, except the ones whose
+        config leaves it out."""
+        return {
+            name: server.instructions
+            for name, server in self.servers.items()
+            if server.instructions and self.configs[name].instructions
+        }
+
+    def _status(self, name: str) -> ServerStatus:
+        return next(status for status in self.statuses if status.name == name)
+
+    def _set_status(self, status: ServerStatus) -> None:
+        index = next(i for i, s in enumerate(self.statuses) if s.name == status.name)
+        self.statuses[index] = status
+
+    def _taken(self, besides: str) -> set[str]:
+        """The names of the tools of the other servers, which a new list must not
+        repeat."""
+        return {
+            tool
+            for status in self.statuses
+            if status.name != besides
+            for tool in status.tools
+        }
+
+    def refresh(self) -> list[ServerUpdate]:
+        """List again the tools of the servers that said they changed.
+
+        A server whose tools cannot be listed keeps the ones it had, and the update
+        only says so.
+        """
+        updates = []
+        for name, server in self.servers.items():
+            if not server.tools_changed:
+                continue
+            status = self._status(name)
+            try:
+                tools = server.tools(self._taken(name))
+            except Exception as exc:  # noqa: BLE001
+                reason = (
+                    str(exc) if isinstance(exc, McpServerError) else type(exc).__name__
+                )
+                message = f"MCP server {name!r} changed its tools, which cannot be listed: {reason}"
+                updates.append(ServerUpdate(name, (), [], None, message))
+                continue
+            self._set_status(
+                ServerStatus(
+                    name,
+                    "running",
+                    tools=tuple(tool.name for tool in tools),
+                    hidden=server.hidden,
+                    log=status.log,
+                )
+            )
+            count = f"{len(tools)} tool{'s' if len(tools) != 1 else ''}"
+            updates.append(
+                ServerUpdate(
+                    name,
+                    status.tools,
+                    tools,
+                    self.instructions().get(name),
+                    f"MCP server {name!r} changed its tools: now {count}",
+                )
+            )
+        return updates
+
+    def reconnect(self, name: str) -> ServerUpdate:
+        """Stop the server `name` if it runs, and start it again.
+
+        Args:
+            name: A server in the file.
+
+        Returns:
+            What to change in the agent: nothing but a message for a server that is
+            switched off, the tools gone for one that fails, the new ones if it starts.
+        """
+        config = self.configs[name]
+        before = self._status(name)
+        if before.state == "off":
+            return ServerUpdate(name, (), [], None, f"MCP server {name!r} is off")
+        previous = self.servers.pop(name, None)
+        if previous is not None:
+            previous.close()
+        server = None
+        try:
+            server = McpServer(
+                name, _expand(name, config, self.environ), self.log_dir / f"{name}.log"
+            )
+            server.start()
+            tools = server.tools(self._taken(name))
+        except Exception as exc:  # noqa: BLE001
+            if server is not None:
+                server.close()
+            message = (
+                str(exc)
+                if isinstance(exc, McpServerError)
+                else f"MCP server {name!r} failed: {type(exc).__name__}: {exc}"
+            )
+            self._set_status(
+                ServerStatus(
+                    name,
+                    "failed",
+                    message,
+                    log=_log_file(config, self.log_dir, name),
+                )
+            )
+            return ServerUpdate(name, before.tools, [], None, message)
+        self.servers[name] = server
+        self._set_status(
+            ServerStatus(
+                name,
+                "running",
+                tools=tuple(tool.name for tool in tools),
+                hidden=server.hidden,
+                log=_log_file(config, self.log_dir, name),
+            )
+        )
+        count = f"{len(tools)} tool{'s' if len(tools) != 1 else ''}"
+        return ServerUpdate(
+            name,
+            before.tools,
+            tools,
+            self.instructions().get(name),
+            f"MCP server {name!r} is running: {count}",
+        )
+
+    def close(self) -> None:
+        """Stop the servers that run."""
+        close_servers(self.servers.values())

@@ -1,4 +1,5 @@
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -7,7 +8,8 @@ from fake_api import TEXT
 from helpers import run_repl
 from muagent.commands import COMMANDS, Command, command
 from muagent.context import estimate_tokens
-from muagent.mcp_client import ServerStatus
+from muagent.mcp_client import McpHub, ServerStatus
+from muagent.mcp_config import McpServerConfig
 from muagent.tools import Tool
 
 
@@ -184,8 +186,6 @@ class TestCommandsWithAgent:
         assert "Alt-Enter" not in out and "Ctrl-C" not in out  # no session here
         assert 'y, a, ?  At "Allow …?"' in out  # the question works anywhere
 
-    def test_help_lists_every_registered_command(self, monkeypatch, make_agent, capsys):
-        run_repl(monkeypatch, make_agent(), self.inputs("/help"))
     def test_help_lists_the_commands_in_order(self, monkeypatch, make_agent, capsys):
         run_repl(monkeypatch, make_agent(), self.inputs("/help"))
 
@@ -196,6 +196,8 @@ class TestCommandsWithAgent:
         ]
         assert names == sorted(COMMANDS)
 
+    def test_help_lists_every_registered_command(self, monkeypatch, make_agent, capsys):
+        run_repl(monkeypatch, make_agent(), self.inputs("/help"))
 
         out = capsys.readouterr().out
         for name, cmd in COMMANDS.items():
@@ -529,3 +531,118 @@ class TestToolsCommand:
         run_repl(monkeypatch, make_agent(), ["/tools", "/exit"])
 
         assert "[Tools: none]" in capsys.readouterr().out
+
+
+FAKE = str(Path(__file__).parent / "fake_mcp_server.py")
+
+
+class TestReconnectCommand:
+    @pytest.fixture
+    def hub(self, tmp_path: Path):
+        hub = McpHub(
+            {
+                "fake": McpServerConfig(
+                    command=sys.executable, args=[FAKE], instructions=True
+                )
+            },
+            tmp_path,
+        )
+        yield hub
+        hub.close()
+
+    def agent_of(self, make_agent, hub: McpHub):
+        tools = hub.start(lambda notice: None)
+        return make_agent(tools=tools, server_notes=hub.instructions())
+
+    def test_without_servers_it_says_so(self, monkeypatch, make_agent, capsys):
+        run_repl(monkeypatch, make_agent(), ["/reconnect", "/exit"])
+
+        assert "[No MCP servers to start]" in capsys.readouterr().out
+
+    def test_an_unknown_name_is_reported(self, monkeypatch, make_agent, hub, capsys):
+        agent = self.agent_of(make_agent, hub)
+
+        run_repl(monkeypatch, agent, ["/reconnect nope", "/exit"], hub=hub)
+
+        assert "[No MCP server 'nope'; /servers lists them]" in capsys.readouterr().out
+
+    def test_when_no_server_failed_it_says_so(
+        self, monkeypatch, make_agent, hub, capsys
+    ):
+        agent = self.agent_of(make_agent, hub)
+
+        run_repl(monkeypatch, agent, ["/reconnect", "/exit"], hub=hub)
+
+        assert "[No MCP server failed;" in capsys.readouterr().out
+
+    def test_a_server_that_failed_is_started_and_the_agent_gets_its_tools(
+        self, monkeypatch, make_agent, tmp_path, capsys
+    ):
+        configs = {"fake": McpServerConfig(command="/no/such/server")}
+        hub = McpHub(configs, tmp_path)
+        try:
+            agent = self.agent_of(make_agent, hub)
+            assert agent.tools == {} and agent.server_notes == {}
+            configs["fake"] = McpServerConfig(
+                command=sys.executable, args=[FAKE], instructions=True
+            )
+
+            run_repl(monkeypatch, agent, ["/reconnect", "/exit"], hub=hub)
+
+            assert "fake__add" in agent.tools
+            assert agent.server_notes == {"fake": "Dates are YYYY-MM-DD."}
+            assert "[MCP server 'fake' is running: " in capsys.readouterr().out
+        finally:
+            hub.close()
+
+    def test_a_server_that_runs_is_started_again_by_name(
+        self, monkeypatch, make_agent, hub, capsys
+    ):
+        agent = self.agent_of(make_agent, hub)
+        before = agent.tools["fake__pid"].call("{}")
+
+        run_repl(monkeypatch, agent, ["/reconnect fake", "/exit"], hub=hub)
+
+        assert agent.tools["fake__pid"].call("{}") != before
+        assert "[MCP server 'fake' is running: " in capsys.readouterr().out
+
+    def test_a_server_that_fails_again_takes_its_tools_away(
+        self, monkeypatch, make_agent, hub, capsys
+    ):
+        agent = self.agent_of(make_agent, hub)
+        hub.configs = {"fake": McpServerConfig(command="/no/such/server")}
+
+        run_repl(monkeypatch, agent, ["/reconnect fake", "/exit"], hub=hub)
+
+        assert agent.tools == {} and agent.server_notes == {}
+        assert "failed to start: FileNotFoundError" in capsys.readouterr().out
+
+
+class TestToolsChangedBetweenTurns:
+    def test_the_next_turn_has_the_tools_the_server_announced(
+        self, monkeypatch, make_agent, fake_server, tmp_path, capsys
+    ):
+        hub = McpHub(
+            {
+                "fake": McpServerConfig(
+                    command=sys.executable, args=[FAKE], instructions=True
+                )
+            },
+            tmp_path,
+        )
+        try:
+            agent = make_agent(tools=hub.start(lambda notice: None))
+            agent.tools["fake__grow"].call("{}")
+            deadline = time.monotonic() + 5
+            while not hub.servers["fake"].tools_changed and time.monotonic() < deadline:
+                time.sleep(0.05)
+
+            run_repl(monkeypatch, agent, ["hi", "/exit"], hub=hub)
+
+            sent = [tool["name"] for tool in fake_server.requests[0]["tools"]]
+            assert "fake__extra" in sent
+            assert (
+                "[MCP server 'fake' changed its tools: now " in capsys.readouterr().out
+            )
+        finally:
+            hub.close()

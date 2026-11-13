@@ -37,8 +37,9 @@ class TestLoadServers:
 
         assert servers["plain"].args == [] and servers["plain"].env == {}
         assert servers["plain"].read_only is False  # trust must be asked for
-        assert servers["plain"].startup_timeout == 20
-        assert servers["plain"].call_timeout == 60
+        assert servers["plain"].startup_timeout == 30
+        assert servers["plain"].call_timeout == 300
+        assert servers["plain"].instructions is False
         assert servers["full"].args == ["a", "b"]
         assert servers["full"].env == {"K": "v"}
         assert servers["full"].read_only is True

@@ -13,7 +13,7 @@ import time
 from mcp.server.mcpserver import Context, Image, MCPServer
 from mcp_types import ToolAnnotations
 
-server = MCPServer("fake")
+server = MCPServer("fake", instructions="Dates are YYYY-MM-DD.")
 
 
 @server.tool(annotations=ToolAnnotations(read_only_hint=True))
@@ -76,6 +76,22 @@ def chatty() -> str:
 def getenv(name: str) -> str:
     """Return an environment variable of the server process, or 'unset'."""
     return os.environ.get(name, "unset")
+
+
+@server.tool()
+def client(ctx: Context) -> str:
+    """Return who the client says it is."""
+    params = ctx.session.client_params
+    info = params.client_info if params is not None else None
+    return f"{info.name} {info.version}" if info is not None else "unknown"
+
+
+@server.tool()
+async def grow(ctx: Context) -> str:
+    """Add a tool called `extra` to the server and say that its tools changed."""
+    server.add_tool(lambda: "extra", name="extra", description="Added later.")
+    await ctx.session.send_tool_list_changed()
+    return "grown"
 
 
 @server.tool()

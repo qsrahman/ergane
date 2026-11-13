@@ -11,6 +11,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import replace
+from importlib.metadata import version
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +19,7 @@ import pytest
 
 from fake_api import TEXT
 from muagent.mcp_client import (
+    McpHub,
     McpServer,
     McpServerError,
     ServerStatus,
@@ -202,6 +204,12 @@ class TestServer:
         assert getenv.call('{"name": "OPENAI_API_KEY"}') == "unset"
         assert getenv.call('{"name": "ASKED_FOR"}') == "unset"
         assert getenv.call('{"name": "GIVEN"}') == "yes"
+
+    def test_the_server_is_told_the_client_is_muagent(self, make_server):
+        server = make_server()
+        by_name = {tool.name: tool for tool in server.tools()}
+
+        assert by_name["fake__client"].call("{}") == f"muagent {version('muagent')}"
 
     def test_its_stderr_goes_to_the_log_not_the_terminal(
         self, make_server, tmp_path, capfd
@@ -861,6 +869,16 @@ class TestConnectionLost:
 
         assert tools["fake__add"].call('{"a": 1, "b": 2}') == "3"  # no error at all
 
+    def test_a_server_started_again_is_listed_again(self, make_server):
+        server = make_server()
+        tools = {t.name: t for t in server.tools()}
+        assert not server.tools_changed
+        self.kill(server, tools["fake__pid"])
+
+        tools["fake__add"].call('{"a": 1}')  # starts it again
+
+        assert server.tools_changed
+
     def test_the_call_that_found_it_dead_fails_and_the_next_works(self, make_server):
         server = make_server()
         tools = {t.name: t for t in server.tools()}
@@ -985,7 +1003,7 @@ class TestReport:
             assert list(by) == list(configs)
             assert by["good"].state == "running"
             assert by["good"].tools == ("good__add", "good__read_file")
-            assert by["good"].hidden == 15 and by["good"].log == tmp_path / "good.log"
+            assert by["good"].hidden == 17 and by["good"].log == tmp_path / "good.log"
             assert [t.name for t in found] == ["good__add", "good__read_file"]
             assert by["off"].state == "off" and by["off"].tools == ()
             assert by["bad"].state == "failed" and by["unset"].state == "failed"
@@ -1084,3 +1102,154 @@ class TestNamesAcrossServers:
         finally:
             for server in servers:
                 server.close()
+
+
+class TestInstructionsAndChanges:
+    """What a server says about its tools, and its notice that they changed."""
+
+    def test_the_instructions_of_the_server_are_kept(self, make_server):
+        assert make_server().instructions == "Dates are YYYY-MM-DD."
+
+    def test_long_instructions_are_cut(self, make_server, monkeypatch):
+        monkeypatch.setattr("muagent.mcp_client._MAX_INSTRUCTION_CHARS", 5)
+
+        assert make_server().instructions == "Dates…"
+
+    def test_a_tools_change_is_noticed_until_the_tools_are_listed_again(
+        self, make_server
+    ):
+        server = make_server()
+        by_name = {tool.name: tool for tool in server.tools()}
+        assert not server.tools_changed
+
+        by_name["fake__grow"].call("{}")
+        deadline = time.monotonic() + 5
+        while not server.tools_changed and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+        assert server.tools_changed
+        assert "fake__extra" in [tool.name for tool in server.tools()]
+        assert not server.tools_changed
+
+
+class TestHub:
+    @pytest.fixture
+    def hub(self, tmp_path: Path) -> Iterator[McpHub]:
+        hub = McpHub({"fake": self.fake()}, tmp_path)
+        yield hub
+        hub.close()
+
+    @staticmethod
+    def fake(**values) -> McpServerConfig:
+        values = {"instructions": True, **values}  # off by default, as in the config
+        return McpServerConfig(command=sys.executable, args=[FAKE], **values)
+
+    @staticmethod
+    def names(tools: list[Tool]) -> list[str]:
+        return [tool.name for tool in tools]
+
+    def test_it_starts_the_servers_and_knows_what_they_say(self, hub):
+        tools = hub.start(lambda notice: None)
+
+        assert "fake__add" in self.names(tools)
+        assert [s.state for s in hub.statuses] == ["running"]
+        assert hub.instructions() == {"fake": "Dates are YYYY-MM-DD."}
+
+    def test_instructions_are_kept_from_the_model_unless_asked_for(self, tmp_path):
+        hub = McpHub({"fake": self.fake(instructions=False)}, tmp_path)
+        try:
+            hub.start(lambda notice: None)
+
+            assert hub.instructions() == {}
+        finally:
+            hub.close()
+
+    def test_nothing_is_refreshed_when_nothing_changed(self, hub):
+        hub.start(lambda notice: None)
+
+        assert hub.refresh() == []
+
+    def test_a_server_that_changed_its_tools_is_listed_again(self, hub):
+        tools = hub.start(lambda notice: None)
+        {tool.name: tool for tool in tools}["fake__grow"].call("{}")
+        deadline = time.monotonic() + 5
+        while not hub.servers["fake"].tools_changed and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+        [update] = hub.refresh()
+
+        assert update.name == "fake"
+        assert "fake__extra" in self.names(update.tools)
+        assert set(update.removed) == {tool.name for tool in tools}
+        assert update.message.startswith("MCP server 'fake' changed its tools: now ")
+        assert "fake__extra" in hub.statuses[0].tools
+        assert hub.refresh() == []
+
+    def test_tools_that_cannot_be_listed_stay_as_they_were(self, hub, monkeypatch):
+        hub.start(lambda notice: None)
+        before = hub.statuses[0]
+        server = hub.servers["fake"]
+        server._tools_changed.set()  # pyright: ignore[reportPrivateUsage]
+
+        def broken(taken=None):
+            raise McpServerError("it broke")
+
+        monkeypatch.setattr(server, "tools", broken)
+        [update] = hub.refresh()
+
+        assert update.removed == () and update.tools == []
+        assert "cannot be listed: it broke" in update.message
+        assert hub.statuses[0] == before
+
+    def test_a_server_that_runs_is_started_again(self, hub):
+        tools = hub.start(lambda notice: None)
+        by_name = {tool.name: tool for tool in tools}
+        first = by_name["fake__pid"].call("{}")
+
+        update = hub.reconnect("fake")
+
+        again = {tool.name: tool for tool in update.tools}
+        assert again["fake__pid"].call("{}") != first
+        assert set(update.removed) == set(by_name)
+        assert update.message == f"MCP server 'fake' is running: {len(tools)} tools"
+        assert update.instructions == "Dates are YYYY-MM-DD."
+
+    def test_a_server_that_failed_can_start_when_the_cause_is_gone(self, tmp_path):
+        configs = {"fake": McpServerConfig(command="/no/such/server")}
+        hub = McpHub(configs, tmp_path)
+        try:
+            assert hub.start(lambda notice: None) == []
+            assert hub.statuses[0].state == "failed"
+            configs["fake"] = self.fake()  # the program was installed
+
+            update = hub.reconnect("fake")
+
+            assert "fake__add" in self.names(update.tools)
+            assert hub.statuses[0].state == "running"
+            assert hub.statuses[0].detail == ""
+        finally:
+            hub.close()
+
+    def test_a_server_that_fails_again_loses_its_tools_and_says_why(self, hub):
+        tools = hub.start(lambda notice: None)
+        hub.configs = {"fake": McpServerConfig(command="/no/such/server")}
+
+        update = hub.reconnect("fake")
+
+        assert update.tools == [] and update.instructions is None
+        assert set(update.removed) == {tool.name for tool in tools}
+        assert "FileNotFoundError" in update.message
+        assert hub.statuses[0].state == "failed"
+        assert hub.servers == {}
+
+    def test_a_server_that_is_off_stays_off(self, tmp_path):
+        hub = McpHub({"fake": self.fake(enable=False)}, tmp_path)
+        try:
+            hub.start(lambda notice: None)
+
+            update = hub.reconnect("fake")
+
+            assert update.message == "MCP server 'fake' is off"
+            assert hub.statuses[0].state == "off" and hub.servers == {}
+        finally:
+            hub.close()

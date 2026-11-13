@@ -1,5 +1,5 @@
 import threading
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -52,7 +52,12 @@ def client(fake_server: ThreadingHTTPServer) -> OpenAI:
 def make_agent(client: OpenAI):
     """Build an Agent wired to the fake server, with config from the given values."""
 
-    def make(*, tools: Sequence[Tool] = (), **values) -> Agent:
-        return Agent(make_config(**values), client, tools)
+    def make(
+        *,
+        tools: Sequence[Tool] = (),
+        server_notes: Mapping[str, str] | None = None,
+        **values,
+    ) -> Agent:
+        return Agent(make_config(**values), client, tools, server_notes)
 
     return make

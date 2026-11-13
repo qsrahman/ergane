@@ -228,6 +228,25 @@ def context_(repl: Repl, args: str) -> None:
     repl.console.blank()
 
 
+@command("/reconnect")
+def reconnect(repl: Repl, args: str) -> str | None:
+    """Start the MCP servers that failed again, or the server NAME if one is given."""
+    hub = repl.hub
+    if hub is None:
+        return "No MCP servers to start"
+    if args:
+        if args not in hub.configs:
+            return f"No MCP server {args!r}; /servers lists them"
+        names = [args]
+    else:
+        names = [s.name for s in hub.statuses if s.state == "failed"]
+        if not names:
+            return "No MCP server failed; /reconnect NAME starts one again"
+    for name in names:
+        repl.apply(hub.reconnect(name))
+    return None
+
+
 @command("/servers")
 def servers_(repl: Repl, args: str) -> str | None:
     """List the MCP servers: which run, which failed, and what their tools cost."""

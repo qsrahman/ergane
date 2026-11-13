@@ -14,7 +14,7 @@ from muagent.agent import Agent
 from muagent.commands import COMMANDS
 from muagent.config import EFFORTS, config_file, load_config, private_state_dir
 from muagent.console import Console
-from muagent.mcp_client import ServerStatus, close_servers, start_servers
+from muagent.mcp_client import McpHub, ServerStatus
 from muagent.repl import Repl, terminal_session
 
 
@@ -143,16 +143,10 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     console = Console()
     state = private_state_dir()
-    statuses: list[ServerStatus] = []
-    if no_mcp:
-        statuses = [ServerStatus(n, "off", "--no-mcp") for n in config.mcp_servers]
+    hub = None if no_mcp else McpHub(config.mcp_servers, state)
+    statuses = [ServerStatus(n, "off", "--no-mcp") for n in config.mcp_servers]
     try:
-        servers, mcp_tools = start_servers(
-            {} if no_mcp else config.mcp_servers,
-            state,
-            console.notice,
-            report=statuses,
-        )
+        mcp_tools = hub.start(console.notice) if hub else []
     except KeyboardInterrupt:
         raise SystemExit(130) from None
 
@@ -160,7 +154,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         session = terminal_session(COMMANDS, state / "history")
         # The banner is separated from the notices of servers that failed by the
         # console itself, which is why it is the same one.
-        agent = Agent(config, tools=mcp_tools)
-        Repl(agent, COMMANDS, session, console, statuses).run()
+        agent = Agent(
+            config, tools=mcp_tools, server_notes=hub.instructions() if hub else None
+        )
+        Repl(agent, COMMANDS, session, console, statuses, hub).run()
     finally:
-        close_servers(servers)
+        if hub:
+            hub.close()

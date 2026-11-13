@@ -459,7 +459,7 @@ class TestTerminalSession:
             assert session is not None and session.completer is not None
             found = session.completer.get_completions(Document("/re"), None)  # pyright: ignore[reportArgumentType]
 
-            assert sorted(c.text for c in found) == ["/reset", "/retry"]
+            assert sorted(c.text for c in found) == ["/reconnect", "/reset", "/retry"]
 
     def test_a_command_is_completed_with_what_it_does(self, tmp_path):
         with create_pipe_input() as pipe:
