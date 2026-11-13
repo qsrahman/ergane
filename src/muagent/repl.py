@@ -37,7 +37,7 @@ for _sequence in ("\x1b[13;2u", "\x1b[27;2;13~"):
 # Colour is the terminal's own (the ANSI names), and prompt_toolkit drops it all when
 # NO_COLOR is set. The toolbar is not reversed, which would make it a loud bar.
 _STYLE = Style.from_dict(
-    {"bottom-toolbar": "noreverse ansibrightblack", "placeholder": "ansibrightblack"}
+    {"bottom-toolbar": "noreverse ansibrightblack", "placeholder": "dim"}
 )
 
 _KEYS = KeyBindings()
@@ -127,7 +127,13 @@ def terminal_session(
         prompt_continuation=". ",  # lines added by hand or pasted line up under "> "
         key_bindings=_KEYS,
         style=_STYLE,
-        placeholder="Message, or /help for commands. Alt-Enter adds a line.",
+        # A plain string would get no style: only formatted text carries the class.
+        placeholder=[
+            (
+                "class:placeholder",
+                "Message, or /help for commands. Alt-Enter adds a line.",
+            )
+        ],
         # Ctrl-X Ctrl-E edits a long prompt in $EDITOR and sends it when the editor
         # closes; Ctrl-Z suspends muagent (Ctrl-R, searching the history, is built in).
         enable_open_in_editor=True,

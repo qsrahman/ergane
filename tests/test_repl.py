@@ -484,7 +484,11 @@ class TestTerminalSession:
         assert session is not None
         assert session.enable_open_in_editor is True
         assert session.enable_suspend is True
-        assert "/help" in str(session.placeholder)
+        [(style, hint, *_)] = to_formatted_text(session.placeholder)
+        assert "/help" in hint
+        # The hint is dim: the class is on the text, and the style makes it dim.
+        assert session.style is not None
+        assert session.style.get_attrs_for_style_str(style).dim is True
 
     def test_redirected_input_is_read_with_plain_input(self, tmp_path):
         # Under pytest stdin is not a terminal.
