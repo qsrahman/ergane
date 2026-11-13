@@ -1,4 +1,5 @@
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -615,3 +616,87 @@ class TestReconnectCommand:
 
         assert agent.tools == {} and agent.server_notes == {}
         assert "failed to start: FileNotFoundError" in capsys.readouterr().out
+
+
+class TestServersStartingInTheBackground:
+    FAKE_CONFIG = McpServerConfig(command=sys.executable, args=[FAKE])
+
+    @pytest.fixture
+    def hubs(self, tmp_path: Path):
+        made: list[McpHub] = []
+
+        def make(configs) -> McpHub:
+            hub = McpHub(configs, tmp_path)
+            made.append(hub)
+            return hub
+
+        yield make
+        for hub in made:
+            hub.close()
+
+    def test_the_first_turn_has_the_tools_though_the_agent_began_without(
+        self, monkeypatch, make_agent, fake_server, hubs
+    ):
+        hub = hubs({"fake": self.FAKE_CONFIG})
+        hub.begin()
+        agent = make_agent()
+        assert agent.tools == {}
+
+        run_repl(monkeypatch, agent, ["hi", "/exit"], hub=hub)
+
+        sent = [tool["name"] for tool in fake_server.requests[0]["tools"]]
+        assert "fake__add" in sent
+
+    def test_a_turn_says_it_waits_when_the_servers_are_not_up(
+        self, monkeypatch, make_agent, fake_server, hubs, capsys
+    ):
+        hub = hubs(
+            {"slow": McpServerConfig(command="sleep", args=["30"], startup_timeout=0.5)}
+        )
+        hub.begin()
+
+        run_repl(monkeypatch, make_agent(), ["hi", "/exit"], hub=hub)
+
+        out = capsys.readouterr().out
+        assert "[Waiting for the MCP servers…]" in out
+        assert "did not answer within 0.5 s" in out
+        assert out.index("Waiting") < out.index("did not answer")
+        assert len(fake_server.requests) == 1  # the turn went on without them
+
+    def test_a_server_that_failed_is_told_at_the_first_input(
+        self, monkeypatch, make_agent, hubs, capsys
+    ):
+        hub = hubs({"bad": McpServerConfig(command="/no/such/server")})
+        hub.begin()
+        deadline = time.monotonic() + 10
+        while hub.starting and time.monotonic() < deadline:
+            time.sleep(0.05)  # the user would have taken longer to type
+
+        run_repl(monkeypatch, make_agent(), ["/help", "/exit"], hub=hub)
+
+        assert "[MCP server 'bad' failed to start: FileNotFoundError" in (
+            capsys.readouterr().out
+        )
+
+    def test_servers_says_starting_for_a_server_that_is_not_up_yet(
+        self, monkeypatch, make_agent, hubs, capsys
+    ):
+        hub = hubs({"slow": McpServerConfig(command="sleep", args=["30"])})
+        hub.begin()
+
+        run_repl(monkeypatch, make_agent(), ["/servers", "/exit"], hub=hub)
+
+        assert "  slow  starting…\n" in capsys.readouterr().out
+
+    def test_reconnect_waits_for_the_start_before_it_counts_what_failed(
+        self, monkeypatch, make_agent, hubs
+    ):
+        configs = {"fake": McpServerConfig(command="/no/such/server")}
+        hub = hubs(configs)
+        hub.begin()
+        configs["fake"] = self.FAKE_CONFIG  # the program was installed meanwhile
+        agent = make_agent()
+
+        run_repl(monkeypatch, agent, ["/reconnect", "/exit"], hub=hub)
+
+        assert "fake__add" in agent.tools

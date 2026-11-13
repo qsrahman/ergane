@@ -193,8 +193,18 @@ class Repl:
         effort = (
             f" | effort: {config.reasoning_effort}" if config.reasoning_effort else ""
         )
+        servers = ""
+        if self.hub is not None:
+            self.hub.poll()  # servers that have all answered are counted at once
+            if self.hub.starting:
+                servers = " | starting MCP servers"
+            else:
+                tools = sum(len(status.tools) for status in self.hub.statuses)
+                failed = sum(status.state == "failed" for status in self.hub.statuses)
+                servers = f" | {tools} tools" if tools else ""
+                servers += f" | {failed} MCP failed: /servers" if failed else ""
         return (
-            f" {config.model}{effort} | context {estimated}"
+            f" {config.model}{effort}{servers} | context {estimated}"
             f"{used * 100 // config.max_context_tokens}% of {config.max_context_tokens:,}"
         )
 
@@ -212,6 +222,9 @@ class Repl:
         self.running = True
         interrupted = False  # the last prompt ended in Ctrl-C or Ctrl-D
         while self.running:
+            if self.session and self.hub is not None:
+                # The toolbar is redrawn while servers start, to show when they are up.
+                self.session.refresh_interval = 0.5 if self.hub.starting else 0
             try:
                 prompt = (
                     self.session.prompt("> ") if self.session else input("> ")
@@ -250,6 +263,7 @@ class Repl:
         """
         # The first word picks the command; the rest is its argument.
         name, _, args = prompt.partition(" ")
+        self.attach(wait=False)
         command = self.commands.get(name.lower())
         if command:
             try:
@@ -270,7 +284,8 @@ class Repl:
             self.console.blank()
 
     def apply(self, update: ServerUpdate) -> None:
-        """Give the agent the tools and the notes of a server started again, and say so.
+        """Give the agent the tools and the notes of a server, and say what the hub
+        said about it, if anything.
 
         Args:
             update: What the hub returned for the server.
@@ -278,7 +293,23 @@ class Repl:
         self.agent.update_server(
             update.removed, update.tools, update.name, update.instructions
         )
-        self.console.notice(update.message)
+        if update.message:
+            self.console.notice(update.message)
+
+    def attach(self, *, wait: bool) -> None:
+        """Give the agent the servers that started in the background, and tell of the
+        ones that failed.
+
+        This is between inputs, never in the middle of a turn: the tools of a turn
+        must not change under it.
+
+        Args:
+            wait: Whether to wait for the servers that have not answered yet. A turn
+                waits (it needs the tools); a command does not.
+        """
+        if self.hub is not None:
+            for update in self.hub.take(self.console.notice, wait=wait):
+                self.apply(update)
 
     def ask(self, prompt: str) -> None:
         """Run one turn, printing the reply as it arrives and reporting
@@ -290,6 +321,9 @@ class Repl:
         console = self.console
         console.blank()
         try:
+            if self.hub is not None and self.hub.starting:
+                console.notice("Waiting for the MCP servers…")
+            self.attach(wait=True)  # the tools are needed now
             self.agent.run_turn(
                 prompt,
                 on_text=console.write,

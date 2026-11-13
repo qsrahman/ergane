@@ -1211,3 +1211,139 @@ class TestHub:
             assert hub.statuses[0].state == "off" and hub.servers == {}
         finally:
             hub.close()
+
+
+class TestStartingInTheBackground:
+    @staticmethod
+    def fake(**values) -> McpServerConfig:
+        values = {"instructions": True, **values}
+        return McpServerConfig(command=sys.executable, args=[FAKE], **values)
+
+    @staticmethod
+    def hanging(timeout: float = 30) -> McpServerConfig:
+        return McpServerConfig(command="sleep", args=["30"], startup_timeout=timeout)
+
+    @pytest.fixture
+    def hubs(self, tmp_path: Path) -> Iterator[Callable[..., McpHub]]:
+        made: list[McpHub] = []
+
+        def make(configs) -> McpHub:
+            hub = McpHub(configs, tmp_path)
+            made.append(hub)
+            return hub
+
+        yield make
+        for hub in made:
+            hub.close()
+
+    def test_begin_does_not_wait_and_the_servers_are_starting(self, hubs):
+        hub = hubs({"slow": self.hanging(), "off": self.fake(enable=False)})
+
+        started = time.monotonic()
+        hub.begin()
+
+        assert time.monotonic() - started < 1
+        assert hub.starting
+        assert [(s.name, s.state) for s in hub.statuses] == [
+            ("slow", "starting"),
+            ("off", "off"),
+        ]
+        assert hub.take(lambda notice: None) == []  # nothing to take yet
+
+    def test_take_waits_when_asked_and_gives_each_server_once(self, hubs):
+        hub = hubs({"fake": self.fake()})
+        hub.begin()
+
+        [update] = hub.take(lambda notice: None, wait=True)
+
+        assert update.name == "fake" and update.removed == ()
+        assert "fake__add" in [tool.name for tool in update.tools]
+        assert update.instructions == "Dates are YYYY-MM-DD."
+        assert update.message == ""
+        assert [s.state for s in hub.statuses] == ["running"]
+        assert hub.take(lambda notice: None, wait=True) == []
+
+    def test_poll_finishes_a_start_every_server_has_answered(self, hubs):
+        hub = hubs({"fake": self.fake()})
+        hub.begin()
+        deadline = time.monotonic() + 10
+        while hub.starting and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+        hub.poll()
+
+        assert [s.state for s in hub.statuses] == ["running"]
+
+    def test_a_server_that_fails_is_told_when_taken_not_before(self, hubs):
+        hub = hubs({"bad": McpServerConfig(command="/no/such/server")})
+        notices: list[str] = []
+        hub.begin()
+
+        hub.poll()
+        assert notices == []
+
+        assert hub.take(notices.append, wait=True) == []
+        assert len(notices) == 1 and "FileNotFoundError" in notices[0]
+        assert [s.state for s in hub.statuses] == ["failed"]
+        hub.take(notices.append)
+        assert len(notices) == 1  # once
+
+    def test_a_server_that_never_answers_ends_as_failed(self, hubs):
+        hub = hubs({"slow": self.hanging(timeout=0.5)})
+        hub.begin()
+
+        hub.take(lambda notice: None, wait=True)
+
+        assert "did not answer within 0.5 s" in hub.statuses[0].detail
+
+    def test_ctrl_c_while_waiting_leaves_the_start_to_be_waited_for_again(
+        self, hubs, monkeypatch
+    ):
+        hub = hubs({"fake": self.fake()})
+        hub.begin()
+        startup = hub._startup  # pyright: ignore[reportPrivateUsage]
+        assert startup is not None
+        real = startup.finish
+        calls = []
+
+        def interrupted_once(on_notice):
+            calls.append(1)
+            if len(calls) == 1:
+                raise KeyboardInterrupt
+            return real(on_notice)
+
+        monkeypatch.setattr(startup, "finish", interrupted_once)
+
+        with pytest.raises(KeyboardInterrupt):
+            hub.take(lambda notice: None, wait=True)
+        [update] = hub.take(lambda notice: None, wait=True)
+
+        assert update.name == "fake"
+
+    def test_closing_while_servers_start_stops_them(self, hubs):
+        hub = hubs({"slow": self.hanging()})
+        hub.begin()
+
+        hub.close()
+
+        assert not hub.starting and hub.servers == {}
+
+    def test_the_servers_list_their_tools_at_the_same_time(self, hubs, monkeypatch):
+        spans: list[tuple[float, float]] = []
+        real = McpServer.definitions
+
+        def slow(self):
+            begun = time.monotonic()
+            time.sleep(0.4)
+            found = real(self)
+            spans.append((begun, time.monotonic()))
+            return found
+
+        monkeypatch.setattr(McpServer, "definitions", slow)
+        hub = hubs({name: self.fake() for name in ("a", "b", "c")})
+
+        hub.start(lambda notice: None)
+
+        # Each started before any had finished: one after another would not do that.
+        assert len(spans) == 3
+        assert max(begun for begun, _ in spans) < min(end for _, end in spans)

@@ -411,3 +411,52 @@ class TestFlags:
         assert RecordingRepl.agent is not None
         assert RecordingRepl.agent.tools == {}
         assert "mcp-fake" not in threads()
+
+
+class TestMcpServersInTheBackground:
+    """At a terminal the prompt comes up before the servers are ready."""
+
+    @pytest.fixture(autouse=True)
+    def terminal(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "test")
+        monkeypatch.setattr("muagent.cli.terminal_session", lambda *a, **k: object())
+        write_config_json(tmp_path, {"fake": FAKE_SERVER})
+
+    def test_the_agent_starts_without_tools_and_the_hub_has_them_coming(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        seen = {}
+
+        class Recording(RecordingRepl):
+            def __init__(self, agent, commands, session=None, console=None, *rest):
+                super().__init__(agent, commands, session, console)
+                self.hub = rest[1]
+                seen["hub"] = self.hub
+                seen["tools_at_start"] = dict(agent.tools)
+
+        monkeypatch.setattr("muagent.cli.Repl", Recording)
+
+        main([])
+
+        assert seen["tools_at_start"] == {}
+        assert seen["hub"] is not None
+
+    def test_the_servers_are_stopped_when_muagent_ends(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
+
+        main([])
+
+        assert not any(name.startswith("mcp-") for name in threads())
+
+    def test_without_a_terminal_the_start_waits_for_the_servers(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr("muagent.cli.terminal_session", lambda *a, **k: None)
+        monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
+
+        main([])
+
+        assert RecordingRepl.agent is not None
+        assert "fake__add" in RecordingRepl.agent.tools

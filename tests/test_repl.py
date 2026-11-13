@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import fragment_list_to_text, to_formatted_text
@@ -8,6 +10,8 @@ from fake_api import REFUSAL, STREAM_ERROR, TEXT
 from helpers import make_config, make_context, run_repl
 from muagent.agent import Agent
 from muagent.commands import COMMANDS
+from muagent.mcp_client import McpHub, ServerStatus
+from muagent.mcp_config import McpServerConfig
 from muagent.repl import Repl, terminal_session
 from muagent.tools import Tool
 
@@ -351,6 +355,38 @@ class TestToolbar:
         agent.context.counted = 2500
 
         assert Repl(agent, COMMANDS)._toolbar().endswith("context 25% of 10,000")  # pyright: ignore[reportPrivateUsage]
+
+
+class TestToolbarAndServers:
+    @pytest.fixture
+    def hub(self, tmp_path: Path):
+        hub = McpHub({}, tmp_path)
+        yield hub
+        hub.close()
+
+    def toolbar(self, hub: McpHub) -> str:
+        return Repl(Agent(make_config()), COMMANDS, hub=hub)._toolbar()  # pyright: ignore[reportPrivateUsage]
+
+    def test_it_says_while_servers_start(self, tmp_path):
+        hub = McpHub({"slow": McpServerConfig(command="sleep", args=["30"])}, tmp_path)
+        try:
+            hub.begin()
+
+            assert " | starting MCP servers | context" in self.toolbar(hub)
+        finally:
+            hub.close()
+
+    def test_it_counts_the_tools_and_the_servers_that_failed(self, hub):
+        hub.statuses[:] = [
+            ServerStatus("a", "running", tools=("a__x", "a__y")),
+            ServerStatus("b", "running", tools=("b__z",)),
+            ServerStatus("c", "failed", "boom"),
+        ]
+
+        assert " | 3 tools | 1 MCP failed: /servers | context" in self.toolbar(hub)
+
+    def test_it_says_nothing_of_servers_when_there_are_none(self, hub):
+        assert "MCP" not in self.toolbar(hub) and "tools" not in self.toolbar(hub)
 
 
 class TestTerminalSession:

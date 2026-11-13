@@ -16,11 +16,19 @@ Design notes, for whoever changes this:
   its first step never runs any of its code; the callback also reads the task's
   exception, or asyncio logs it to the terminal. `_close` cancels through a callback
   run on the loop after the one that creates the task, for the same reason.
-- Starting: `launch()` every server, then `connect()` each. The startup timeout counts
-  from `launch()`, so servers that never answer delay the start by one timeout. A
-  failed `connect()` leaves the server for `close()` (stopping takes seconds: the SDK
-  waits 2 s for a program that ignores its closed input); `start_servers` closes the
-  failed ones together, `close_servers` the running ones.
+- Starting (`_Startup`): `launch()` every server, and then each one connects and lists
+  its tools on a thread of its own, so a slow one holds up no other. The startup
+  timeout counts from `launch()`, so servers that never answer delay the start by one
+  timeout. The tools are named afterwards, in the order of the file, so that the names
+  do not depend on who answered first. A server that failed is closed with the other
+  failed ones (stopping takes seconds: the SDK waits 2 s for a program that ignores
+  its closed input); `close_servers` closes the running ones.
+- At a terminal the hub does not wait (`McpHub.begin`): the prompt comes up at once
+  and `take` collects the servers when the caller is between inputs, waiting for
+  them only before a turn, which needs the tools. `poll` finishes a start that every
+  server has answered, for the toolbar. Ctrl-C while waiting leaves the start to be
+  waited for again. Notices about servers that failed are kept until `take`: they
+  must not be printed over the prompt.
 - A server whose connection ended is started again by the next call (`_submit`), up to
   `_MAX_RESTARTS` times; the call that found it dead fails and is not repeated. After
   `_IDLE_SECONDS` of silence a call first pings, because a program that exits while the
@@ -116,7 +124,7 @@ class ServerStatus:
     """
 
     name: str
-    state: str  # "running", "failed" or "off"
+    state: str  # "starting", "running", "failed" or "off"
     detail: str = ""  # why it failed, or why it is off
     tools: tuple[str, ...] = ()  # the names of the tools it offers the model
     hidden: int = 0  # tools it has that its `tools` setting leaves out
@@ -522,32 +530,49 @@ class McpServer:
             self._close(cancel=True)
             raise McpServerError(f"{exc} (restarting it after it stopped)") from None
 
-    def tools(self, taken: set[str] | None = None) -> list[Tool]:
-        """The server's tools, as tools for the agent: all of them, or the ones the
-        config lists.
+    def definitions(self) -> list[ToolDefinition]:
+        """What the server lists: all its tools, or the ones the config lists.
 
-        Args:
-            taken: The names already given to other servers' tools, which these
-                must not repeat, and which they are added to. Names are
-                `server__tool`, but `a` with `b__c` and `a__b` with `c` both come
-                to `a__b__c`.
+        This is the slow part of `tools()` (a round trip, or several), apart so that
+        servers can do it at the same time.
 
         Raises:
             McpServerError: If the server is not running, or the config lists a
                 tool it does not have (a typo would otherwise offer nothing, silently).
         """
         definitions = self._submit(_list_tools, self._config.startup_timeout)
-        if self._config.tools is not None:
-            have = {d.name for d in definitions}
-            unknown = [name for name in self._config.tools if name not in have]
-            if unknown:
-                raise McpServerError(
-                    f"MCP server {self.name!r} has no tool {', '.join(unknown)} "
-                    f"(it has: {', '.join(sorted(have))})"
-                )
-            kept = [d for d in definitions if d.name in self._config.tools]
-            self.hidden = len(definitions) - len(kept)
-            definitions = kept
+        if self._config.tools is None:
+            return definitions
+        have = {d.name for d in definitions}
+        unknown = [name for name in self._config.tools if name not in have]
+        if unknown:
+            raise McpServerError(
+                f"MCP server {self.name!r} has no tool {', '.join(unknown)} "
+                f"(it has: {', '.join(sorted(have))})"
+            )
+        kept = [d for d in definitions if d.name in self._config.tools]
+        self.hidden = len(definitions) - len(kept)
+        return kept
+
+    def tools(
+        self,
+        taken: set[str] | None = None,
+        definitions: list[ToolDefinition] | None = None,
+    ) -> list[Tool]:
+        """The server's tools, as tools for the agent.
+
+        Args:
+            taken: The names already given to other servers' tools, which these
+                must not repeat, and which they are added to. Names are
+                `server__tool`, but `a` with `b__c` and `a__b` with `c` both come
+                to `a__b__c`.
+            definitions: What `definitions()` returned, if it was called already.
+
+        Raises:
+            McpServerError: See `definitions()`.
+        """
+        if definitions is None:
+            definitions = self.definitions()
         taken = set() if taken is None else taken
         return [
             self._make_tool(_tool_name(self.name, d.name, taken), d)
@@ -712,6 +737,117 @@ def close_servers(servers: Iterable[McpServer]) -> None:
             list(pool.map(McpServer.close, servers))
 
 
+class _Startup:
+    """Servers being started: launched at once, then each connecting and listing its
+    tools on a thread of its own, so that a slow one holds up no other.
+
+    `begin()` does not wait. `finish()` does, and then names the tools in the order of
+    the file, which is why that is done there and not on the threads: the names must
+    not depend on which server answered first.
+    """
+
+    def __init__(
+        self,
+        configs: Mapping[str, McpServerConfig],
+        log_dir: Path,
+        environ: Mapping[str, str],
+    ) -> None:
+        self.configs = configs
+        self.log_dir = log_dir
+        self.environ = environ
+        # Each server, or why it cannot be started, in the order of the file.
+        self.entries: list[tuple[str, McpServer | str]] = []
+        self.off: dict[str, ServerStatus] = {}
+        self._futures: dict[str, concurrent.futures.Future[list[ToolDefinition]]] = {}
+        self._pool: concurrent.futures.ThreadPoolExecutor | None = None
+
+    def begin(self) -> None:
+        """Launch the servers that are on, and start connecting to them."""
+        for name, config in self.configs.items():
+            if not config.enable:
+                self.off[name] = ServerStatus(name, "off", "enable is false")
+                continue
+            try:
+                server = McpServer(
+                    name,
+                    _expand(name, config, self.environ),
+                    self.log_dir / f"{name}.log",
+                )
+                server.launch()
+            except McpServerError as exc:
+                self.entries.append((name, str(exc)))
+            else:
+                self.entries.append((name, server))
+        servers = {n: e for n, e in self.entries if not isinstance(e, str)}
+        if servers:
+            self._pool = concurrent.futures.ThreadPoolExecutor(
+                len(servers), thread_name_prefix="mcp-start"
+            )
+            self._futures = {
+                name: self._pool.submit(self._connect, server)
+                for name, server in servers.items()
+            }
+
+    @staticmethod
+    def _connect(server: McpServer) -> list[ToolDefinition]:
+        server.connect()
+        return server.definitions()
+
+    def done(self) -> bool:
+        """Whether every server has answered or failed, so `finish()` does not wait."""
+        return all(future.done() for future in self._futures.values())
+
+    def finish(
+        self, on_notice: Callable[[str], None]
+    ) -> tuple[dict[str, McpServer], dict[str, list[Tool]], dict[str, ServerStatus]]:
+        """Wait for the servers, and name their tools.
+
+        A server that failed is reported with `on_notice` and closed, with the other
+        failed ones together (stopping takes seconds: the SDK waits 2 s for a program
+        that ignores its closed input).
+
+        Returns:
+            The servers that run, their tools, and a status for every server in the
+            file, each by name and in the order of the file.
+        """
+        statuses: dict[str, ServerStatus] = dict(self.off)
+        running: dict[str, McpServer] = {}
+        found: dict[str, list[Tool]] = {}
+        failed: list[McpServer] = []
+        taken: set[str] = set()  # names are unique across the servers too
+
+        def log_of(name: str) -> Path | None:
+            return _log_file(self.configs[name], self.log_dir, name)
+
+        def failed_with(name: str, message: str) -> None:
+            on_notice(message)
+            statuses[name] = ServerStatus(name, "failed", message, log=log_of(name))
+
+        for name, entry in self.entries:
+            if isinstance(entry, str):
+                failed_with(name, entry)
+                continue
+            try:
+                tools = entry.tools(taken, self._futures[name].result())
+            except Exception as exc:  # noqa: BLE001
+                failed.append(entry)
+                failed_with(name, _failure_text(name, exc))
+                continue
+            running[name] = entry
+            found[name] = tools
+            statuses[name] = _running_status(name, entry, tools, log_of(name))
+        if self._pool is not None:
+            self._pool.shutdown(wait=False)
+        close_servers(failed)
+        return running, found, {name: statuses[name] for name in self.configs}
+
+    def abort(self) -> None:
+        """Stop what was started, whatever it is doing."""
+        if self._pool is not None:
+            self._pool.shutdown(wait=False, cancel_futures=True)
+        close_servers(e for _, e in self.entries if not isinstance(e, str))
+
+
 def start_servers(
     configs: Mapping[str, McpServerConfig],
     log_dir: Path,
@@ -725,9 +861,9 @@ def start_servers(
     A server that fails is reported and left out: it must not stop muagent. One
     that is switched off (`enable` false) is left out without a word, and so is
     one that starts: the banner counts its tools. Every server has its startup
-    timeout counted from the moment all of them were launched, so servers that never
-    answer delay the start by the longest timeout, not by the sum; the ones that
-    failed are closed together at the end.
+    timeout counted from the moment all of them were launched, and connects and lists
+    its tools on its own thread, so servers that never answer delay the start by the
+    longest timeout, not by the sum.
 
     Args:
         configs: The servers to start, by name.
@@ -741,57 +877,16 @@ def start_servers(
     Returns:
         The servers that are running, which the caller must close, and their tools.
     """
-    statuses: dict[str, ServerStatus] = {}
-
-    def log_of(name: str) -> Path | None:
-        return _log_file(configs[name], log_dir, name)
-
-    def failed_with(name: str, message: str) -> None:
-        on_notice(message)
-        statuses[name] = ServerStatus(name, "failed", message, log=log_of(name))
-
-    # Each server, or why it cannot be started, in the order of the file.
-    entries: list[tuple[str, McpServer | str]] = []
+    startup = _Startup(configs, log_dir, environ)
     try:
-        for name, config in configs.items():
-            if not config.enable:
-                statuses[name] = ServerStatus(name, "off", "enable is false")
-                continue
-            try:
-                server = McpServer(
-                    name, _expand(name, config, environ), log_dir / f"{name}.log"
-                )
-                server.launch()  # they all start at once; connect() waits below
-            except McpServerError as exc:
-                entries.append((name, str(exc)))
-            else:
-                entries.append((name, server))
-
-        running: list[McpServer] = []
-        failed: list[McpServer] = []
-        tools: list[Tool] = []
-        taken: set[str] = set()  # names are unique across the servers too
-        for name, entry in entries:
-            if isinstance(entry, str):
-                failed_with(name, entry)
-                continue
-            try:
-                entry.connect()
-                found = entry.tools(taken)
-            except Exception as exc:  # noqa: BLE001
-                failed.append(entry)
-                failed_with(name, _failure_text(name, exc))
-                continue
-            running.append(entry)
-            tools += found
-            statuses[name] = _running_status(name, entry, found, log_of(name))
-        close_servers(failed)
+        startup.begin()
+        running, found, statuses = startup.finish(on_notice)
     except BaseException:
-        close_servers(entry for _, entry in entries if not isinstance(entry, str))
+        startup.abort()
         raise
     if report is not None:
-        report.extend(statuses[name] for name in configs)
-    return running, tools
+        report.extend(statuses.values())
+    return list(running.values()), [tool for tools in found.values() for tool in tools]
 
 
 @dataclass(frozen=True)
@@ -830,18 +925,92 @@ class McpHub:
             ServerStatus
         ] = []  # in the order of the file, kept in place
         self.servers: dict[str, McpServer] = {}  # the ones that run
+        self._startup: _Startup | None = None  # begun, and not finished
+        self._started: list[ServerUpdate] = []  # finished, not yet taken
+        self._notices: list[str] = []  # about servers that failed, not yet taken
 
     def start(self, on_notice: Callable[[str], None]) -> list[Tool]:
-        """Start the servers (see `start_servers`) and return their tools."""
-        running, tools = start_servers(
-            self.configs,
-            self.log_dir,
-            on_notice,
-            environ=self.environ,
-            report=self.statuses,
-        )
-        self.servers = {server.name: server for server in running}
-        return tools
+        """Start the servers, wait for them, and return their tools.
+
+        See `start_servers`. What `take` returns is returned here as the tools, and
+        the notices go to `on_notice`.
+        """
+        self.begin()
+        try:
+            updates = self.take(on_notice, wait=True)
+        except BaseException:
+            self.close()  # Ctrl-C: nobody is left to take them
+            raise
+        return [tool for update in updates for tool in update.tools]
+
+    def begin(self) -> None:
+        """Start the servers without waiting for them: they connect while the caller
+        goes on. `take` collects them, and `starting` says whether they are done."""
+        self._startup = _Startup(self.configs, self.log_dir, self.environ)
+        try:
+            self._startup.begin()
+        except BaseException:
+            self._startup.abort()
+            self._startup = None
+            raise
+        self.statuses[:] = [
+            self._startup.off.get(name) or ServerStatus(name, "starting")
+            for name in self.configs
+        ]
+
+    @property
+    def starting(self) -> bool:
+        """Whether servers were begun and have not all answered yet."""
+        return self._startup is not None and not self._startup.done()
+
+    def poll(self) -> None:
+        """Finish a start that every server has answered, so that `statuses` and
+        `take` show how it went. Never waits."""
+        if self._startup is not None and self._startup.done():
+            self._finish()
+
+    def take(
+        self, on_notice: Callable[[str], None], *, wait: bool = False
+    ) -> list[ServerUpdate]:
+        """Collect what the servers that were begun came to.
+
+        Args:
+            on_notice: Called with a line about each server that failed to start.
+            wait: Whether to wait for the servers that have not answered. If not,
+                they are left for the next call.
+
+        Returns:
+            One update for each server that now runs, with the tools it offers and
+            what it says about using them; nothing to take away, as the agent has
+            none of its tools yet. Each is returned once.
+        """
+        if self._startup is not None and (wait or self._startup.done()):
+            self._finish()
+        for notice in self._notices:
+            on_notice(notice)
+        updates, self._started, self._notices = self._started, [], []
+        return updates
+
+    def _finish(self) -> None:
+        startup = self._startup
+        assert startup is not None
+        notices: list[str] = []
+        try:
+            running, found, statuses = startup.finish(notices.append)
+        except KeyboardInterrupt:
+            raise  # the start goes on, and the next call waits for it again
+        except BaseException:
+            startup.abort()
+            self._startup = None
+            raise
+        self._startup = None
+        self._notices += notices
+        self.servers = running
+        self.statuses[:] = statuses.values()
+        notes = self.instructions()
+        self._started = [
+            ServerUpdate(name, (), found[name], notes.get(name), "") for name in running
+        ]
 
     def instructions(self) -> dict[str, str]:
         """What the running servers say about using their tools, except the ones whose
@@ -923,5 +1092,8 @@ class McpHub:
         )
 
     def close(self) -> None:
-        """Stop the servers that run."""
+        """Stop the servers that run, and the ones that are still starting."""
+        if self._startup is not None:
+            self._startup.abort()
+            self._startup = None
         close_servers(self.servers.values())

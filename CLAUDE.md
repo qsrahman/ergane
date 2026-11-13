@@ -91,7 +91,7 @@ The modules, in dependency order (each imports only from those above it):
   `MAX_OUTPUT_CHARS`.
 - `mcp_config.py`: `McpServerConfig` (one server in `config.json`), the url rules and the
   `${NAME}` placeholders; what `config.py` needs of MCP, and no more.
-- `mcp_client.py`: `McpServer`, `McpHub` (starts the servers, and starts one again for
+- `mcp_client.py`: `McpServer`, `McpHub` (starts the servers, at a terminal in the background, and starts one again for
   `/reconnect`), `start_servers`, `close_servers`; a server's tools become
   `Tool`s, and a `ServerStatus` per server (`start_servers(..., report=[])`) records what
   became of it, for `/servers`. Imports `mcp` only when a server starts. The design notes are in its docstring.

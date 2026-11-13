@@ -234,6 +234,7 @@ def reconnect(repl: Repl, args: str) -> str | None:
     hub = repl.hub
     if hub is None:
         return "No MCP servers to start"
+    repl.attach(wait=True)  # the ones still starting are not "failed" yet
     if args:
         if args not in hub.configs:
             return f"No MCP server {args!r}; /servers lists them"
@@ -267,6 +268,8 @@ def servers_(repl: Repl, args: str) -> str | None:
             if server.hidden:
                 text += f' ({server.hidden} left out by "tools")'
             text += f", ~{tokens:,} tokens"
+        elif server.state == "starting":
+            text = "starting…"
         else:
             text = f"{server.state}: {server.detail}"
         if server.log:
