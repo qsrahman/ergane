@@ -73,7 +73,7 @@ class _CommandCompleter(Completer):
         name, space, rest = document.text_before_cursor.lstrip().partition(" ")
         if not space:
             # A command is shown with what it does, so no one has to run /help.
-            words = {n: c.description for n, c in self.commands.items()}
+            words = {n: self.commands[n].description for n in sorted(self.commands)}
             typed = name
         elif name in self.commands:
             words = dict.fromkeys(self.commands[name].arguments, "")

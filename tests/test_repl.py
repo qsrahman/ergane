@@ -461,6 +461,10 @@ class TestTerminalSession:
 
             assert sorted(c.text for c in found) == ["/reconnect", "/reset", "/retry"]
 
+    def test_the_commands_are_offered_in_order(self, tmp_path):
+        # As the menu shows them, not sorted afterwards: they are defined in another order.
+        assert self.complete(tmp_path, "/", ordered=True) == sorted(COMMANDS)
+
     def test_a_command_is_completed_with_what_it_does(self, tmp_path):
         with create_pipe_input() as pipe:
             session = terminal_session(
@@ -510,14 +514,14 @@ class TestTerminalSession:
 
         assert prompts == [prompt]
 
-    def complete(self, tmp_path, text: str) -> list[str]:
+    def complete(self, tmp_path, text: str, ordered: bool = False) -> list[str]:
         with create_pipe_input() as pipe:
             session = terminal_session(
                 COMMANDS, tmp_path / "history", input=pipe, output=DummyOutput()
             )
             assert session is not None and session.completer is not None
             found = session.completer.get_completions(Document(text), None)  # pyright: ignore[reportArgumentType]
-            return sorted(c.text for c in found)
+            return [c.text for c in found] if ordered else sorted(c.text for c in found)
 
     def test_the_levels_are_completed_after_effort(self, tmp_path):
         assert self.complete(tmp_path, "/effort h") == ["high"]
