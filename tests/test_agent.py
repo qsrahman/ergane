@@ -17,13 +17,11 @@ from fake_api import (
     make_response,
 )
 from helpers import make_config, make_context, tool_with
-from muagent.agent import (
-    STREAM_RETRIES,
-    Agent,
-)
+from muagent.agent import Agent
 from muagent.context import DROPPED_OUTPUT, estimate_tokens
 from muagent.errors import TurnError, describe_error
 from muagent.prompts import SERVER_NOTES, SYSTEM_PROMPT, SYSTEM_PROMPT_NO_TOOLS
+from muagent.responses import STREAM_RETRIES, response_problem
 from muagent.tools import MAX_OUTPUT_CHARS, Image, Tool, ToolOutput
 
 
@@ -330,8 +328,8 @@ def test_a_response_that_only_calls_a_tool_is_not_a_problem():
     calls = Response.model_validate(make_response("completed", [FUNCTION_CALL]))
     empty = Response.model_validate(make_response("completed", []))
 
-    assert Agent._response_status(calls) is None
-    assert Agent._response_status(empty) == "No text in response"
+    assert response_problem(calls) is None
+    assert response_problem(empty) == "No text in response"
 
 
 USAGE = {

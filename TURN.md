@@ -25,8 +25,8 @@ line, because lines move. Everything is in [`src/muagent/`](src/muagent/).
        Context.begin_turn: summary + history + prompt ◄───┤
                                                           │
                        ┌──────────────────────────────────┤   at most max_turns rounds
-                       │  _send_response    one request; the reply text streams to the screen
-                       │  _response_status  failed, incomplete or empty? ──► stop and report it
+                       │  Responder.send    one request; the reply text streams to the screen
+                       │  response_problem  failed, incomplete or empty? ──► stop and report it
                        │  tool calls?       none ──► stop: this was the answer
                        │  _run_tools        one output per call (asks you first when it must)
                        │  budget check      turn too big? ──► drop older results; still too big? stop
@@ -122,7 +122,7 @@ instructions and the definitions of the tools (`Agent._fixed_tokens`, estimated 
 same way). A long tool list therefore leaves less room for the history. The reply is
 not counted.
 
-## 3. A round: the request (`_send_response`)
+## 3. A round: the request (`Responder.send`, in `responses.py`)
 
 Every request is built the same way, and is the only place the API is called:
 
@@ -159,7 +159,7 @@ would appear twice, perhaps differently), when the server ended the stream with 
 `error` event (the same request would get the same answer), or when the request
 never started (the SDK already tried).
 
-## 4. Judging the response (`_response_status`)
+## 4. Judging the response (`response_problem`)
 
 | The response                                   | Result                                            |
 |------------------------------------------------|---------------------------------------------------|
@@ -394,7 +394,7 @@ the model still answered.
 |---------------------------------------|--------------------------------------------------------------|
 | reading input, commands, `ask`        | `Repl` in [`repl.py`](src/muagent/repl.py), [`commands.py`](src/muagent/commands.py) |
 | the turn, the rounds, the stops       | `Agent.run_turn`, `_ask`, `_run_round` in [`agent.py`](src/muagent/agent.py) |
-| the request and the stream            | `Agent._send_response`                                       |
+| the request and the stream            | `Responder` in [`responses.py`](src/muagent/responses.py)    |
 | calls and permissions                 | `Agent._run_tools`, `Tool` in [`tools.py`](src/muagent/tools.py) |
 | history, summary, trimming, saving    | `Context` in [`context.py`](src/muagent/context.py)          |
 | summarizing                           | `Compactor` in [`compaction.py`](src/muagent/compaction.py) |

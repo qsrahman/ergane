@@ -106,8 +106,10 @@ The modules, in dependency order (each imports only from those above it):
   `extract_summary`).
 - `compaction.py`: `Compactor`: when to summarize the oldest turns, what to keep, and the
   summary itself, through a function that asks the model. It needs nothing of the agent.
+- `responses.py`: `Responder` (one request to the API, streamed, sent again when the stream
+  breaks before any text) and `response_problem`. It needs nothing of the agent.
 - `agent.py`: `Agent`: `run_turn` (a loop of `_ask` and `_run_round` around a `_Turn`),
-  `compact` (which is `Compactor`'s), and the API calls. It imports nothing of
+  `compact` (which is `Compactor`'s), and the tools. It imports nothing of
   `config.py` or MCP: the settings it reads are `AgentSettings`, which `Config` satisfies
   (a test pins this).
 - `console.py`: all terminal output, `sanitize()`, and the permission question.

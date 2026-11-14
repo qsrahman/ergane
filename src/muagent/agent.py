@@ -11,10 +11,10 @@ change it:
   completed (tools may have had effects, and the model must know), a failure, Ctrl-C
   or the `max_turns` cap keeps the turn with a closing note. A failure in the first
   round saves nothing.
-- A stream that breaks before any text is shown is sent again (`STREAM_RETRIES`):
-  Ollama's cloud proxy lost a connection 100 s into a request and a turn of 25 rounds
-  was thrown away. Tools run only after a complete response, so a retry repeats a
-  request, never an action.
+- A stream that breaks before any text is shown is sent again (`STREAM_RETRIES`, in
+  `responses.py`): Ollama's cloud proxy lost a connection 100 s into a request and a turn
+  of 25 rounds was thrown away. Tools run only after a complete response, so a retry
+  repeats a request, never an action.
 - Summaries (`compact`, in `compaction.py`) change nothing unless the summary is good,
   and a failure never stops the turn.
 """
@@ -25,16 +25,15 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Literal, Protocol, cast
 
-from openai import APIConnectionError, OpenAI
+from openai import OpenAI
 from openai.types.responses import (
+    FunctionToolParam,
     Response,
     ResponseFunctionToolCall,
     ResponseInputParam,
 )
-from openai.types.responses.response_create_params import ResponseCreateParamsBase
-from openai.types.shared import ReasoningEffort
 
-from muagent.compaction import SUMMARY_MAX_TOKENS, Compactor
+from muagent.compaction import SUMMARY_MAX_TOKENS, CompactionSettings, Compactor
 from muagent.context import (
     Context,
     answer_open_calls,
@@ -42,61 +41,37 @@ from muagent.context import (
     estimate_tokens,
     function_output,
 )
-from muagent.errors import StreamCut, TurnError, is_context_overflow
+from muagent.errors import TurnError, is_context_overflow
 from muagent.prompts import (
     COMPACT_PROMPT,
     SERVER_NOTES,
     SYSTEM_PROMPT,
     SYSTEM_PROMPT_NO_TOOLS,
 )
+from muagent.responses import NO_TEXT, Responder, ResponseSettings, response_problem
 from muagent.tools import Tool
 
 # The reason in the note that closes a turn the user stopped.
 INTERRUPTED = "interrupted by the user"
-
-# How many times a round is sent again when its stream breaks before any text of the
-# reply has reached the user. The SDK retries a request that fails to start, but not
-# one that breaks halfway, and a turn of many rounds should not be lost to one dropped
-# connection: it happened, 25 rounds into reading a codebase.
-STREAM_RETRIES = 2
-
-# What a response with neither text nor a call is reported as. Some compatible models
-# now and then answer with nothing; asking again once usually gets a reply.
-NO_TEXT = "No text in response"
 
 
 class _Secret(Protocol):
     def get_secret_value(self) -> str: ...
 
 
-class AgentSettings(Protocol):
+class AgentSettings(ResponseSettings, CompactionSettings, Protocol):
     """The settings an agent reads, each where it is used, so a change (`/model`)
-    takes effect at once. Written here and not imported from `config.py`, so that the
-    agent needs nothing of how settings are loaded, or of MCP, which `Config` lists.
-    The ones a command may change are plain attributes; the key is only read.
+    takes effect at once: those of a request and of summarizing (their own protocols)
+    and the rest. Written here and not imported from `config.py`, so that the agent
+    needs nothing of how settings are loaded, or of MCP, which `Config` lists. The ones
+    a command may change are plain attributes; the key is only read.
     """
 
-    model: str
-    reasoning_effort: ReasoningEffort | None
     base_url: str | None
-    streaming: bool
-    max_context_tokens: int
     max_turns: int
-    auto_compact: bool
-    compact_at: float
-    keep_recent_tokens: int
 
     @property
     def api_key(self) -> _Secret: ...
-
-
-def _with_output(response: Response) -> Response:
-    """The response, with an empty `output` where a compatible server sent `null`, which
-    `output_text` and everything that reads the output cannot take. A streamed response
-    needs no such care: `responses.stream` rebuilds its output."""
-    if response.output is None:
-        response.output = []
-    return response
 
 
 @dataclass
@@ -138,6 +113,7 @@ class Agent:
             api_key=config.api_key.get_secret_value(),
             base_url=config.base_url,
         )
+        self.responder = Responder(self.client, config)
         self.context = Context()
         # Tools the user allowed for the rest of the session, by name.
         self.always_allowed: set[str] = set()
@@ -214,7 +190,7 @@ class Agent:
             response = self._ask(turn, on_text, on_notice)
             if response is None:  # the request was shortened: ask again
                 continue
-            problem = self._response_status(response)
+            problem = response_problem(response)
             if problem == NO_TEXT and not turn.emptied:
                 turn.emptied = True
                 on_notice("The model sent an empty reply; trying again")
@@ -278,11 +254,17 @@ class Agent:
         point, so what the earlier rounds did (it may have had effects) is known.
 
         Raises:
-            Exception: Whatever `_send_response` raises.
+            Exception: Whatever `Responder.send` raises.
             KeyboardInterrupt: On Ctrl-C.
         """
         try:
-            response = self._send_response(turn.items, on_text, on_notice)
+            response = self.responder.send(
+                turn.items,
+                self._instructions(),
+                on_text,
+                on_notice,
+                tools=self._tool_params(),
+            )
         except (Exception, KeyboardInterrupt) as exc:
             if is_context_overflow(exc) and not turn.refused:
                 turn.refused = True
@@ -388,13 +370,18 @@ class Agent:
         """Ask the model for the text of a summary.
 
         Raises:
-            TurnError: If the response has a problem (see `_response_status`).
+            TurnError: If the response has a problem (see `response_problem`).
             Exception: Whatever the API client raises.
         """
-        response = self._send_response(
-            draft, lambda text: None, on_notice, summary=True
+        response = self.responder.send(
+            draft,
+            COMPACT_PROMPT,
+            lambda text: None,
+            on_notice,
+            max_output_tokens=SUMMARY_MAX_TOKENS,
+            low_effort=True,
         )
-        if problem := self._response_status(response):
+        if problem := response_problem(response):
             raise TurnError(problem)
         return response.output_text
 
@@ -454,6 +441,10 @@ class Agent:
             self.server_notes.pop(name, None)
         self.context.counted = None
 
+    def _tool_params(self) -> list[FunctionToolParam]:
+        """The definitions of the tools, as the request carries them."""
+        return [tool.param() for tool in self.tools.values()]
+
     def _instructions(self) -> str:
         """What every request carries as `instructions`: the system prompt, what the
         servers say, then the environment, so that the part that rarely changes
@@ -474,7 +465,7 @@ class Agent:
     def _fixed_estimate(self) -> tuple[int, int]:
         """Estimate the tokens that every request carries whatever the conversation:
         the instructions, and the definitions of the tools."""
-        tools = [tool.param() for tool in self.tools.values()]
+        tools = self._tool_params()
         return (
             estimate_tokens({"instructions": self._instructions()}),
             estimate_tokens({"tools": tools}) if tools else 0,
@@ -529,139 +520,6 @@ class Agent:
         """Estimate the tokens of the instructions, the tool definitions and the
         history, which together are what the next request would carry."""
         return (*self._fixed_estimate(), self.context.estimate())
-
-    def _send_response(
-        self,
-        draft: ResponseInputParam,
-        on_text: Callable[[str], None],
-        on_notice: Callable[[str], None],
-        *,
-        summary: bool = False,
-    ) -> Response:
-        """Get the model's final response, passing its text to on_text as it arrives.
-
-        A stream that breaks (see `StreamCut`) before any text has been shown is
-        sent again, up to STREAM_RETRIES times, and each time `on_notice` says so.
-        Nothing of the round has run yet, so the same request is safe to repeat; once
-        text has been shown it is not, because the reply would appear twice.
-
-        Args:
-            draft: The input for this turn.
-            on_text: Called with each piece of reply text when streaming, or once
-                with the whole reply otherwise (before any status check, so
-                partial text is always shown).
-            on_notice: Called with a line when a round is sent again.
-            summary: Whether this is the request that summarizes old turns: the
-                summarizing prompt in place of the system prompt, no tools, a cap on
-                the answer, and a reasoning model asked to think as little as it can.
-
-        Returns:
-            The final response, whatever its status.
-
-        Raises:
-            StreamCut: If the stream keeps breaking, or breaks after text was shown.
-            TurnError: If the server ends a stream with an `error` event; the message
-                is the reason it gave.
-        """
-        params: ResponseCreateParamsBase = {
-            "store": False,
-            "input": draft,
-            "model": self.config.model,
-            "instructions": COMPACT_PROMPT if summary else self._instructions(),
-            # store=False means the server keeps no history, so reasoning items are
-            # resent by muagent in the input; their encrypted content is requested
-            # here, otherwise a reasoning model cannot use it (and may fail the
-            # request) when turning back to a tool to answer.
-            "include": ["reasoning.encrypted_content"],
-        }
-        # Non-reasoning models reject a reasoning setting, so leave it out if unset.
-        effort = self.config.reasoning_effort
-        if effort is not None:
-            params["reasoning"] = {
-                "effort": (
-                    "low"
-                    if summary and effort not in ("none", "minimal", "low")
-                    else effort
-                )
-            }
-        if summary:
-            params["max_output_tokens"] = SUMMARY_MAX_TOKENS
-        elif self.tools:
-            params["tools"] = [tool.param() for tool in self.tools.values()]
-
-        if not self.config.streaming:
-            response = _with_output(self.client.responses.create(**params))
-            on_text(response.output_text)
-            return response
-
-        shown = False
-
-        def show(text: str) -> None:
-            nonlocal shown
-            shown = shown or bool(text)
-            on_text(text)
-
-        retries = 0
-        while True:
-            try:
-                return self._stream(params, show)
-            except StreamCut as cut:
-                retries += 1
-                if shown or retries > STREAM_RETRIES:
-                    raise
-                on_notice(f"{cut}; trying again ({retries} of {STREAM_RETRIES})")
-
-    def _stream(
-        self, params: ResponseCreateParamsBase, on_text: Callable[[str], None]
-    ) -> Response:
-        """Stream one request and return its final response.
-
-        This is `responses.stream`, not `create(stream=True)`: it rebuilds the final
-        output when a compatible server leaves it out of `response.completed`.
-
-        Raises:
-            StreamCut: If the stream ends without a final response and the server
-                said nothing about why, or the connection drops after the stream
-                had begun. (One that fails before it begins was already retried by
-                the SDK.)
-            TurnError: If the server ends the stream with an `error` event.
-        """
-        final = None
-        reason = None
-        started = False
-        try:
-            with self.client.responses.stream(**params) as stream:
-                for event in stream:
-                    started = True
-                    if event.type == "response.output_text.delta":
-                        on_text(event.delta)
-                    elif event.type == "error":
-                        detail = (
-                            f"{event.code}: {event.message}"
-                            if event.code
-                            else event.message
-                        )
-                        reason = f"Stream error: {detail}"
-                    # Take the final response from the terminal event:
-                    # get_final_response() raises unless the stream ends with
-                    # response.completed. Keep the == chain: pyright narrows the
-                    # event type through it but not through `in (...)`.
-                    elif (
-                        event.type == "response.completed"
-                        or event.type == "response.incomplete"
-                        or event.type == "response.failed"
-                    ):
-                        final = event.response
-        except APIConnectionError as exc:
-            if not started:
-                raise
-            raise StreamCut(f"Stream cut off: {str(exc).rstrip('.')}") from exc
-        if final is None:
-            if reason:
-                # The server said why; the same request would get the same answer.
-                raise TurnError(reason)
-            raise StreamCut("Stream ended without a final response")
-        return final
 
     def _run_tools(
         self,
@@ -744,40 +602,3 @@ class Agent:
         return response.usage.input_tokens + sum(
             estimate_tokens(item) for item in items[sent:]
         )
-
-    @staticmethod
-    def _response_status(response: Response) -> str | None:
-        """Describe what is wrong with a response, if anything.
-
-        A response that calls tools has no text, and that is fine: only the
-        response that ends the turn needs some.
-
-        Args:
-            response: A response from the model.
-
-        Returns:
-            A message for the user, or None if the response is fine.
-        """
-        if response.status == "incomplete":
-            details = response.incomplete_details
-            reason = details.reason if details else "unknown"
-            return f"Response incomplete: {reason}"
-        if response.status == "failed":
-            error = response.error
-            message = f"{error.code}: {error.message}" if error else "unknown error"
-            return f"Response failed: {message}"
-        # status is optional in the SDK; some compatible endpoints omit it.
-        if response.status not in (None, "completed"):
-            return f"Response not completed: {response.status}"
-        if response.output_text or any(
-            i.type == "function_call" for i in response.output
-        ):
-            return None
-        refusal = "".join(
-            part.refusal
-            for item in response.output
-            if item.type == "message"
-            for part in item.content
-            if part.type == "refusal"
-        )
-        return f"Refused: {refusal}" if refusal else NO_TEXT
