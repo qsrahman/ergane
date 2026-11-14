@@ -344,7 +344,12 @@ class Context:
             start = turn_start
         return [*summary, *items[start:]], start > 0
 
-    def save_turn(self, items: ResponseInputParam, counted: int | None = None) -> None:
+    def save_turn(
+        self,
+        items: ResponseInputParam,
+        counted: int | None = None,
+        model: str | None = None,
+    ) -> None:
         """Make a finished turn the new history.
 
         The finished turn is kept whole, so a follow-up can refer to what the tools
@@ -360,6 +365,7 @@ class Context:
             counted: The tokens the server counted for the last request, plus an
                 estimate of the reply, if it counted; what the save drops is taken
                 off, since that is no longer sent.
+            model: The model whose server counted, which the count holds for.
         """
         summary = self.summary_message()
         if summary and items[: len(summary)] == summary:
@@ -375,6 +381,7 @@ class Context:
         ]
         self.items = [*earlier, *items[turn:]]
         self.last_saved = True
+        self.counted_model = model
         if counted is None:
             self.counted = None
         else:

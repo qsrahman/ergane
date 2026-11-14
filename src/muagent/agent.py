@@ -290,8 +290,7 @@ class Agent:
                 if response.usage is not None
                 else None
             )
-            self.context.save_turn([*turn.items, *reply], counted)
-            self.context.counted_model = self.config.model
+            self.context.save_turn([*turn.items, *reply], counted, self.config.model)
         elif problem and turn.rounds:
             self._keep_stopped_turn(turn.items, turn.rounds, problem)
         if problem:
