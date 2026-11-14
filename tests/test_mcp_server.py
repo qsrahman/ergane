@@ -17,9 +17,6 @@ import pytest
 from fake_api import TEXT
 from helpers import FAKE, serve_http
 from muagent.mcp_config import McpServerConfig
-from muagent.mcp_hub import (
-    start_servers,
-)
 from muagent.mcp_server import McpServer, McpServerError, _list_tools
 from muagent.tools import MAX_OUTPUT_CHARS, Tool
 
@@ -397,16 +394,16 @@ class TestToolFilter:
         assert len(make_server().tools()) > 5
 
     def test_a_tool_the_server_does_not_have_fails_the_server_and_names_it(
-        self, tmp_path
+        self, start_hub
     ):
         notices: list[str] = []
         config = McpServerConfig(
             command=sys.executable, args=[FAKE], tools=["add", "ad"]
         )
 
-        servers, found = start_servers({"s": config}, tmp_path, notices.append)
+        hub, found = start_hub({"s": config}, notices.append)
 
-        assert (servers, found) == ([], [])
+        assert hub.servers == {} and found == []
         assert len(notices) == 1
         assert "no tool ad " in notices[0] and "add" in notices[0]
 

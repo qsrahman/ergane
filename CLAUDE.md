@@ -95,7 +95,7 @@ The modules, in dependency order (each imports only from those above it):
 - `mcp_server.py`: `McpServer`, one connection used from synchronous code; its tools
   become `Tool`s. Imports `mcp` only when a server starts. The design notes are in its
   docstring.
-- `mcp_hub.py`: the servers together: `start_servers`, `close_servers`, `McpHub` (starts
+- `mcp_hub.py`: the servers together: `close_servers`, `McpHub` (starts
   them, at a terminal in the background, and starts one again for `/reconnect`), and a
   `ServerStatus` per server, which records what became of it for `/servers`.
 - `errors.py`, `prompts.py`: `TurnError`, `StreamCut`, `describe_error`,

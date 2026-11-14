@@ -11,6 +11,7 @@ from fake_api import FakeResponsesHandler
 from helpers import FAKE, make_config, serve_http
 from muagent.agent import Agent
 from muagent.mcp_config import McpServerConfig
+from muagent.mcp_hub import McpHub
 from muagent.mcp_server import McpServer
 from muagent.tools import Tool
 
@@ -82,6 +83,28 @@ def tools(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, Tool]]
 def http_url() -> Iterator[str]:
     with serve_http() as url:
         yield url
+
+
+@pytest.fixture
+def start_hub(tmp_path: Path) -> Iterator[Callable[..., tuple[McpHub, list[Tool]]]]:
+    """Start servers through a hub and wait for them; they are closed after the test.
+
+    The logs go to `tmp_path`. Returns the hub and the tools of the servers that run.
+    """
+    hubs: list[McpHub] = []
+
+    def start(
+        configs: Mapping[str, McpServerConfig],
+        on_notice: Callable[[str], None] = lambda notice: None,
+        **values,
+    ) -> tuple[McpHub, list[Tool]]:
+        hub = McpHub(configs, tmp_path, **values)
+        hubs.append(hub)
+        return hub, hub.start(on_notice)
+
+    yield start
+    for hub in hubs:
+        hub.close()
 
 
 @pytest.fixture

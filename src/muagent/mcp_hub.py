@@ -1,7 +1,7 @@
 """The MCP servers while muagent runs: start them, keep them, start one again.
 
 One server is `mcp_server.py`. This is what a program does with all of them: start them
-(`start_servers`, or `McpHub.begin` and `take` in the background), report what became
+(`McpHub.start`, or `begin` and `take` in the background), report what became
 of each (`ServerStatus`, for `/servers`), and start one again (`McpHub.reconnect`).
 
 Design notes, for whoever changes this:
@@ -239,47 +239,6 @@ class _Startup:
         close_servers(e for _, e in self.entries if not isinstance(e, str))
 
 
-def start_servers(
-    configs: Mapping[str, McpServerConfig],
-    log_dir: Path,
-    on_notice: Callable[[str], None],
-    *,
-    environ: Mapping[str, str] = os.environ,
-    report: list[ServerStatus] | None = None,
-) -> tuple[list[McpServer], list[Tool]]:
-    """Start the servers, all at once, and collect their tools.
-
-    A server that fails is reported and left out: it must not stop muagent. One
-    that is switched off (`enable` false) is left out without a word, and so is
-    one that starts: the banner counts its tools. Every server has its startup
-    timeout counted from the moment all of them were launched, and connects and lists
-    its tools on its own thread, so servers that never answer delay the start by the
-    longest timeout, not by the sum.
-
-    Args:
-        configs: The servers to start, by name.
-        log_dir: Where each server's stderr goes, in a file named after it.
-        on_notice: Called with a line about each server that fails.
-        environ: Where the `${NAME}` placeholders of the servers are filled in from.
-        report: If given, a `ServerStatus` for every server in `configs` is added to
-            it, in their order: the notices of the ones that failed are gone once
-            they are shown, and `/servers` tells them again.
-
-    Returns:
-        The servers that are running, which the caller must close, and their tools.
-    """
-    startup = _Startup(configs, log_dir, environ)
-    try:
-        startup.begin()
-        running, found, statuses = startup.finish(on_notice)
-    except BaseException:
-        startup.abort()
-        raise
-    if report is not None:
-        report.extend(statuses.values())
-    return list(running.values()), [tool for tools in found.values() for tool in tools]
-
-
 @dataclass(frozen=True)
 class ServerUpdate:
     """What a change to one server means for the agent: the tools it offered (to be
@@ -295,8 +254,8 @@ class ServerUpdate:
 class McpHub:
     """The servers while muagent runs.
 
-    `start_servers` starts them once. The hub keeps them after that, and so can start
-    one again (`reconnect`: a server that failed to start, or hangs, costs a restart
+    `start` (or `begin` and `take`) starts them once. The hub keeps them after that,
+    and so can start one again (`reconnect`: a server that failed to start, or hangs, costs a restart
     of muagent otherwise, and the conversation with it). That does not touch the
     agent: it returns what to change, and the caller applies it, so that the tools do
     not change in the middle of a turn.
@@ -321,10 +280,20 @@ class McpHub:
         self._notices: list[str] = []  # about servers that failed, not yet taken
 
     def start(self, on_notice: Callable[[str], None]) -> list[Tool]:
-        """Start the servers, wait for them, and return their tools.
+        """Start the servers, all at once, wait for them, and return their tools.
 
-        See `start_servers`. What `take` returns is returned here as the tools, and
-        the notices go to `on_notice`.
+        A server that fails is reported and left out: it must not stop muagent. One
+        that is switched off (`enable` false) is left out without a word, and so is
+        one that starts: the banner counts its tools. Servers that never answer delay
+        the start by the longest startup timeout, not by the sum (see `_Startup`).
+        The servers that run are closed by `close()`; `statuses` has one for every
+        server, since a notice is gone once it is shown.
+
+        Args:
+            on_notice: Called with a line about each server that failed.
+
+        Raises:
+            KeyboardInterrupt: On Ctrl-C, after closing what was started.
         """
         self.begin()
         try:

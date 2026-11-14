@@ -6,15 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from helpers import FAKE, serve_http
+from helpers import FAKE
 from muagent.mcp_config import McpServerConfig
-from muagent.mcp_hub import (
-    McpHub,
-    ServerStatus,
-    _expand,
-    close_servers,
-    start_servers,
-)
+from muagent.mcp_hub import McpHub, _expand, close_servers
 from muagent.mcp_server import McpServer, McpServerError
 from muagent.tools import Tool
 
@@ -61,81 +55,65 @@ class TestPlaceholders:
         )
 
 
-class TestStartServers:
+class TestStart:
     def fake(self, **values):
-        from muagent.mcp_config import McpServerConfig
-
         return McpServerConfig(command=sys.executable, args=[FAKE], **values)
 
-    def test_every_server_starts_and_its_tools_are_collected(self, tmp_path):
+    def test_every_server_starts_and_its_tools_are_collected(self, start_hub, tmp_path):
         notices: list[str] = []
         configs = {"one": self.fake(), "two": self.fake(read_only=True)}
 
-        servers, found = start_servers(configs, tmp_path, notices.append)
-        try:
-            names = {tool.name: tool for tool in found}
-            assert "one__add" in names and "two__add" in names
-            assert not names["one__add"].read_only
-            assert names["two__add"].read_only
-            assert notices == []  # a server that starts is not announced
-            assert (tmp_path / "one.log").exists()
-        finally:
-            for server in servers:
-                server.close()
+        _, found = start_hub(configs, notices.append)
 
-    def test_a_server_that_fails_is_reported_and_the_others_still_start(self, tmp_path):
-        from muagent.mcp_config import McpServerConfig
+        names = {tool.name: tool for tool in found}
+        assert "one__add" in names and "two__add" in names
+        assert not names["one__add"].read_only
+        assert names["two__add"].read_only
+        assert notices == []  # a server that starts is not announced
+        assert (tmp_path / "one.log").exists()
 
+    def test_a_server_that_fails_is_reported_and_the_others_still_start(
+        self, start_hub
+    ):
         notices: list[str] = []
         configs = {
             "broken": McpServerConfig(command="/no/such/server"),
             "good": self.fake(),
         }
 
-        servers, found = start_servers(configs, tmp_path, notices.append)
-        try:
-            assert [server.name for server in servers] == ["good"]
-            assert all(tool.name.startswith("good__") for tool in found)
-            assert len(notices) == 1
-            assert notices[0].startswith("MCP server 'broken' failed to start")
-        finally:
-            for server in servers:
-                server.close()
+        hub, found = start_hub(configs, notices.append)
 
-    def test_nothing_is_left_running_when_the_start_is_interrupted(self, tmp_path):
+        assert list(hub.servers) == ["good"]
+        assert all(tool.name.startswith("good__") for tool in found)
+        assert len(notices) == 1
+        assert notices[0].startswith("MCP server 'broken' failed to start")
+
+    def test_nothing_is_left_running_when_the_start_is_interrupted(self, start_hub):
         def interrupt(notice: str) -> None:
             raise KeyboardInterrupt
 
-        # The first to be waited for fails and says so, and that is where the
-        # interrupt comes; the other two are launched and not yet waited for.
+        # The interrupt comes with the notice of the server that failed; the other
+        # two run by then, and nobody is left to take them.
         configs = {
             "broken": McpServerConfig(command="/no/such/server"),
             "first": self.fake(),
             "second": self.fake(),
         }
         with pytest.raises(KeyboardInterrupt):
-            start_servers(configs, tmp_path, interrupt)
+            start_hub(configs, interrupt)
 
         names = [t.name for t in threading.enumerate()]
         assert "mcp-first" not in names and "mcp-second" not in names
 
-    def test_the_timeouts_of_a_server_are_used(self, tmp_path):
-        servers, found = start_servers(
-            {"quick": self.fake(call_timeout=0.3)}, tmp_path, lambda notice: None
-        )
-        try:
-            by_name = {tool.name: tool for tool in found}
+    def test_the_timeouts_of_a_server_are_used(self, start_hub):
+        _, found = start_hub({"quick": self.fake(call_timeout=0.3)})
+        by_name = {tool.name: tool for tool in found}
 
-            result = by_name["quick__slow"].call('{"seconds": 1}')
+        result = by_name["quick__slow"].call('{"seconds": 1}')
 
-            assert result.endswith("did not answer within 0.3 s")
-        finally:
-            for server in servers:
-                server.close()
+        assert result.endswith("did not answer within 0.3 s")
 
-    def test_a_server_that_is_too_slow_to_start_is_given_up_on(self, tmp_path):
-        from muagent.mcp_config import McpServerConfig
-
+    def test_a_server_that_is_too_slow_to_start_is_given_up_on(self, start_hub):
         notices: list[str] = []
         silent = McpServerConfig(
             command=sys.executable,
@@ -143,12 +121,12 @@ class TestStartServers:
             startup_timeout=0.5,
         )
 
-        servers, found = start_servers({"silent": silent}, tmp_path, notices.append)
+        hub, found = start_hub({"silent": silent}, notices.append)
 
-        assert (servers, found) == ([], [])
+        assert hub.servers == {} and found == []
         assert notices == ["MCP server 'silent' did not answer within 0.5 s"]
 
-    def test_the_servers_start_at_the_same_time(self, tmp_path):
+    def test_the_servers_start_at_the_same_time(self, start_hub, tmp_path):
         # Each server waits for the other to have started, and gives up if it does
         # not: only servers that are started together can both come up.
         script = (
@@ -164,8 +142,6 @@ class TestStartServers:
             "sys.argv = ['fake']\n"  # the server takes an argument to mean a port
             f"runpy.run_path({FAKE!r}, run_name='__main__')\n"
         )
-        from muagent.mcp_config import McpServerConfig
-
         a, b = tmp_path / "a", tmp_path / "b"
         configs = {
             "one": McpServerConfig(
@@ -176,13 +152,10 @@ class TestStartServers:
             ),
         }
 
-        servers, found = start_servers(configs, tmp_path, lambda notice: None)
-        try:
-            assert [server.name for server in servers] == ["one", "two"]
-            assert {tool.name.split("__")[0] for tool in found} == {"one", "two"}
-        finally:
-            for server in servers:
-                server.close()
+        hub, found = start_hub(configs)
+
+        assert list(hub.servers) == ["one", "two"]
+        assert {tool.name.split("__")[0] for tool in found} == {"one", "two"}
 
     def test_close_cancels_a_server_that_is_still_starting(self, make_server):
         server = make_server(
@@ -197,93 +170,73 @@ class TestStartServers:
         assert "mcp-pending" not in [t.name for t in threading.enumerate()]
 
     def test_a_server_at_a_url_starts_with_its_headers_and_leaves_no_log(
-        self, tmp_path, http_url
+        self, start_hub, tmp_path, http_url
     ):
-        from muagent.mcp_config import McpServerConfig
-
         configs = {
             "web": McpServerConfig(url=http_url, headers={"X-Test": "yes"}),
             "local": self.fake(),
         }
 
-        servers, found = start_servers(configs, tmp_path, lambda notice: None)
-        try:
-            by_name = {tool.name: tool for tool in found}
-            assert by_name["web__header"].call('{"name": "x-test"}') == "yes"
-            assert by_name["local__add"].call('{"a": 1}') == "2"
-            assert (tmp_path / "local.log").exists()
-            assert not (tmp_path / "web.log").exists()
-        finally:
-            for server in servers:
-                server.close()
+        _, found = start_hub(configs)
 
-    def test_a_server_that_is_switched_off_is_not_started_or_mentioned(self, tmp_path):
+        by_name = {tool.name: tool for tool in found}
+        assert by_name["web__header"].call('{"name": "x-test"}') == "yes"
+        assert by_name["local__add"].call('{"a": 1}') == "2"
+        assert (tmp_path / "local.log").exists()
+        assert not (tmp_path / "web.log").exists()
+
+    def test_a_server_that_is_switched_off_is_not_started_or_mentioned(
+        self, start_hub, tmp_path
+    ):
         notices: list[str] = []
         configs = {"off": self.fake(enable=False), "on": self.fake()}
 
-        servers, _ = start_servers(configs, tmp_path, notices.append)
-        try:
-            assert [server.name for server in servers] == ["on"]
-            assert notices == []
-            assert not (tmp_path / "off.log").exists()
-        finally:
-            for server in servers:
-                server.close()
+        hub, _ = start_hub(configs, notices.append)
 
-    def test_placeholders_are_filled_in_from_the_environment(self, tmp_path):
+        assert list(hub.servers) == ["on"]
+        assert notices == []
+        assert not (tmp_path / "off.log").exists()
+
+    def test_placeholders_are_filled_in_from_the_environment(self, start_hub):
         configs = {"local": self.fake(env={"GIVEN": "${SOURCE}"})}
-        environ = {"SOURCE": "from-the-environment"}
 
-        servers, found = start_servers(
-            configs, tmp_path, lambda notice: None, environ=environ
+        _, found = start_hub(configs, environ={"SOURCE": "from-the-environment"})
+
+        by_name = {tool.name: tool for tool in found}
+        assert by_name["local__getenv"].call('{"name": "GIVEN"}') == (
+            "from-the-environment"
         )
-        try:
-            by_name = {tool.name: tool for tool in found}
-            assert by_name["local__getenv"].call('{"name": "GIVEN"}') == (
-                "from-the-environment"
-            )
-            # Only what the file names is passed on, not the variable it came from.
-            assert by_name["local__getenv"].call('{"name": "SOURCE"}') == "unset"
-        finally:
-            for server in servers:
-                server.close()
+        # Only what the file names is passed on, not the variable it came from.
+        assert by_name["local__getenv"].call('{"name": "SOURCE"}') == "unset"
 
     def test_a_program_starts_in_the_directory_muagent_runs_in(
-        self, tmp_path, monkeypatch
+        self, start_hub, tmp_path, monkeypatch
     ):
         project = tmp_path / "project"
         project.mkdir()
         monkeypatch.chdir(project)
 
-        servers, found = start_servers(
-            {"local": self.fake()}, tmp_path, lambda notice: None
-        )
-        try:
-            by_name = {tool.name: tool for tool in found}
-            result = by_name["local__getcwd"].call("{}")
-            assert Path(result).resolve() == project.resolve()
-        finally:
-            for server in servers:
-                server.close()
+        _, found = start_hub({"local": self.fake()})
 
-    def test_headers_are_filled_in_too(self, tmp_path, http_url):
+        by_name = {tool.name: tool for tool in found}
+        result = by_name["local__getcwd"].call("{}")
+        assert Path(result).resolve() == project.resolve()
+
+    def test_headers_are_filled_in_too(self, start_hub, http_url):
         configs = {
             "web": McpServerConfig(
                 url=http_url, headers={"Authorization": "Bearer ${TOKEN}"}
             )
         }
 
-        servers, found = start_servers(
-            configs, tmp_path, lambda notice: None, environ={"TOKEN": "s3cret"}
-        )
-        try:
-            header = {tool.name: tool for tool in found}["web__header"]
-            assert header.call('{"name": "authorization"}') == "Bearer s3cret"
-        finally:
-            for server in servers:
-                server.close()
+        _, found = start_hub(configs, environ={"TOKEN": "s3cret"})
 
-    def test_a_server_whose_variable_is_not_set_is_reported_and_skipped(self, tmp_path):
+        header = {tool.name: tool for tool in found}["web__header"]
+        assert header.call('{"name": "authorization"}') == "Bearer s3cret"
+
+    def test_a_server_whose_variable_is_not_set_is_reported_and_skipped(
+        self, start_hub, tmp_path
+    ):
         notices: list[str] = []
         configs = {
             "first": self.fake(),
@@ -291,28 +244,29 @@ class TestStartServers:
             "last": self.fake(),
         }
 
-        servers, _ = start_servers(configs, tmp_path, notices.append, environ={})
-        try:
-            assert [server.name for server in servers] == ["first", "last"]
-            assert notices == [
-                "MCP server 'needs': env.K uses ${NOT_SET}, which is not set"
-            ]
-            assert not (tmp_path / "needs.log").exists()  # it was never launched
-        finally:
-            for server in servers:
-                server.close()
+        hub, _ = start_hub(configs, notices.append, environ={})
 
-    def test_no_servers_is_no_work(self, tmp_path):
-        assert start_servers({}, tmp_path, print) == ([], [])
+        assert list(hub.servers) == ["first", "last"]
+        assert notices == [
+            "MCP server 'needs': env.K uses ${NOT_SET}, which is not set"
+        ]
+        assert not (tmp_path / "needs.log").exists()  # it was never launched
+
+    def test_no_servers_is_no_work(self, start_hub):
+        hub, found = start_hub({})
+
+        assert hub.servers == {} and found == []
 
 
-class TestReport:
+class TestStatuses:
     """What became of each server, for /servers: the notices are shown once."""
 
     def fake(self, **values):
         return McpServerConfig(command=sys.executable, args=[FAKE], **values)
 
-    def test_every_server_has_a_status_in_the_order_of_the_file(self, tmp_path):
+    def test_every_server_has_a_status_in_the_order_of_the_file(
+        self, start_hub, tmp_path
+    ):
         configs = {
             "good": self.fake(tools=["add", "read_file"]),
             "off": self.fake(enable=False),
@@ -320,43 +274,26 @@ class TestReport:
             "unset": self.fake(env={"K": "${NOT_SET_ANYWHERE}"}),
         }
         notices: list[str] = []
-        report: list[ServerStatus] = []
 
-        servers, found = start_servers(
-            configs, tmp_path, notices.append, environ={}, report=report
-        )
-        try:
-            by = {status.name: status for status in report}
-            assert list(by) == list(configs)
-            assert by["good"].state == "running"
-            assert by["good"].tools == ("good__add", "good__read_file")
-            assert by["good"].hidden == 16 and by["good"].log == tmp_path / "good.log"
-            assert [t.name for t in found] == ["good__add", "good__read_file"]
-            assert by["off"].state == "off" and by["off"].tools == ()
-            assert by["bad"].state == "failed" and by["unset"].state == "failed"
-            assert "FileNotFoundError" in by["bad"].detail
-            assert "NOT_SET_ANYWHERE" in by["unset"].detail
-            # The detail is the notice that was shown, to be shown again.
-            assert notices == [by["bad"].detail, by["unset"].detail]
-        finally:
-            close_servers(servers)
+        hub, found = start_hub(configs, notices.append, environ={})
 
-    def test_a_url_server_has_no_log(self, tmp_path):
-        with serve_http() as url:
-            report: list[ServerStatus] = []
-            servers, _ = start_servers(
-                {"web": McpServerConfig(url=url, tools=["add"])},
-                tmp_path,
-                lambda text: None,
-                report=report,
-            )
-            try:
-                assert report[0].state == "running" and report[0].log is None
-            finally:
-                close_servers(servers)
+        by = {status.name: status for status in hub.statuses}
+        assert list(by) == list(configs)
+        assert by["good"].state == "running"
+        assert by["good"].tools == ("good__add", "good__read_file")
+        assert by["good"].hidden == 16 and by["good"].log == tmp_path / "good.log"
+        assert [t.name for t in found] == ["good__add", "good__read_file"]
+        assert by["off"].state == "off" and by["off"].tools == ()
+        assert by["bad"].state == "failed" and by["unset"].state == "failed"
+        assert "FileNotFoundError" in by["bad"].detail
+        assert "NOT_SET_ANYWHERE" in by["unset"].detail
+        # The detail is the notice that was shown, to be shown again.
+        assert notices == [by["bad"].detail, by["unset"].detail]
 
-    def test_the_report_is_optional(self, tmp_path):
-        assert start_servers({}, tmp_path, print) == ([], [])
+    def test_a_url_server_has_no_log(self, start_hub, http_url):
+        hub, _ = start_hub({"web": McpServerConfig(url=http_url, tools=["add"])})
+
+        assert hub.statuses[0].state == "running" and hub.statuses[0].log is None
 
 
 class TestStartingTogether:
@@ -364,17 +301,17 @@ class TestStartingTogether:
         return McpServerConfig(command="sleep", args=["30"], startup_timeout=timeout)
 
     def test_servers_that_never_answer_delay_the_start_by_one_timeout_not_the_sum(
-        self, tmp_path
+        self, start_hub
     ):
         notices: list[str] = []
         started = time.monotonic()
 
-        servers, found = start_servers(
-            {f"hang{i}": self.hanging() for i in range(4)}, tmp_path, notices.append
+        hub, found = start_hub(
+            {f"hang{i}": self.hanging() for i in range(4)}, notices.append
         )
 
         elapsed = time.monotonic() - started
-        assert (servers, found) == ([], []) and len(notices) == 4
+        assert hub.servers == {} and found == [] and len(notices) == 4
         # One timeout (1 s) and one stop (the SDK waits 2 s for a server that does not
         # leave), together: it was 4 x 3 s when each was waited for in turn.
         assert elapsed < 6
@@ -392,8 +329,6 @@ class TestStartingTogether:
         assert "mcp-hang" not in [t.name for t in threading.enumerate()]
 
     def test_servers_are_closed_together(self, tmp_path):
-        from muagent.mcp_hub import close_servers
-
         servers = [
             McpServer(f"slow{i}", self.hanging(30), tmp_path / f"{i}.log")
             for i in range(3)
@@ -411,7 +346,7 @@ class TestStartingTogether:
 
 
 class TestNamesAcrossServers:
-    def test_two_servers_cannot_give_the_model_the_same_tool_name(self, tmp_path):
+    def test_two_servers_cannot_give_the_model_the_same_tool_name(self, start_hub):
         configs = {
             "outer": McpServerConfig(
                 command=sys.executable, args=[FAKE], tools=["inner__tool"]
@@ -421,14 +356,11 @@ class TestNamesAcrossServers:
             ),
         }
 
-        servers, found = start_servers(configs, tmp_path, lambda text: None)
-        try:
-            names = [tool.name for tool in found]
-            assert len(names) == len(set(names)) == 2
-            assert "outer__inner__tool" in names
-        finally:
-            for server in servers:
-                server.close()
+        _, found = start_hub(configs)
+
+        names = [tool.name for tool in found]
+        assert len(names) == len(set(names)) == 2
+        assert "outer__inner__tool" in names
 
 
 class TestHub:
