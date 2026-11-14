@@ -135,6 +135,10 @@ What must stay true:
 - **A tool that is not `read_only` runs only if `confirm(tool, arguments)` returns true or
   `"always"`** (which allows that tool for the session). The default denies. A call whose
   arguments `check` rejects is answered without asking.
+- **Only read-only calls run together** (on threads, `Agent._run_tools`); any other call
+  runs alone, after the calls before it. The outputs are added in the order of the calls.
+  `Console` is used from the main thread only, so a call that asks never asks at the same
+  time as another.
 - **Trimming never drops the summary or the newest user message.** The budget is for the
   whole request; the in-turn check uses the server's `usage.input_tokens` plus an
   estimate of what was added, shortens old tool results before dropping them, then the

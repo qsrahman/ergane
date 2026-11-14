@@ -84,6 +84,9 @@ class Tool:
     # may raise.
     runner: Callable[[str], str | ToolOutput]
     read_only: bool  # False if it may change anything outside the program
+    # Stops the calls of this tool that are running, if that can be done: called when
+    # the user presses Ctrl-C while several calls run together.
+    cancel: Callable[[], None] | None = None
 
     @classmethod
     def from_function(

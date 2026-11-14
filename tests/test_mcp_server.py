@@ -157,6 +157,27 @@ class TestServer:
         )
         assert by_name["fake__add"].call('{"a": 1, "b": 1}') == "2"
 
+    def test_cancel_ends_the_calls_that_are_waiting_and_the_server_stays_usable(
+        self, make_server
+    ):
+        server = make_server()
+        by_name = {tool.name: tool for tool in server.tools()}
+        results: list[str] = []
+        waiting = threading.Thread(
+            target=lambda: results.append(by_name["fake__slow"].call('{"seconds": 5}'))
+        )
+        waiting.start()
+        time.sleep(0.5)
+
+        started = time.monotonic()
+        assert by_name["fake__slow"].cancel is not None
+        by_name["fake__slow"].cancel()  # pyright: ignore[reportOptionalCall]
+        waiting.join(5)
+
+        assert time.monotonic() - started < 2
+        assert results and results[0].startswith("Error:")
+        assert by_name["fake__add"].call('{"a": 1, "b": 1}') == "2"
+
     def test_ctrl_c_stops_waiting_and_the_server_stays_usable(self, make_server):
         server = make_server()
         by_name = {tool.name: tool for tool in server.tools()}
@@ -560,6 +581,26 @@ class TestConnectionLost:
         self.kill(server, tools["fake__pid"])
 
         assert tools["fake__add"].call('{"a": 1, "b": 2}') == "3"  # no error at all
+
+    def test_calls_on_several_threads_at_once_start_a_dead_server_once(
+        self, make_server
+    ):
+        server = make_server()
+        tools = {t.name: t for t in server.tools()}
+        self.kill(server, tools["fake__pid"])
+        results: list[str] = []
+
+        def call() -> None:
+            results.append(tools["fake__add"].call('{"a": 1, "b": 2}'))
+
+        threads = [threading.Thread(target=call) for _ in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(30)
+
+        assert results == ["3"] * 6
+        assert server._restarts == 1  # pyright: ignore[reportPrivateUsage]
 
     def test_the_call_that_found_it_dead_fails_and_the_next_works(self, make_server):
         server = make_server()

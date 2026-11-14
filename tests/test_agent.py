@@ -1,5 +1,9 @@
+import os
 import re
+import signal
 import socket
+import threading
+import time
 from datetime import date
 
 import pytest
@@ -936,17 +940,158 @@ class TestAgentToolLoop:
         agent.run_turn("go on")  # the history is valid: the API takes it
         assert fake_server.requests[-1]["input"][2] == FIRST_OUTPUT
 
+    def test_read_only_calls_of_one_response_run_at_the_same_time(
+        self, make_agent, streaming
+    ):
+        spans: list[tuple[float, float]] = []
+
+        def slow_read(path: str) -> str:
+            """Read a text file."""
+            begun = time.monotonic()
+            time.sleep(0.4)
+            spans.append((begun, time.monotonic()))
+            return path
+
+        agent = make_agent(tools=[tool_with(slow_read)], STREAMING=streaming)
+
+        agent.run_turn("tool_call_parallel")
+
+        # Each began before either ended: one after the other would not do that.
+        assert len(spans) == 2
+        assert max(begun for begun, _ in spans) < min(end for _, end in spans)
+
+    def test_the_outputs_are_in_the_order_of_the_calls_whoever_ends_first(
+        self, make_agent, fake_server, streaming
+    ):
+        def first_is_slower(path: str) -> str:
+            """Read a text file."""
+            if path == "notes.txt":
+                time.sleep(0.4)
+            return f"contents of {path}"
+
+        agent = make_agent(tools=[tool_with(first_is_slower)], STREAMING=streaming)
+
+        agent.run_turn("tool_call_parallel")
+
+        outputs = [
+            (i["call_id"], i["output"])
+            for i in fake_server.requests[1]["input"]
+            if i.get("type") == "function_call_output"
+        ]
+        assert outputs == [
+            ("call_1", "contents of notes.txt"),
+            ("call_2", "contents of todo.txt"),
+        ]
+
+    def test_each_call_is_shown_before_any_of_them_ends(self, make_agent, streaming):
+        log: list[str] = []
+
+        def read(path: str) -> str:
+            """Read a text file."""
+            time.sleep(0.2)
+            log.append(f"ran {path}")
+            return path
+
+        agent = make_agent(tools=[tool_with(read)], STREAMING=streaming)
+
+        agent.run_turn(
+            "tool_call_parallel", on_call=lambda name, arguments: log.append("shown")
+        )
+
+        assert log[:2] == ["shown", "shown"]
+
+    def test_calls_that_are_not_read_only_run_one_at_a_time_and_ask_each(
+        self, make_agent, streaming
+    ):
+        log: list[str] = []
+
+        def write(path: str) -> str:
+            """Write a text file."""
+            log.append(f"start {path}")
+            time.sleep(0.2)
+            log.append(f"end {path}")
+            return path
+
+        write.__name__ = "read_file"
+        agent = make_agent(
+            tools=[Tool.from_function(write, read_only=False)], STREAMING=streaming
+        )
+        asked: list[str] = []
+
+        def confirm(tool, arguments):
+            asked.append(arguments)
+            return True
+
+        agent.run_turn("tool_call_parallel", confirm=confirm)
+
+        assert log == [
+            "start notes.txt",
+            "end notes.txt",
+            "start todo.txt",
+            "end todo.txt",
+        ]
+        assert len(asked) == 2
+
+    def test_a_call_that_writes_waits_for_the_reads_before_it_and_the_reads_after_wait_for_it(
+        self, make_agent, streaming
+    ):
+        log: list[str] = []
+
+        def read_file(path: str) -> str:
+            """Read a text file."""
+            log.append(f"read {path} start")
+            time.sleep(0.2)
+            log.append(f"read {path} end")
+            return path
+
+        def write_file(path: str) -> str:
+            """Write a text file."""
+            log.append("write")
+            return path
+
+        agent = make_agent(
+            tools=[
+                Tool.from_function(read_file),
+                Tool.from_function(write_file, read_only=False),
+            ],
+            STREAMING=streaming,
+        )
+
+        agent.run_turn("tool_call_mixed", confirm=lambda tool, arguments: True)
+
+        assert log == [
+            "read notes.txt start",
+            "read notes.txt end",
+            "write",
+            "read todo.txt start",
+            "read todo.txt end",
+        ]
+
+    @staticmethod
+    def press_ctrl_c(after: float = 0.3) -> threading.Timer:
+        """Send SIGINT to this process after a while, as the terminal does."""
+        timer = threading.Timer(after, lambda: os.kill(os.getpid(), signal.SIGINT))
+        timer.start()
+        return timer
+
     def test_ctrl_c_while_a_tool_runs_keeps_the_call_with_an_output_that_says_so(
         self, make_agent, fake_server, streaming
     ):
-        def interrupted(path: str) -> str:
+        release = threading.Event()
+
+        def hangs(path: str) -> str:
             """Read a text file."""
-            raise KeyboardInterrupt
+            release.wait(10)
+            return "late"
 
-        agent = make_agent(tools=[tool_with(interrupted)], STREAMING=streaming)
-
-        with pytest.raises(KeyboardInterrupt):
-            agent.run_turn("tool_call")
+        agent = make_agent(tools=[tool_with(hangs)], STREAMING=streaming)
+        timer = self.press_ctrl_c()
+        try:
+            with pytest.raises(KeyboardInterrupt):
+                agent.run_turn("tool_call")
+        finally:
+            timer.cancel()
+            release.set()
 
         items = agent.context.items
         assert [i.get("type") or i["role"] for i in items] == [
@@ -963,21 +1108,22 @@ class TestAgentToolLoop:
     def test_ctrl_c_in_one_of_two_calls_keeps_the_finished_output(
         self, make_agent, streaming
     ):
-        calls = []
+        release = threading.Event()
 
-        def second_is_interrupted(path: str) -> str:
+        def second_hangs(path: str) -> str:
             """Read a text file."""
-            calls.append(path)
-            if len(calls) == 2:
-                raise KeyboardInterrupt
+            if path == "todo.txt":
+                release.wait(10)
             return f"contents of {path}"
 
-        agent = make_agent(
-            tools=[tool_with(second_is_interrupted)], STREAMING=streaming
-        )
-
-        with pytest.raises(KeyboardInterrupt):
-            agent.run_turn("tool_call_parallel")
+        agent = make_agent(tools=[tool_with(second_hangs)], STREAMING=streaming)
+        timer = self.press_ctrl_c()
+        try:
+            with pytest.raises(KeyboardInterrupt):
+                agent.run_turn("tool_call_parallel")
+        finally:
+            timer.cancel()
+            release.set()
 
         outputs = [
             i["output"]

@@ -273,6 +273,11 @@ class McpServer:
         self._started = False  # the connection has been up at least once
         self._closed = False  # close() was called: do not start it again
         self._restarts = 0
+        # Calls run on several threads at once; checking the connection and starting
+        # the server again must happen once, not once for each of them.
+        self._connection_lock = threading.Lock()
+        # The requests waiting for an answer, so that Ctrl-C can cancel them.
+        self._inflight: set[concurrent.futures.Future[Any]] = set()
         self._active = 0.0  # when the server last answered
         self.hidden = 0  # tools it has that the config leaves out, after tools()
         # What the server says about using its tools, once connected.
@@ -583,6 +588,7 @@ class McpServer:
             _required_keys_check(definition.input_schema),
             runner,
             self._config.read_only,
+            self.cancel_inflight,
         )
 
     def _submit[T](
@@ -603,9 +609,17 @@ class McpServer:
                 and the connection stays usable.
             KeyboardInterrupt: On Ctrl-C, after cancelling the request.
         """
-        if self._started and not self._closed and (self._lost() or self._stale()):
-            self._restart()
+        if self._started and not self._closed:
+            with self._connection_lock:
+                if self._lost() or self._stale():
+                    self._restart()
         return self._run(make, timeout)
+
+    def cancel_inflight(self) -> None:
+        """Cancel the requests that are waiting for an answer: each caller gets an
+        error. The SDK tells the server, which can stop the work."""
+        for future in list(self._inflight):
+            future.cancel()
 
     def _run[T](
         self,
@@ -617,6 +631,7 @@ class McpServer:
         if loop is None or session is None:
             raise McpServerError(f"MCP server {self.name!r} is not running")
         future = asyncio.run_coroutine_threadsafe(make(session), loop)
+        self._inflight.add(future)
         try:
             result = future.result(timeout)
         except TimeoutError:
@@ -632,6 +647,8 @@ class McpServer:
             raise McpServerError(
                 f"MCP server {self.name!r}: {type(leaf).__name__}: {leaf}"
             ) from None
+        finally:
+            self._inflight.discard(future)
         self._active = time.monotonic()
         return result
 

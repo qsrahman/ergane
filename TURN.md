@@ -176,7 +176,7 @@ the response that ends the turn needs text.
 
 ## 5. Tool calls (`_run_tools`)
 
-The calls of one response run one after another, in order. Each gets exactly one
+The calls of one response are answered in order, and each gets exactly one
 `function_call_output`, whatever happens to it, because the API rejects a call with
 no output (400) and an output with no call:
 
@@ -196,6 +196,14 @@ no output (400) and an output with no call:
   allows the call and every later call to that tool until muagent ends (`Agent.always_allowed`,
   by tool name). End of
   input counts as no; Ctrl-C stops the turn (§8).
+- **Read-only calls that follow one another run at the same time**, each on a thread of its
+  own (at most `MAX_PARALLEL_CALLS`, 8): they change nothing, so they cannot depend on one
+  another, and a batch takes as long as its slowest call, not the sum. Any other call is a
+  barrier: it waits for the calls before it, runs alone, and the user is asked about it
+  alone. The `[…]` lines of a batch print before it starts, in the order of the calls, and
+  the outputs are added in that order whichever call ends first. Ctrl-C cancels the
+  requests that are still waiting (`Tool.cancel`; for an MCP tool, the SDK tells the
+  server) and keeps the outputs of the calls that had ended.
 - **A result is never shown to you.** It goes to the model, whose reply is meant to
   say what it found.
 - After the calls, the items grow by the model's own output (its reasoning and its
@@ -210,7 +218,7 @@ that: it is not caught here, but `run_turn` keeps the turn, §8). A result over 
 `[output truncated: N more characters]`.
 
 For an MCP tool the runner hands the request to that server's own thread, where the
-async SDK runs, and waits for the answer for at most `call_timeout` (60 s unless the
+async SDK runs, and waits for the answer for at most `call_timeout` (300 s unless the
 server's entry in `config.json` says otherwise). Text blocks are joined (so is a text file the server embedded; a result with only
 structured content is that as JSON); other blocks become a placeholder such as
 `[image: image/png]`; a server-side error gets an `Error:` prefix. A call that times out is cancelled and the connection stays usable

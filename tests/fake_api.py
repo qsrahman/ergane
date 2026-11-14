@@ -70,6 +70,12 @@ TOOL_CALLS = {
     "tool_call": [FUNCTION_CALL],
     "tool_call_reasoning": [REASONING_ITEM, FUNCTION_CALL],
     "tool_call_parallel": [FUNCTION_CALL, SECOND_FUNCTION_CALL],
+    # A read, a write, a read: the write is a barrier between the two reads.
+    "tool_call_mixed": [
+        FUNCTION_CALL,
+        {**SECOND_FUNCTION_CALL, "name": "write_file"},
+        {**SECOND_FUNCTION_CALL, "id": "fc_3", "call_id": "call_3"},
+    ],
     "tool_call_flaky": [FUNCTION_CALL],
 }
 
@@ -210,7 +216,8 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     `error` event, with or without a code, after the first delta, then the stream
     ends), "tool_call" (calls a tool until its output is in the input, then
     replies with text), "tool_call_reasoning" (the same, with a reasoning item
-    before each call), "tool_call_parallel" (two calls in one response),
+    before each call), "tool_call_parallel" (two calls in one response), "tool_call_mixed" (a call to
+    read_file, one to write_file, another to read_file),
     "tool_loop" (calls a tool every time), "http_error" (a 400 response), "usage" (a reply that carries a token count), "overflow_once" and "overflow" (a request refused as too long, the first time or
     every time), "status_N" (an error response with
     status N and an OpenAI-style body),

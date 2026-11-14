@@ -20,6 +20,7 @@ change it:
 """
 
 import platform
+import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -30,6 +31,7 @@ from openai.types.responses import (
     FunctionToolParam,
     Response,
     ResponseFunctionToolCall,
+    ResponseInputItemParam,
     ResponseInputParam,
 )
 
@@ -49,7 +51,7 @@ from muagent.prompts import (
     SYSTEM_PROMPT_NO_TOOLS,
 )
 from muagent.responses import NO_TEXT, Responder, ResponseSettings, response_problem
-from muagent.tools import Tool
+from muagent.tools import Tool, ToolOutput
 
 # The reason in the note that closes a turn the user stopped.
 INTERRUPTED = "interrupted by the user"
@@ -72,6 +74,59 @@ class AgentSettings(ResponseSettings, CompactionSettings, Protocol):
 
     @property
     def api_key(self) -> _Secret: ...
+
+
+# Calls to read-only tools that run at the same time, at most.
+MAX_PARALLEL_CALLS = 8
+
+# How long to wait, after Ctrl-C, for calls that were cancelled to end.
+_CANCEL_SECONDS = 2
+
+
+class _Running:
+    """A tool call running on a thread of its own, which ends when the call does.
+
+    The thread is a daemon: a call that cannot be stopped (a plain function) must not
+    keep muagent from exiting.
+    """
+
+    def __init__(
+        self, tool: Tool, arguments: str, slots: threading.BoundedSemaphore
+    ) -> None:
+        self.tool = tool
+        self.result: ToolOutput | None = None
+        self.thread = threading.Thread(
+            target=self._run,
+            args=(arguments, slots),
+            name=f"call-{tool.name}",
+            daemon=True,
+        )
+        self.thread.start()
+
+    def cancel(self) -> bool:
+        """Ask the tool to stop this call, if it is still running and the tool can;
+        whether it was asked to."""
+        if self.thread.is_alive() and self.tool.cancel:
+            self.tool.cancel()
+            return True
+        return False
+
+    def _run(self, arguments: str, slots: threading.BoundedSemaphore) -> None:
+        with slots:
+            self.result = self.tool.call_output(arguments)
+
+
+def _output_item(
+    call: ResponseFunctionToolCall, result: ToolOutput | None
+) -> ResponseInputItemParam:
+    """The item that answers a call: the output of a tool, or, for a call whose thread
+    ended without one, a note that says so."""
+    result = result or ToolOutput("Error: the call ended without a result.")
+    return {
+        "type": "function_call_output",
+        "call_id": call.call_id,
+        "output": function_output(result.text, result.images),
+    }
 
 
 @dataclass
@@ -114,6 +169,7 @@ class Agent:
             base_url=config.base_url,
         )
         self.responder = Responder(self.client, config)
+        self._slots = threading.BoundedSemaphore(MAX_PARALLEL_CALLS)
         self.context = Context()
         # Tools the user allowed for the rest of the session, by name.
         self.always_allowed: set[str] = set()
@@ -528,11 +584,17 @@ class Agent:
         on_call: Callable[[str, str], None],
         confirm: Callable[[Tool, str], bool | Literal["always"]],
     ) -> None:
-        """Run the model's tool calls, adding each output to `items` as it is done.
+        """Run the model's tool calls, adding each output to `items` in the order of
+        the calls.
 
         Every call gets an output, even a failed, unknown or denied one: the output
         is text for the model, which can read the error and correct its call. A
         tool that is not read-only runs only if `confirm` allows the call.
+
+        Calls to read-only tools that follow one another run at the same time, each on
+        a thread of its own: they change nothing, so they cannot depend on each other.
+        Any other call waits for the ones before it and runs alone, so the user is
+        asked about one call at a time and a call that writes sees what came before.
 
         Args:
             calls: The function calls in the model's response.
@@ -544,40 +606,63 @@ class Agent:
                 it found.
             confirm: Asked before each call to a tool that is not read-only.
         """
+        together: list[tuple[ResponseFunctionToolCall, _Running]] = []
+
+        def settle() -> None:
+            """Wait for the calls that run together, and add their outputs."""
+            try:
+                for _, running in together:
+                    running.thread.join()
+            except KeyboardInterrupt:
+                # Stop what can be stopped, and keep what is done: the rest is
+                # answered as interrupted by the caller.
+                cancelled = [r for _, r in together if r.cancel()]
+                for running in cancelled:
+                    running.thread.join(_CANCEL_SECONDS)
+                for call, running in together:
+                    if not running.thread.is_alive():
+                        items.append(_output_item(call, running.result))
+                raise
+            for call, running in together:
+                items.append(_output_item(call, running.result))
+            together.clear()
+
         for call in calls:
             tool = self.tools.get(call.name)
             problem = tool.check(call.arguments) if tool else None
+            if tool is not None and problem is None and tool.read_only:
+                on_call(call.name, call.arguments)
+                together.append((call, _Running(tool, call.arguments, self._slots)))
+                continue
+            settle()  # what came before is answered first
             # `confirm` shows the call it asks about, so such a call gets no line here.
             asks = (
                 tool is not None
                 and problem is None
-                and not tool.read_only
                 and tool.name not in self.always_allowed
             )
             if not asks:
                 on_call(call.name, call.arguments)
+            result: ToolOutput
             if tool is None:
                 known = ", ".join(self.tools) or "none"
-                output = f"Unknown tool: {call.name}. Available tools: {known}."
+                result = ToolOutput(
+                    f"Unknown tool: {call.name}. Available tools: {known}."
+                )
             elif problem:
                 # A call that would be rejected is not worth asking the user about.
-                output = problem
+                result = ToolOutput(problem)
             else:
                 answer = confirm(tool, call.arguments) if asks else True
                 if answer == "always":
                     self.always_allowed.add(tool.name)
-                if answer:
-                    result = tool.call_output(call.arguments)
-                    output = function_output(result.text, result.images)
-                else:
-                    output = "The user denied this call."
-            items.append(
-                {
-                    "type": "function_call_output",
-                    "call_id": call.call_id,
-                    "output": output,
-                }
-            )
+                result = (
+                    tool.call_output(call.arguments)
+                    if answer
+                    else ToolOutput("The user denied this call.")
+                )
+            items.append(_output_item(call, result))
+        settle()
 
     @staticmethod
     def _next_request_tokens(
