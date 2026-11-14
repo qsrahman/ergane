@@ -99,7 +99,7 @@ The modules, in dependency order (each imports only from those above it):
   them, at a terminal in the background, and starts one again for `/reconnect`), and a
   `ServerStatus` per server, which records what became of it for `/servers`.
 - `errors.py`, `prompts.py`: `TurnError`, `StreamCut`, `describe_error`,
-  `is_context_overflow`; the three prompts as text. They import nothing of muagent.
+  `is_context_overflow`, `is_images_rejected`; the three prompts as text. They import nothing of muagent.
 - `config.py`: `Config`, `load_config()`, `EFFORTS`, the XDG directories.
 - `context.py`: `Context` (the history and the summary), `estimate_tokens()`, and the
   functions on a turn's items (`drop_outputs`, `answer_open_calls`, `transcript`,

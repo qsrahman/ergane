@@ -133,7 +133,9 @@ class TestAgentRunTurn:
         with pytest.raises(TurnError, match="Stopped after 5 model calls"):
             agent.run_turn("novision_tool_loop", on_notice=notices.append)
 
-        assert len(notices) == 2  # the rounds that got a picture back
+        # Every round got a picture back; the last one's was never sent. Sending a
+        # request again without them is not one of the 5 calls.
+        assert len(notices) == 4
         assert "input_image" not in str(fake_server.requests[-1]["input"])
 
     def test_an_error_that_is_not_about_pictures_leaves_them_alone(
@@ -247,6 +249,16 @@ class TestAgentRunTurn:
         agent.run_turn("empty_once", on_notice=notices.append)
 
         assert notices == ["The model sent an empty reply; trying again"]
+        assert len(fake_server.requests) == 2
+        assert agent.context.items[-1]["content"] == "Hello world"  # type: ignore[index]
+
+    def test_asking_again_is_not_one_of_the_model_calls_a_turn_may_make(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = make_agent(STREAMING=streaming, MAX_TURNS=1)
+
+        agent.run_turn("empty_once")
+
         assert len(fake_server.requests) == 2
         assert agent.context.items[-1]["content"] == "Hello world"  # type: ignore[index]
 

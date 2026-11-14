@@ -368,9 +368,7 @@ class McpServer:
             if len(text) > _MAX_INSTRUCTION_CHARS:
                 text = text[:_MAX_INSTRUCTION_CHARS] + "…"
             self.instructions = text or None
-        except BaseException as exc:
-            if not isinstance(exc, Exception):
-                raise  # Ctrl-C
+        except Exception as exc:  # noqa: BLE001
             if isinstance(exc, TimeoutError):
                 reason = f"did not answer within {self._config.startup_timeout:g} s"
             else:

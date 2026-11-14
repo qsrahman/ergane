@@ -58,12 +58,8 @@ def _fail(kind: str, **details: Any) -> NoReturn:
 
 
 class _ConfigFile(JsonConfigSettingsSource):
-    """The settings in config.json, under the names a user writes there.
-
-    The environment calls three settings `OPENAI_*`, which is also what pydantic
-    knows them by; in the file they are `model`, `base_url` and `api_key`, like the
-    others. A file that is not a JSON object is reported like any other mistake.
-    """
+    """The settings in config.json. A file that cannot be read, or is not a JSON
+    object, is reported like any other mistake."""
 
     def _read_file(self, file_path: Any) -> dict[str, Any]:
         try:
@@ -102,9 +98,7 @@ class Config(BaseSettings):
     """Configuration for the AI agent."""
 
     # A key that is not a setting is a mistake in config.json, and says so.
-    model_config = SettingsConfigDict(
-        extra="forbid", json_file_encoding="utf-8", validate_by_name=True
-    )
+    model_config = SettingsConfigDict(extra="forbid", json_file_encoding="utf-8")
     model: str = Field(
         min_length=1,
         default="gpt-5.4-mini",

@@ -312,6 +312,12 @@ class TestMistakes:
         with pytest.raises(ValidationError, match=r"modle\n  Extra inputs"):
             load_config()
 
+    def test_the_servers_have_one_spelling_in_the_file(self, user_file: Path):
+        write_json(user_file, {"api_key": "k", "mcp_servers": {}})
+
+        with pytest.raises(ValidationError, match=r"mcp_servers\n  Extra inputs"):
+            load_config()
+
     def test_a_bad_value_names_its_key(self, user_file: Path):
         write_json(user_file, {"api_key": "k", "max_turns": 0})
 

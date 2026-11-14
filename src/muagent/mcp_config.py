@@ -61,9 +61,6 @@ class McpServerConfig(BaseModel):
     # definition is sent with every request, so a server with many tools costs a
     # good part of the context budget whether or not the model uses them.
     tools: list[str] | None = Field(default=None, min_length=1)
-    # The defaults are Codex's: `npx` fetching a package for the first time takes
-    # longer than 20 s, and a tool that builds, browses or searches longer than 60 s.
-    # Ctrl-C stops a call that is not worth waiting for.
     # Pass the server's own description of how to use its tools to the model, in its
     # instructions. Off unless the user says so: the text is the server's, and a model
     # can be steered by it (gpt-oss:20b followed an order hidden in it 3 times in 5,
@@ -74,6 +71,9 @@ class McpServerConfig(BaseModel):
     # request until it is dropped, and a model without vision, or a compatible server
     # that does not take them in a tool's output, would fail.
     images: bool = False
+    # The defaults are Codex's: `npx` fetching a package for the first time takes
+    # longer than 20 s, and a tool that builds, browses or searches longer than 60 s.
+    # Ctrl-C stops a call that is not worth waiting for.
     startup_timeout: float = Field(default=30, gt=0)  # seconds
     call_timeout: float = Field(default=300, gt=0)  # seconds
 

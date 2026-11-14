@@ -34,7 +34,7 @@ import os
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from muagent.mcp_config import McpServerConfig, UnsetVariableError, fill_placeholders
 from muagent.mcp_server import McpServer, McpServerError
@@ -46,13 +46,14 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ServerStatus:
-    """What became of one server in config.json when muagent started, for `/servers`.
+    """What became of one server in config.json, at the start or at the last
+    `/reconnect`, for `/servers`.
 
     A server that failed is reported once, as a notice, and would be forgotten.
     """
 
     name: str
-    state: str  # "starting", "running", "failed" or "off"
+    state: Literal["starting", "running", "failed", "off"]
     detail: str = ""  # why it failed, or why it is off
     tools: tuple[str, ...] = ()  # the names of the tools it offers the model
     hidden: int = 0  # tools it has that its `tools` setting leaves out

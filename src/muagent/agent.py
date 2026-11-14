@@ -243,7 +243,11 @@ class Agent:
             on_notice("Context trimmed: oldest turns dropped")
         turn = _Turn(prompt, items)
 
-        for _ in range(self.config.max_turns):
+        # Asking again (below) is not one of the calls the cap counts, or the last
+        # of them would be announced and never sent. Each happens a bounded number
+        # of times in a turn, so the loop ends.
+        asked = 0
+        while asked < self.config.max_turns:
             response = self._ask(turn, on_text, on_notice)
             if response is None:  # the request was shortened: ask again
                 continue
@@ -252,6 +256,7 @@ class Agent:
                 turn.emptied = True
                 on_notice("The model sent an empty reply; trying again")
                 continue
+            asked += 1
             calls = [item for item in response.output if item.type == "function_call"]
             if problem or not calls:
                 break
