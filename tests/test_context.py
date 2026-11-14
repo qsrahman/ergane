@@ -7,9 +7,11 @@ from helpers import make_context
 from muagent.context import (
     DROPPED_OUTPUT,
     IMAGE_DROPPED,
+    IMAGE_REFUSED,
     IMAGE_TOKENS,
     PRUNE_CHARS,
     Context,
+    drop_images,
     drop_outputs,
     estimate_tokens,
     function_output,
@@ -347,6 +349,31 @@ class TestPictures:
         text = transcript([shot_output("the page")])  # pyright: ignore[reportArgumentType]
 
         assert text == "[Tool result]: the page\n[image]"
+
+
+class TestRefusedPictures:
+    def test_every_picture_goes_and_the_text_stays(self):
+        plain = {"type": "function_call_output", "call_id": "c2", "output": "text"}
+        items: ResponseInputParam = [shot_output("the page"), plain]  # pyright: ignore[reportAssignmentType]
+
+        dropped = drop_images(items)
+
+        assert dropped == 1
+        assert rows(items)[0]["output"] == f"the page\n{IMAGE_REFUSED}"
+        assert rows(items)[1] is plain  # not touched
+
+    def test_the_items_are_replaced_not_edited(self):
+        original = shot_output()
+        items: ResponseInputParam = [original]  # pyright: ignore[reportAssignmentType]
+
+        drop_images(items)
+
+        assert original["output"] != rows(items)[0]["output"]  # the history is shared
+
+    def test_nothing_to_drop_is_zero(self):
+        items: ResponseInputParam = [{"role": "user", "content": "hi"}]
+
+        assert drop_images(items) == 0
 
 
 class TestDroppingPictures:

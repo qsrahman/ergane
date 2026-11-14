@@ -9,7 +9,12 @@ from fake_api import TEXT
 from helpers import anchor, tool_with
 from muagent.compaction import COMPACT_FAILURES, SUMMARY_MAX_TOKENS, Compactor
 from muagent.context import PRUNE_CHARS, Context
-from muagent.errors import TurnError, describe_error, is_context_overflow
+from muagent.errors import (
+    TurnError,
+    describe_error,
+    is_context_overflow,
+    is_images_rejected,
+)
 from muagent.prompts import COMPACT_PROMPT
 
 
@@ -412,6 +417,38 @@ class TestOverflowDetection:
     )
     def test_other_errors_are_not_it(self, status, message):
         assert not is_context_overflow(self.error(status, message))
+
+
+class TestImagesRejectedDetection:
+    def error(self, status: int, message: str):
+        return TestOverflowDetection().error(status, message)
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Multimodal data provided, but model does not support multimodal requests",
+            "Invalid content type. image_url is only supported by certain models.",
+            "this model does not support image input",
+            "Vision is not supported by this model",
+        ],
+    )
+    def test_the_ways_servers_say_it(self, message):
+        assert is_images_rejected(self.error(400, message))
+
+    @pytest.mark.parametrize(
+        ("status", "message"),
+        [
+            (400, "invalid tool schema"),
+            (400, "the image is too blurry"),  # not about the model
+            (429, "image input is not supported"),
+            (500, "multimodal not supported"),
+        ],
+    )
+    def test_other_errors_are_not_it(self, status, message):
+        assert not is_images_rejected(self.error(status, message))
+
+    def test_something_that_is_not_an_api_error_is_not_it(self):
+        assert not is_images_rejected(ValueError("multimodal not supported"))
 
 
 @pytest.mark.parametrize("streaming", [True, False])

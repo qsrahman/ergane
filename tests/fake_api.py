@@ -221,7 +221,8 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     "tool_loop" (calls a tool every time), "http_error" (a 400 response), "usage" (a reply that carries a token count), "overflow_once" and "overflow" (a request refused as too long, the first time or
     every time), "status_N" (an error response with
     status N and an OpenAI-style body),
-    "tool_then_X" (a tool call, then the scenario X once the tool's output is
+    "picture_error" (a refusal for pictures, whatever the request holds), "novision_X" (scenario X, but a request that carries a picture is refused, as
+    by a model without vision), "tool_then_X" (a tool call, then the scenario X once the tool's output is
     in the input, such as "tool_then_failed"), or anything else for a completed
     response.
     """
@@ -245,6 +246,34 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
                 for earlier in self.server.requests[:-1]  # pyright: ignore[reportAttributeAccessIssue]
             )
             scenario = "hello" if seen else "empty"  # answered the second time
+        if scenario.startswith("novision_"):
+            # A model that takes no pictures: a request that carries one is refused.
+            scenario = scenario.removeprefix("novision_")
+            if "input_image" in json.dumps(body["input"]):
+                data = json.dumps(
+                    {
+                        "error": {
+                            "message": "Multimodal data provided, but model does "
+                            "not support multimodal requests"
+                        }
+                    }
+                ).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+        if scenario == "picture_error":  # refused for pictures, though there are none
+            data = json.dumps(
+                {"error": {"message": "this model does not support image input"}}
+            ).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if scenario.startswith("status_"):
             code = int(scenario.removeprefix("status_"))
             data = json.dumps(

@@ -287,6 +287,7 @@ only the replies. Calls and outputs are removed together, for the same reason as
 | `max_turns` rounds of tool calls                      | yes, with a closing note| `[Stopped after N model calls without a final answer]`        |
 | the turn outgrows `max_context_tokens`                | older, then the latest results are shortened and the turn goes on; if even that does not fit, kept with a note and its results dropped | `[Context full: older tool results dropped]`, `[… this round's tool results shortened]`, or `[This turn grew past the context budget …]` |
 | Ctrl-C                                                | yes after a completed round or while tools run; no in the first model call | `[Cancelled]`                           |
+| the server refuses a request because the model takes no pictures | as usual, if the retry works | `[The model does not take pictures, so they were dropped; set images to false …]`: the pictures of tool results are taken out, the text stays (`[image removed: …]`), and the request is sent again; only if there was a picture to take out |
 | the server refuses a request as too long (once a turn) | as usual, if the retry works | `[The request was too long for the model; trying again, shorter]`: before the first round the oldest turns are summarized, later the earlier results are shortened; then it is sent again |
 | the API or the network fails (after the SDK's retries)| no, unless a round already ran | `[API error …]` or `[Agent error: Type: message]`                         |
 

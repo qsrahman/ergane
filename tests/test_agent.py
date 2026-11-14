@@ -22,7 +22,7 @@ from fake_api import (
 )
 from helpers import make_config, make_context, tool_with
 from muagent.agent import Agent
-from muagent.context import DROPPED_OUTPUT, estimate_tokens
+from muagent.context import DROPPED_OUTPUT, IMAGE_REFUSED, estimate_tokens
 from muagent.errors import TurnError, describe_error
 from muagent.prompts import SERVER_NOTES, SYSTEM_PROMPT, SYSTEM_PROMPT_NO_TOOLS
 from muagent.responses import STREAM_RETRIES, response_problem
@@ -76,6 +76,77 @@ class TestAgentRunTurn:
             "output": output,
         }
         assert agent.context.items[2]["output"] == output  # type: ignore[index]
+
+    @staticmethod
+    def shot() -> Tool:
+        return Tool(
+            "read_file",
+            "Take a screenshot.",
+            {"type": "object", "properties": {}},
+            lambda arguments: None,
+            lambda arguments: ToolOutput("the page", (Image("aGk=", "image/png"),)),
+            True,
+        )
+
+    def test_a_model_that_takes_no_pictures_gets_the_turn_again_without_them(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = make_agent(tools=[self.shot()], STREAMING=streaming)
+        notices: list[str] = []
+
+        agent.run_turn("novision_tool_call", on_notice=notices.append)
+
+        assert len(fake_server.requests) == 3  # the call, the refusal, the retry
+        assert len(notices) == 1 and "does not take pictures" in notices[0]
+        assert "input_image" not in str(fake_server.requests[2]["input"])
+        # The history has the result as text, and a reply: the turn was saved whole.
+        assert agent.context.items[2]["output"] == f"the page\n{IMAGE_REFUSED}"  # type: ignore[index]
+        assert agent.context.items[-1]["role"] == "assistant"  # type: ignore[index]
+
+    def test_the_conversation_goes_on_after_that(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = make_agent(tools=[self.shot()], STREAMING=streaming)
+        agent.run_turn("novision_tool_call")
+
+        agent.run_turn("hello")
+
+        assert "input_image" not in str(fake_server.requests[-1]["input"])
+        assert agent.context.items[-1]["role"] == "assistant"  # type: ignore[index]
+
+    def test_a_refusal_with_no_picture_to_take_out_ends_the_turn(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = make_agent(STREAMING=streaming)
+
+        with pytest.raises(BadRequestError):
+            agent.run_turn("picture_error")
+
+        assert len(fake_server.requests) == 1  # nothing was sent again
+
+    def test_pictures_that_come_later_in_the_turn_are_taken_out_too(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = make_agent(tools=[self.shot()], STREAMING=streaming, MAX_TURNS=5)
+        notices: list[str] = []
+
+        with pytest.raises(TurnError, match="Stopped after 5 model calls"):
+            agent.run_turn("novision_tool_loop", on_notice=notices.append)
+
+        assert len(notices) == 2  # the rounds that got a picture back
+        assert "input_image" not in str(fake_server.requests[-1]["input"])
+
+    def test_an_error_that_is_not_about_pictures_leaves_them_alone(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = make_agent(tools=[self.shot()], STREAMING=streaming)
+
+        with pytest.raises(BadRequestError):
+            agent.run_turn("tool_then_http_error")
+
+        output = agent.context.items[2]["output"]  # type: ignore[index]
+        assert isinstance(output, list)  # the picture is still there
+        assert len(fake_server.requests) == 2  # and nothing was sent again
 
     def test_what_servers_say_follows_the_prompt_and_comes_before_the_environment(
         self, make_agent, fake_server, streaming

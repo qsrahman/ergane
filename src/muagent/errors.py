@@ -45,6 +45,20 @@ def is_context_overflow(exc: BaseException) -> bool:
     )
 
 
+def is_images_rejected(exc: BaseException) -> bool:
+    """Whether a server refused a request because the model takes no pictures.
+
+    Servers word it in their own way: Ollama says the model "does not support
+    multimodal requests", OpenAI that "image_url is only supported by certain models".
+    """
+    if not isinstance(exc, APIStatusError) or exc.status_code != 400:
+        return False
+    text = exc.message.lower()
+    return bool(re.search(r"image|multimodal|vision|picture", text)) and bool(
+        re.search(r"not support|unsupported|only supported|does not accept", text)
+    )
+
+
 def describe_error(exc: Exception) -> str:
     """One line for an exception that ended a turn, for the user.
 

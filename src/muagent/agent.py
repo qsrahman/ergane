@@ -39,11 +39,12 @@ from muagent.compaction import SUMMARY_MAX_TOKENS, CompactionSettings, Compactor
 from muagent.context import (
     Context,
     answer_open_calls,
+    drop_images,
     drop_outputs,
     estimate_tokens,
     function_output,
 )
-from muagent.errors import TurnError, is_context_overflow
+from muagent.errors import TurnError, is_context_overflow, is_images_rejected
 from muagent.prompts import (
     COMPACT_PROMPT,
     SERVER_NOTES,
@@ -304,10 +305,12 @@ class Agent:
     ) -> Response | None:
         """Send the turn's items and get the model's response.
 
-        A request the server refuses as too long is shortened and the caller asks
-        again (None), once in a turn. Any other failure ends the turn, and once a
-        round has completed the turn is kept first: every call has its output at this
-        point, so what the earlier rounds did (it may have had effects) is known.
+        A request the server refuses as too long is shortened, once in a turn, and one
+        it refuses because the model takes no pictures is sent again without them;
+        the caller asks again (None). Any other failure ends the turn,
+        and once a round has completed the turn is kept first: every call has its
+        output at this point, so what the earlier rounds did (it may have had
+        effects) is known.
 
         Raises:
             Exception: Whatever `Responder.send` raises.
@@ -322,6 +325,14 @@ class Agent:
                 tools=self._tool_params(),
             )
         except (Exception, KeyboardInterrupt) as exc:
+            # Only if there was a picture to take out: then the same request cannot
+            # be refused for it again, and this does not go on for ever.
+            if is_images_rejected(exc) and drop_images(turn.items):
+                on_notice(
+                    "The model does not take pictures, so they were dropped; "
+                    "set images to false for the server that sent them"
+                )
+                return None
             if is_context_overflow(exc) and not turn.refused:
                 turn.refused = True
                 if self._shrink(turn, on_notice):

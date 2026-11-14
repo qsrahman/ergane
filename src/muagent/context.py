@@ -48,6 +48,7 @@ def _is_user_message(item: object) -> bool:
 IMAGE_TOKENS = 1000
 
 IMAGE_DROPPED = "[image dropped to fit the context]"
+IMAGE_REFUSED = "[image removed: the model does not take pictures]"
 
 
 def function_output(
@@ -87,6 +88,24 @@ def _has_images(output: object) -> bool:
     return isinstance(output, list) and any(
         part.get("type") == "input_image" for part in output
     )
+
+
+def drop_images(items: ResponseInputParam) -> int:
+    """Take the pictures out of the tool results in `items`, which stay as text: what
+    to do when the model takes none. An item is replaced, not edited: the items of
+    earlier turns are shared with the history.
+
+    Returns:
+        How many results had pictures.
+    """
+    plain = cast(list[dict[str, Any]], items)
+    dropped = 0
+    for i, item in enumerate(plain):
+        if item.get("type") == "function_call_output" and _has_images(item["output"]):
+            text = f"{_text_parts(item['output'])}\n{IMAGE_REFUSED}"
+            plain[i] = {**item, "output": text}
+            dropped += 1
+    return dropped
 
 
 def estimate_tokens(item: Mapping[str, object]) -> int:
