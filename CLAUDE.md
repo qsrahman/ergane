@@ -91,12 +91,12 @@ The modules, in dependency order (each imports only from those above it):
   `check`, `runner`, `read_only`). `Tool.call` never raises (except Ctrl-C): a bad call
   or an exception comes back as text for the model, and output is cut at
   `MAX_OUTPUT_CHARS`.
-- `mcp_config.py`: the rules for a server's name and the `${NAME}` placeholders, which
-  `config.py` and the MCP code both need.
-- `config.py`: `Config`, `load_config()`, `EFFORTS`, the XDG directories, and the model of
-  a server in `config.json`: `LocalMcpServer` (a `command`) or `RemoteMcpServer` (a
-  `url`), told apart by `type` or by having a `url`, as the union `McpServerConfig`. A
-  field of the other kind is an error of its own, so there is no check of combinations.
+- `config.py`: `Config`, `load_config()`, `EFFORTS`, the XDG directories, the model of a
+  server in `config.json`: `LocalMcpServer` (a `command`) or `RemoteMcpServer` (a
+  `url`), told apart by `type` or by having a `url`, as the union `McpServerConfig` (a
+  field of the other kind is an error of its own, so there is no check of
+  combinations), and what the MCP code shares with it: the rules for a server's name
+  and the `${NAME}` placeholders (`fill_placeholders`).
 - `mcp_server.py`: `McpServer`, one connection used from synchronous code; its tools
   become `Tool`s. Imports `mcp` only when a server starts. The design notes are in its
   docstring.

@@ -59,7 +59,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
 from muagent.config import McpServerConfig
-from muagent.mcp_config import NAME_CHARS, NAME_PATTERN
 from muagent.tools import Image, Tool, ToolOutput, invalid_arguments
 
 if TYPE_CHECKING:
@@ -67,8 +66,10 @@ if TYPE_CHECKING:
     from mcp_types import CallToolResult
     from mcp_types import Tool as ToolDefinition
 
-_NAME = re.compile(NAME_PATTERN)
-_DISALLOWED = re.compile(rf"[^{NAME_CHARS}]")
+# The characters OpenAI takes in a tool name (a server's name has the same rule, in
+# `config.py`).
+_NAME = re.compile(r"[a-zA-Z0-9_-]+")
+_DISALLOWED = re.compile(r"[^a-zA-Z0-9_-]")
 _MAX_NAME_CHARS = 128
 
 # How long a remote server may be silent before its response is given up on (the SDK's

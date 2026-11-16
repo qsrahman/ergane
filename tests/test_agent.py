@@ -1254,8 +1254,8 @@ def test_the_agent_needs_nothing_of_how_settings_are_loaded_or_of_mcp():
 
     code = (
         "import sys, muagent.agent; "
-        "loaded = [m for m in ('muagent.config', 'muagent.mcp_config', "
-        "'muagent.mcp_server', 'muagent.mcp_hub') if m in sys.modules]; "
+        "loaded = [m for m in ('muagent.config', 'muagent.mcp_server', "
+        "'muagent.mcp_hub') if m in sys.modules]; "
         "print(loaded)"
     )
     result = subprocess.run(

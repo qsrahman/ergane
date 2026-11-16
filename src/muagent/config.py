@@ -30,6 +30,9 @@ How it is built, and why:
 """
 
 import os
+import re
+from collections.abc import Mapping
+from contextlib import suppress
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args
 from urllib.parse import urlsplit
@@ -46,31 +49,42 @@ from pydantic import (
     field_validator,
 )
 
-from muagent.mcp_config import ServerName, fill_placeholders
+# OpenAI rejects the whole request, not just the tool, for a name outside this (the
+# pattern is anchored: pydantic searches, not matches).
+ServerName = Annotated[str, Field(pattern=r"^[a-zA-Z0-9_-]+$")]
 
-# The hosts that may be reached without TLS: the traffic never leaves the machine.
-_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+_PLACEHOLDER = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+# ReasoningEffort is Optional[Literal[...]]; these are the Literal's values.
+EFFORTS: tuple[str, ...] = get_args(get_args(ReasoningEffort)[0])
 
 
-def _check_url(url: str) -> None:
-    """Refuse a server URL that would send what it carries where it can be read.
+class UnsetVariableError(ValueError):
+    """A `${NAME}` placeholder names a variable that is not set."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"${{{name}}} is not set")
+        self.name = name
+
+
+def fill_placeholders(text: str, environ: Mapping[str, str]) -> str:
+    """Fill in the `${NAME}` placeholders of a text from the environment.
+
+    One pass: the text a variable holds is not looked at again. `$NAME` and a `${`
+    without a name are plain text.
 
     Raises:
-        ValueError: If it is not https (http only to this machine), names no host,
-            or carries a user name or password, which belong in `headers`.
+        UnsetVariableError: If a variable is not set. It names the variable, never a
+            value.
     """
-    parts = urlsplit(url)
-    if parts.scheme not in ("http", "https") or not parts.hostname:
-        raise ValueError(
-            f"url must be http(s)://host/path, not {parts.scheme or url!r}"
-        )
-    if parts.scheme == "http" and parts.hostname not in _LOOPBACK_HOSTS:
-        raise ValueError(
-            "url must be https, except for localhost: headers and tool calls would "
-            "cross the network unencrypted"
-        )
-    if parts.username or parts.password:
-        raise ValueError("url must not hold a user name or password: use headers")
+
+    def value(match: re.Match[str]) -> str:
+        variable = match.group(1)
+        if variable not in environ:
+            raise UnsetVariableError(variable)
+        return environ[variable]
+
+    return _PLACEHOLDER.sub(value, text)
 
 
 class _McpServer(BaseModel):
@@ -121,7 +135,25 @@ class RemoteMcpServer(_McpServer):
     @field_validator("url")
     @classmethod
     def _safe_url(cls, url: str) -> str:
-        _check_url(url)
+        """Refuse a URL that would send what it carries where it can be read: one
+        that is not https (http only to this machine), names no host, or holds a user
+        name or password, which belong in `headers`."""
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise ValueError(
+                f"url must be http(s)://host/path, not {parts.scheme or url!r}"
+            )
+        if parts.scheme == "http" and parts.hostname not in (
+            "localhost",
+            "127.0.0.1",
+            "::1",
+        ):
+            raise ValueError(
+                "url must be https, except for localhost: headers and tool calls "
+                "would cross the network unencrypted"
+            )
+        if parts.username or parts.password:
+            raise ValueError("url must not hold a user name or password: use headers")
         return url
 
 
@@ -165,7 +197,7 @@ class Config(BaseModel):
     keep_recent_tokens: int = Field(default=15_000, ge=0)
     # None sends no reasoning setting, so the model's default applies.
     # Non-reasoning models reject any effort with HTTP 400.
-    reasoning_effort: ReasoningEffort | None = None
+    reasoning_effort: ReasoningEffort = None  # Optional[Literal[...]] already
     # Only config.json lists servers: they are nested, and no flag or variable
     # could say them. `mcpServers` in the file, as in other tools' MCP files.
     mcp_servers: dict[ServerName, McpServerConfig] = Field(
@@ -178,7 +210,6 @@ class Config(BaseModel):
         """Let the key be `${NAME}` in the file, so that it can stay in the
         environment. This looks at the value that won, wherever it came from: a
         placeholder in the file that the environment overrode is never looked at."""
-        # An unset variable raises UnsetVariableError, a ValueError: pydantic reports it.
         return fill_placeholders(value, os.environ) if isinstance(value, str) else value
 
 
@@ -212,11 +243,9 @@ def private_state_dir() -> Path:
     whoever writes there reports it.
     """
     path = user_state_dir()
-    try:
+    with suppress(OSError):
         path.mkdir(parents=True, exist_ok=True)
         path.chmod(0o700)
-    except OSError:
-        pass
     return path
 
 
@@ -229,11 +258,8 @@ def config_file(path: Path | None = None) -> Path:
 def load_config(path: Path | None = None, **flags: object) -> Config:
     """Load the settings: the flags, then the environment, then the file.
 
-    The file is `path` (`--config`; no variable names one, since a project's `.envrc`
-    could then point muagent at a file of its own, with servers and a base URL), or
-    `config.json` in `user_config_dir()`, which may be missing. It is never looked for in the
-    current directory: whoever controls a project could set the base URL, and the
-    API key and every prompt would go wherever they chose.
+    The file is `path` (`--config`), or `config.json` in `user_config_dir()`, which may
+    be missing; see the module docstring for why no variable or directory names it.
 
     Args:
         path: The file, if the user named one.
@@ -258,7 +284,3 @@ def load_config(path: Path | None = None, **flags: object) -> Config:
     if key := os.environ.get("OPENAI_API_KEY"):
         data["api_key"] = key
     return Config.model_validate(data | flags)
-
-
-# ReasoningEffort is Optional[Literal[...]]; these are the Literal's values.
-EFFORTS: tuple[str, ...] = get_args(get_args(ReasoningEffort)[0])

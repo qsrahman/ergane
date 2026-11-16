@@ -36,8 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from muagent.config import McpServerConfig
-from muagent.mcp_config import UnsetVariableError, fill_placeholders
+from muagent.config import McpServerConfig, UnsetVariableError, fill_placeholders
 from muagent.mcp_server import McpServer, McpServerError
 from muagent.tools import Tool
 
