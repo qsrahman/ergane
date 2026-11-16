@@ -135,6 +135,21 @@ def add(a: int, b: int) -> str:
 }
 ```
 
+For files and a shell, [workshop-mcp](https://github.com/qsrahman/workshop-mcp) is a server made to go with `muagent`. It is a Node program that `npx` fetches on first use:
+
+```json
+{
+  "mcpServers": {
+    "workshop": {
+      "command": "npx",
+      "args": ["-y", "@qsrahman/workshop-mcp", "--no-fetch"]
+    }
+  }
+}
+```
+
+`--no-fetch` leaves out its `fetch_url`, since `muagent` has one of its own. Without a directory in `args` it can reach any file you can, and its shell is on, so every call asks first (leave `read_only` unset); `--read-only`, `--no-shell` and directories narrow it, as its README says. It starts in the directory where you run `muagent`.
+
 | Key         | Description                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------ |
 | `type`      | `"local"` for a `command`, `"remote"` for a `url`. Optional; if given it must agree with them.               |
