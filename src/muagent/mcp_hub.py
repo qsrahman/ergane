@@ -1,6 +1,6 @@
 """The MCP servers while muagent runs: start them, keep them, start one again.
 
-One server is `mcp_server.py`. This is what a program does with all of them: start them
+One server is `mcp_client.py`. This is what a program does with all of them: start them
 (`McpHub.start`, or `begin` and `take` in the background), report what became
 of each (`ServerStatus`, for `/servers`), and start one again (`McpHub.reconnect`).
 
@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from muagent.config import McpServerConfig, UnsetVariableError, fill_placeholders
-from muagent.mcp_server import McpServer, McpServerError
+from muagent.mcp_client import McpClient, McpServerError
 from muagent.tools import Tool
 
 if TYPE_CHECKING:
@@ -101,7 +101,7 @@ def _failure_text(name: str, exc: Exception) -> str:
 
 
 def _running_status(
-    name: str, server: McpServer, tools: list[Tool], log: Path | None
+    name: str, server: McpClient, tools: list[Tool], log: Path | None
 ) -> ServerStatus:
     return ServerStatus(
         name,
@@ -118,7 +118,7 @@ def _log_file(config: McpServerConfig, log_dir: Path, name: str) -> Path | None:
     return path if config.type == "local" and path.exists() else None
 
 
-def close_servers(servers: Iterable[McpServer]) -> None:
+def close_servers(servers: Iterable[McpClient]) -> None:
     """Close the servers all at once.
 
     Closing one can take seconds (a server that does not leave when its input
@@ -127,7 +127,7 @@ def close_servers(servers: Iterable[McpServer]) -> None:
     servers = list(servers)
     if servers:
         with concurrent.futures.ThreadPoolExecutor(len(servers)) as pool:
-            list(pool.map(McpServer.close, servers))
+            list(pool.map(McpClient.close, servers))
 
 
 class _Startup:
@@ -149,7 +149,7 @@ class _Startup:
         self.log_dir = log_dir
         self.environ = environ
         # Each server, or why it cannot be started, in the order of the file.
-        self.entries: list[tuple[str, McpServer | str]] = []
+        self.entries: list[tuple[str, McpClient | str]] = []
         self.off: dict[str, ServerStatus] = {}
         self._futures: dict[str, concurrent.futures.Future[list[ToolDefinition]]] = {}
         self._pool: concurrent.futures.ThreadPoolExecutor | None = None
@@ -161,7 +161,7 @@ class _Startup:
                 self.off[name] = ServerStatus(name, "off", "enabled is false")
                 continue
             try:
-                server = McpServer(
+                server = McpClient(
                     name,
                     _expand(name, config, self.environ),
                     self.log_dir / f"{name}.log",
@@ -182,7 +182,7 @@ class _Startup:
             }
 
     @staticmethod
-    def _connect(server: McpServer) -> list[ToolDefinition]:
+    def _connect(server: McpClient) -> list[ToolDefinition]:
         server.connect()
         return server.definitions()
 
@@ -192,7 +192,7 @@ class _Startup:
 
     def finish(
         self, on_notice: Callable[[str], None]
-    ) -> tuple[dict[str, McpServer], dict[str, list[Tool]], dict[str, ServerStatus]]:
+    ) -> tuple[dict[str, McpClient], dict[str, list[Tool]], dict[str, ServerStatus]]:
         """Wait for the servers, and name their tools.
 
         A server that failed is reported with `on_notice` and closed, with the other
@@ -204,9 +204,9 @@ class _Startup:
             file, each by name and in the order of the file.
         """
         statuses: dict[str, ServerStatus] = dict(self.off)
-        running: dict[str, McpServer] = {}
+        running: dict[str, McpClient] = {}
         found: dict[str, list[Tool]] = {}
-        failed: list[McpServer] = []
+        failed: list[McpClient] = []
         taken: set[str] = set()  # names are unique across the servers too
 
         def log_of(name: str) -> Path | None:
@@ -276,7 +276,7 @@ class McpHub:
         self.statuses: list[
             ServerStatus
         ] = []  # in the order of the file, kept in place
-        self.servers: dict[str, McpServer] = {}  # the ones that run
+        self.servers: dict[str, McpClient] = {}  # the ones that run
         self._startup: _Startup | None = None  # begun, and not finished
         self._started: list[ServerUpdate] = []  # finished, not yet taken
         self._notices: list[str] = []  # about servers that failed, not yet taken
@@ -419,7 +419,7 @@ class McpHub:
             previous.close()
         server = None
         try:
-            server = McpServer(
+            server = McpClient(
                 name,
                 _expand(name, config, self.environ),
                 self.log_dir / f"{name}.log",

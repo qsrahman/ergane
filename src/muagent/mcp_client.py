@@ -220,7 +220,7 @@ def _leaf(exc: BaseException) -> BaseException:
     return exc
 
 
-class McpServer:
+class McpClient:
     """A connection to one MCP server, used from synchronous code.
 
     The server is a program run by `command` and spoken to over stdio, or a `url`
@@ -237,7 +237,7 @@ class McpServer:
     ) -> None:
         """Describe a server; `start()` connects to it.
 
-        A McpServer is used once: after `close()` it cannot be started again.
+        A McpClient is used once: after `close()` it cannot be started again.
 
         Args:
             name: Prefixes the names of its tools. Letters, digits, `_` and `-`.

@@ -8,8 +8,8 @@ import pytest
 
 from helpers import FAKE
 from muagent.config import LocalMcpServer, McpServerConfig, RemoteMcpServer
+from muagent.mcp_client import McpClient, McpServerError
 from muagent.mcp_hub import McpHub, _expand, close_servers
-from muagent.mcp_server import McpServer, McpServerError
 from muagent.tools import Tool
 
 
@@ -326,7 +326,7 @@ class TestStartingTogether:
         assert elapsed < 6
 
     def test_a_server_that_fails_to_connect_is_left_for_close(self, tmp_path):
-        server = McpServer("hang", self.hanging(1), tmp_path / "hang.log")
+        server = McpClient("hang", self.hanging(1), tmp_path / "hang.log")
         server.launch()
         try:
             with pytest.raises(McpServerError, match="did not answer within 1 s"):
@@ -339,7 +339,7 @@ class TestStartingTogether:
 
     def test_servers_are_closed_together(self, tmp_path):
         servers = [
-            McpServer(f"slow{i}", self.hanging(30), tmp_path / f"{i}.log")
+            McpClient(f"slow{i}", self.hanging(30), tmp_path / f"{i}.log")
             for i in range(3)
         ]
         for server in servers:
@@ -588,7 +588,7 @@ class TestStartingInTheBackground:
 
     def test_the_servers_list_their_tools_at_the_same_time(self, hubs, monkeypatch):
         spans: list[tuple[float, float]] = []
-        real = McpServer.definitions
+        real = McpClient.definitions
 
         def slow(self):
             begun = time.monotonic()
@@ -597,7 +597,7 @@ class TestStartingInTheBackground:
             spans.append((begun, time.monotonic()))
             return found
 
-        monkeypatch.setattr(McpServer, "definitions", slow)
+        monkeypatch.setattr(McpClient, "definitions", slow)
         hub = hubs({name: self.fake() for name in ("a", "b", "c")})
 
         hub.start(lambda notice: None)

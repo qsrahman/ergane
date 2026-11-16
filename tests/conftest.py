@@ -12,8 +12,8 @@ from fake_api import FakeResponsesHandler
 from helpers import FAKE, make_config, serve_http
 from muagent.agent import Agent
 from muagent.config import LocalMcpServer, McpServerConfig
+from muagent.mcp_client import McpClient
 from muagent.mcp_hub import McpHub
-from muagent.mcp_server import McpServer
 from muagent.tools import Tool
 
 
@@ -72,7 +72,7 @@ def make_agent(client: OpenAI):
 def tools(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, Tool]]:
     """The fake server's tools, from one server shared by the tests that only call it."""
     log = tmp_path_factory.mktemp("mcp") / "log"
-    server = McpServer("fake", LocalMcpServer(command=sys.executable, args=[FAKE]), log)
+    server = McpClient("fake", LocalMcpServer(command=sys.executable, args=[FAKE]), log)
     server.start()
     yield {tool.name: tool for tool in server.tools()}
     server.close()
@@ -107,20 +107,20 @@ def start_hub(tmp_path: Path) -> Iterator[Callable[..., tuple[McpHub, list[Tool]
 
 
 @pytest.fixture
-def make_server(tmp_path: Path) -> Iterator[Callable[..., McpServer]]:
+def make_server(tmp_path: Path) -> Iterator[Callable[..., McpClient]]:
     """Start servers for a test (the fake one unless told otherwise); stop them after.
 
     The server's stderr goes to `tmp_path / "mcp.log"`.
     """
-    started: list[McpServer] = []
+    started: list[McpClient] = []
 
     def make(
         *, start: bool = True, name: str = "fake", log: Path | None = None, **values
-    ) -> McpServer:
+    ) -> McpClient:
         if "url" not in values:
             values = {"command": sys.executable, "args": [FAKE], **values}
         config = TypeAdapter(McpServerConfig).validate_python(values)
-        server = McpServer(name, config, log or tmp_path / "mcp.log")
+        server = McpClient(name, config, log or tmp_path / "mcp.log")
         started.append(server)
         if start:
             server.start()

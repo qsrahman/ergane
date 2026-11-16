@@ -36,7 +36,7 @@ it editable; the script is `muagent.cli:main`. Tests import modules directly
   docstring (failures, broken streams, tool calls, `status_N`, `overflow`, `usage`, and
   a summary that goes wrong in each way). Request bodies are in `fake_server.requests`.
 - `tests/fake_mcp_server.py` is a stdio (or, with a port, HTTP) MCP server on the SDK's
-  own `MCPServer`, with a tool for each case a client must handle; `test_mcp_server.py` and
+  own `MCPServer`, with a tool for each case a client must handle; `test_mcp_client.py` and
   `test_mcp_hub.py` start it as a subprocess (`FAKE`, `serve_http` in `helpers.py`; the
   `make_server`, `http_url` and `tools` fixtures in `conftest.py`).
 - The autouse `isolate_config` fixture runs each test in an empty `tmp_path` that is
@@ -97,7 +97,7 @@ The modules, in dependency order (each imports only from those above it):
   field of the other kind is an error of its own, so there is no check of
   combinations), and what the MCP code shares with it: the rules for a server's name
   and the `${NAME}` placeholders (`fill_placeholders`).
-- `mcp_server.py`: `McpServer`, one connection used from synchronous code; its tools
+- `mcp_client.py`: `McpClient`, one connection used from synchronous code; its tools
   become `Tool`s. Imports `mcp` only when a server starts. The design notes are in its
   docstring.
 - `mcp_hub.py`: the servers together: `close_servers`, `McpHub` (starts

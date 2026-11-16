@@ -17,7 +17,7 @@ import pytest
 from fake_api import TEXT
 from helpers import FAKE, serve_http
 from muagent.config import LocalMcpServer, RemoteMcpServer
-from muagent.mcp_server import McpServer, McpServerError, _list_tools
+from muagent.mcp_client import McpClient, McpServerError, _list_tools
 from muagent.tools import MAX_OUTPUT_CHARS, Tool
 
 
@@ -283,7 +283,7 @@ class TestLog:
 
     def test_a_log_that_cannot_be_written_is_a_start_failure(self, tmp_path):
         config = LocalMcpServer(command=sys.executable, args=[FAKE])
-        server = McpServer("fake", config, tmp_path)  # a directory
+        server = McpClient("fake", config, tmp_path)  # a directory
 
         with pytest.raises(McpServerError, match="cannot write its log"):
             server.start()
@@ -291,14 +291,14 @@ class TestLog:
     def test_a_missing_mcp_package_is_explained(self, tmp_path, monkeypatch):
         monkeypatch.setattr("importlib.util.find_spec", lambda name: None)
         config = LocalMcpServer(command=sys.executable, args=[FAKE])
-        server = McpServer("fake", config, tmp_path / "log")
+        server = McpClient("fake", config, tmp_path / "log")
 
         with pytest.raises(McpServerError, match="needs the mcp package"):
             server.start()
 
 
 class TestHttp:
-    def make(self, make_server, url, **values) -> McpServer:
+    def make(self, make_server, url, **values) -> McpClient:
         return make_server(name="web", url=url, **values)
 
     def test_the_tools_of_a_server_at_a_url_can_be_called(self, make_server, http_url):
@@ -314,7 +314,7 @@ class TestHttp:
         self, make_server, http_url, monkeypatch
     ):
         # The server says nothing for 1.5 s; the read timeout alone would end the call.
-        monkeypatch.setattr("muagent.mcp_server._HTTP_READ_SECONDS", 0.5)
+        monkeypatch.setattr("muagent.mcp_client._HTTP_READ_SECONDS", 0.5)
         server = self.make(make_server, http_url, call_timeout=10)
         by_name = {tool.name: tool for tool in server.tools()}
 
@@ -479,7 +479,7 @@ class TestPictures:
     def test_only_the_kinds_of_picture_the_api_takes(self):
         import mcp_types
 
-        from muagent.mcp_server import _images
+        from muagent.mcp_client import _images
 
         def block(mime: str):
             return mcp_types.ImageContent(type="image", data="aGk=", mime_type=mime)
@@ -491,9 +491,9 @@ class TestPictures:
     def test_a_picture_too_large_is_left_out(self, monkeypatch):
         import mcp_types
 
-        from muagent.mcp_server import _images
+        from muagent.mcp_client import _images
 
-        monkeypatch.setattr("muagent.mcp_server._MAX_IMAGE_CHARS", 4)
+        monkeypatch.setattr("muagent.mcp_client._MAX_IMAGE_CHARS", 4)
         big = mcp_types.ImageContent(type="image", data="x" * 5, mime_type="image/png")
         small = mcp_types.ImageContent(
             type="image", data="x" * 4, mime_type="image/png"
@@ -506,7 +506,7 @@ class TestResultText:
     def test_a_text_file_the_server_embedded_is_text(self):
         import mcp_types
 
-        from muagent.mcp_server import _text
+        from muagent.mcp_client import _text
 
         file = mcp_types.EmbeddedResource(
             type="resource",
@@ -520,7 +520,7 @@ class TestResultText:
     def test_a_binary_one_and_a_link_are_named(self):
         import mcp_types
 
-        from muagent.mcp_server import _text
+        from muagent.mcp_client import _text
 
         blob = mcp_types.EmbeddedResource(
             type="resource",
@@ -533,14 +533,14 @@ class TestResultText:
         )
 
     def test_a_result_with_only_structured_content_is_that_as_json(self):
-        from muagent.mcp_server import _text
+        from muagent.mcp_client import _text
 
         assert _text(block_result(structured={"sum": 3})) == '{"sum": 3}'
 
     def test_structured_content_next_to_text_is_not_repeated(self):
         import mcp_types
 
-        from muagent.mcp_server import _text
+        from muagent.mcp_client import _text
 
         text = mcp_types.TextContent(type="text", text="3")
 
@@ -549,7 +549,7 @@ class TestResultText:
     def test_an_error_is_marked(self):
         import mcp_types
 
-        from muagent.mcp_server import _text
+        from muagent.mcp_client import _text
 
         text = mcp_types.TextContent(type="text", text="bad")
 
@@ -562,9 +562,9 @@ class TestConnectionLost:
     @pytest.fixture(autouse=True)
     def always_ask_first(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Not after 10 s of silence, as in use: no test waits that long.
-        monkeypatch.setattr("muagent.mcp_server._IDLE_SECONDS", 0)
+        monkeypatch.setattr("muagent.mcp_client._IDLE_SECONDS", 0)
 
-    def kill(self, server: McpServer, tool: Tool) -> None:
+    def kill(self, server: McpClient, tool: Tool) -> None:
         import signal
 
         os.kill(int(tool.call("{}")), signal.SIGKILL)
@@ -681,7 +681,7 @@ class TestConnectionLost:
             raise RuntimeError("the fake HTTP server did not start")
 
         process = run()
-        server = McpServer(
+        server = McpClient(
             "web", RemoteMcpServer(url=f"http://127.0.0.1:{port}/mcp"), tmp_path / "l"
         )
         try:
@@ -706,6 +706,6 @@ class TestInstructions:
         assert make_server().instructions == "Dates are YYYY-MM-DD."
 
     def test_long_instructions_are_cut(self, make_server, monkeypatch):
-        monkeypatch.setattr("muagent.mcp_server._MAX_INSTRUCTION_CHARS", 5)
+        monkeypatch.setattr("muagent.mcp_client._MAX_INSTRUCTION_CHARS", 5)
 
         assert make_server().instructions == "Dates…"
