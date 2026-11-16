@@ -28,7 +28,7 @@ How it is built, and why:
 import json
 import os
 from pathlib import Path
-from typing import Annotated, Any, NoReturn, get_args
+from typing import Any, NoReturn, get_args
 
 from openai.types.shared import ReasoningEffort
 from pydantic import Field, SecretStr, ValidationError, field_validator
@@ -41,12 +41,7 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
-from muagent.mcp_config import (
-    NAME_PATTERN,
-    McpServerConfig,
-    UnsetVariableError,
-    fill_placeholders,
-)
+from muagent.mcp_config import McpServerConfig, ServerName, fill_placeholders
 
 
 def _fail(kind: str, **details: Any) -> NoReturn:
@@ -99,51 +94,25 @@ class Config(BaseSettings):
 
     # A key that is not a setting is a mistake in config.json, and says so.
     model_config = SettingsConfigDict(extra="forbid", json_file_encoding="utf-8")
-    model: str = Field(
-        min_length=1,
-        default="gpt-5.4-mini",
-    )
-    api_key: SecretStr = Field(  # a SecretStr stays hidden if the config is printed
-        min_length=1,
-    )
-    base_url: str | None = Field(
-        default=None,
-    )
-    max_context_tokens: int = Field(
-        default=64 * 1024,
-        gt=0,
-    )
-    streaming: bool = Field(
-        default=True,
-    )
-    max_turns: int = Field(
-        default=25,
-        gt=0,
-    )
+    model: str = Field(default="gpt-5.4-mini", min_length=1)
+    api_key: SecretStr = Field(min_length=1)  # a SecretStr stays hidden if printed
+    base_url: str | None = None
+    max_context_tokens: int = Field(default=64 * 1024, gt=0)
+    streaming: bool = True
+    max_turns: int = Field(default=25, gt=0)
     # When the history (with the instructions and the tools) passes compact_at of
     # max_context_tokens, the oldest turns are summarized, keeping about
     # keep_recent_tokens of the newest verbatim.
-    auto_compact: bool = Field(
-        default=True,
-    )
-    compact_at: float = Field(
-        default=0.75,
-        gt=0,
-        le=1,
-    )
-    keep_recent_tokens: int = Field(
-        default=15_000,
-        ge=0,
-    )
+    auto_compact: bool = True
+    compact_at: float = Field(default=0.75, gt=0, le=1)
+    keep_recent_tokens: int = Field(default=15_000, ge=0)
     # None sends no reasoning setting, so the model's default applies.
     # Non-reasoning models reject any effort with HTTP 400.
-    reasoning_effort: ReasoningEffort | None = Field(
-        default=None,
-    )
+    reasoning_effort: ReasoningEffort | None = None
     # Only config.json lists servers: they are nested, and no flag or variable
     # could say them. `mcpServers` in the file, as in other tools' MCP files.
-    mcp_servers: dict[Annotated[str, Field(pattern=NAME_PATTERN)], McpServerConfig] = (
-        Field(default_factory=dict, validation_alias="mcpServers")
+    mcp_servers: dict[ServerName, McpServerConfig] = Field(
+        default_factory=dict, validation_alias="mcpServers"
     )
 
     @field_validator("api_key", mode="before")
@@ -152,12 +121,8 @@ class Config(BaseSettings):
         """Let the key be `${NAME}` in the file, so that it can stay in the
         environment. This looks at the value that won, wherever it came from: a
         placeholder in the file that the environment overrode is never looked at."""
-        if not isinstance(value, str):
-            return value
-        try:
-            return fill_placeholders(value, os.environ)
-        except UnsetVariableError as exc:
-            raise ValueError(str(exc)) from None
+        # An unset variable raises UnsetVariableError, a ValueError: pydantic reports it.
+        return fill_placeholders(value, os.environ) if isinstance(value, str) else value
 
     @classmethod
     def settings_customise_sources(
@@ -242,11 +207,11 @@ def load_config(path: Path | None = None, **flags: object) -> Config:
     """
     file = config_file(path)
 
-    named = path is not None
-    if named and not file.exists():
-        raise FileNotFoundError(f"Config file not found: {file}")
-    if named and file.is_dir():  # pydantic-settings would skip it without a word
-        raise IsADirectoryError(f"Config path is a directory, not a file: {file}")
+    if path is not None:
+        if not file.exists():
+            raise FileNotFoundError(f"Config file not found: {file}")
+        if file.is_dir():  # pydantic-settings would skip it without a word
+            raise IsADirectoryError(f"Config path is a directory, not a file: {file}")
 
     class Loaded(Config):  # the settings class is told its file by its config
         model_config = SettingsConfigDict(json_file=file)
