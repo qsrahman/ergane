@@ -129,7 +129,7 @@ def add(a: int, b: int) -> str:
     "remote": {
       "url": "https://example.com/mcp",
       "headers": { "Authorization": "Bearer ${REMOTE_TOKEN}" },
-      "enable": false
+      "enabled": false
     }
   }
 }
@@ -153,7 +153,7 @@ For files and a shell, [workshop-mcp](https://github.com/qsrahman/workshop-mcp) 
 | Key         | Description                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------ |
 | `type`      | `"local"` for a `command`, `"remote"` for a `url`. Optional; if given it must agree with them.               |
-| `enable`    | `false` keeps the entry but does not start the server. Default `true`.                                       |
+| `enabled`    | `false` keeps the entry but does not start the server. Default `true`.                                       |
 | `command`   | The program that runs the server, in the directory where you run `muagent`. Give this or `url`, not both.    |
 | `args`      | Its arguments                                                                                                |
 | `env`       | Environment variables for it. The server gets only a short list (`PATH`, `HOME`, ...) and these, so it does not see your `OPENAI_API_KEY`. |

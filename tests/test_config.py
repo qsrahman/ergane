@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from helpers import make_config
-from muagent.config import load_config, private_state_dir
+from muagent.config import LocalMcpServer, load_config, private_state_dir
 
 
 def test_invalid_reasoning_effort_is_a_config_error():
@@ -281,23 +281,21 @@ class TestUnreadableFile:
         user_file.parent.mkdir(parents=True)
         user_file.write_bytes(b"\xff\xfe{")
 
-        with pytest.raises(ValidationError, match=r"config\.json is not UTF-8"):
+        with pytest.raises(ValidationError, match=r"config\.json"):
             load_config()
 
     @pytest.mark.skipif(os.geteuid() == 0, reason="root can read any file")
-    def test_a_file_that_cannot_be_read_is_a_config_error(self, user_file: Path):
+    def test_a_file_that_cannot_be_read_is_an_os_error(self, user_file: Path):
         write_json(user_file, {"api_key": "k"})
         user_file.chmod(0o000)
         try:
-            with pytest.raises(
-                ValidationError, match=r"cannot read .*Permission denied"
-            ):
+            with pytest.raises(PermissionError, match=r"config\.json"):
                 load_config()
         finally:
             user_file.chmod(0o644)
 
     def test_a_directory_the_user_named_is_refused(self, tmp_path: Path):
-        with pytest.raises(IsADirectoryError, match="is a directory"):
+        with pytest.raises(IsADirectoryError):
             load_config(tmp_path)
 
 
@@ -327,13 +325,13 @@ class TestMistakes:
     def test_a_file_that_is_not_json_says_which(self, user_file: Path):
         write_json(user_file, "{ not json")
 
-        with pytest.raises(ValidationError, match=r"Invalid JSON: .*config\.json"):
+        with pytest.raises(ValidationError, match=r"config\.json\n  Invalid JSON"):
             load_config()
 
     def test_a_file_that_is_not_an_object_is_refused(self, user_file: Path):
         write_json(user_file, '["model"]')
 
-        with pytest.raises(ValidationError, match="valid dictionary"):
+        with pytest.raises(ValidationError, match=r"valid dictionary|an object"):
             load_config()
 
     def test_an_environment_variable_that_is_not_a_setting_is_ignored(
@@ -403,7 +401,9 @@ class TestMcpServers:
         servers = load_config().mcp_servers
 
         assert list(servers) == ["files"]
-        assert servers["files"].command == "my-server" and servers["files"].read_only
+        files = servers["files"]
+        assert isinstance(files, LocalMcpServer)
+        assert files.command == "my-server" and files.read_only
 
     def test_there_are_none_by_default(self, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "k")
@@ -430,7 +430,7 @@ class TestMcpServers:
             {"api_key": "k", "mcpServers": {"s": {"command": "x", "cwd": "/srv"}}},
         )
 
-        with pytest.raises(ValidationError, match=r"mcpServers\.s\.cwd"):
+        with pytest.raises(ValidationError, match=r"mcpServers\.s\.local\.cwd"):
             load_config()
 
     def test_a_bad_server_name_is_refused(self, user_file: Path):

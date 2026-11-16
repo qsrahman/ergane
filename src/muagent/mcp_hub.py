@@ -36,7 +36,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from muagent.mcp_config import McpServerConfig, UnsetVariableError, fill_placeholders
+from muagent.config import McpServerConfig
+from muagent.mcp_config import UnsetVariableError, fill_placeholders
 from muagent.mcp_server import McpServer, McpServerError
 from muagent.tools import Tool
 
@@ -82,11 +83,13 @@ def _expand(
                 f"MCP server {name!r}: {where} uses ${{{exc.name}}}, which is not set"
             ) from None
 
+    if config.type == "remote":
+        headers = {k: fill(v, f"headers.{k}") for k, v in config.headers.items()}
+        return config.model_copy(update={"headers": headers})
     return config.model_copy(
         update={
             "args": [fill(arg, "args") for arg in config.args],
             "env": {k: fill(v, f"env.{k}") for k, v in config.env.items()},
-            "headers": {k: fill(v, f"headers.{k}") for k, v in config.headers.items()},
         }
     )
 
@@ -113,7 +116,7 @@ def _running_status(
 def _log_file(config: McpServerConfig, log_dir: Path, name: str) -> Path | None:
     """The file a program's stderr went to, if there is one to point the user at."""
     path = log_dir / f"{name}.log"
-    return path if config.command and path.exists() else None
+    return path if config.type == "local" and path.exists() else None
 
 
 def close_servers(servers: Iterable[McpServer]) -> None:
@@ -155,8 +158,8 @@ class _Startup:
     def begin(self) -> None:
         """Launch the servers that are on, and start connecting to them."""
         for name, config in self.configs.items():
-            if not config.enable:
-                self.off[name] = ServerStatus(name, "off", "enable is false")
+            if not config.enabled:
+                self.off[name] = ServerStatus(name, "off", "enabled is false")
                 continue
             try:
                 server = McpServer(
@@ -283,7 +286,7 @@ class McpHub:
         """Start the servers, all at once, wait for them, and return their tools.
 
         A server that fails is reported and left out: it must not stop muagent. One
-        that is switched off (`enable` false) is left out without a word, and so is
+        that is switched off (`enabled` false) is left out without a word, and so is
         one that starts: the banner counts its tools. Servers that never answer delay
         the start by the longest startup timeout, not by the sum (see `_Startup`).
         The servers that run are closed by `close()`; `statuses` has one for every

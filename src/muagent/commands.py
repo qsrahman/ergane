@@ -295,14 +295,10 @@ def servers_(repl: Repl, args: str) -> str | None:
 def tools_(repl: Repl, args: str) -> str | None:
     """List the tools offered to the model."""
     agent = repl.agent
-    free = [tool.name for tool in agent.tools.values() if tool.read_only]
-    allowed = [
-        name
-        for name in agent.tools
-        if name in agent.always_allowed and name not in free
-    ]
-    asks = [name for name, tool in agent.tools.items() if not tool.read_only]
-    asks = [name for name in asks if name not in allowed]
+    free = [name for name, tool in agent.tools.items() if tool.read_only]
+    asking = [name for name, tool in agent.tools.items() if not tool.read_only]
+    allowed = [name for name in asking if name in agent.always_allowed]
+    asks = [name for name in asking if name not in agent.always_allowed]
     if not (free or allowed or asks):
         return "Tools: none"
     repl.console.columns(

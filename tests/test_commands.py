@@ -7,8 +7,8 @@ import pytest
 from fake_api import TEXT
 from helpers import anchor, run_repl
 from muagent.commands import COMMANDS, Command, command
+from muagent.config import LocalMcpServer
 from muagent.context import estimate_tokens
-from muagent.mcp_config import McpServerConfig
 from muagent.mcp_hub import McpHub, ServerStatus
 from muagent.tools import Tool
 
@@ -457,7 +457,7 @@ class TestServersCommand:
                 "files", "running", tools=("files__x",), log=Path.home() / "f.log"
             ),
             ServerStatus("bad", "failed", "MCP server 'bad' failed to start: X"),
-            ServerStatus("old", "off", "enable is false"),
+            ServerStatus("old", "off", "enabled is false"),
         ]
 
     def test_it_says_when_there_are_none(self, monkeypatch, make_agent, capsys):
@@ -485,7 +485,7 @@ class TestServersCommand:
         assert '  web    running, 2 tools (3 left out by "tools"), ~' in out
         assert "  files  running, 1 tool, ~" in out and ", log ~/f.log" in out
         assert "  bad    failed: MCP server 'bad' failed to start: X" in out
-        assert "  old    off: enable is false" in out
+        assert "  old    off: enabled is false" in out
 
     def test_the_tokens_are_those_of_the_definitions_the_model_gets(
         self, monkeypatch, make_agent, capsys
@@ -543,7 +543,7 @@ class TestReconnectCommand:
     def hub(self, tmp_path: Path):
         hub = McpHub(
             {
-                "fake": McpServerConfig(
+                "fake": LocalMcpServer(
                     command=sys.executable, args=[FAKE], instructions=True
                 )
             },
@@ -580,12 +580,12 @@ class TestReconnectCommand:
     def test_a_server_that_failed_is_started_and_the_agent_gets_its_tools(
         self, monkeypatch, make_agent, tmp_path, capsys
     ):
-        configs = {"fake": McpServerConfig(command="/no/such/server")}
+        configs = {"fake": LocalMcpServer(command="/no/such/server")}
         hub = McpHub(configs, tmp_path)
         try:
             agent = self.agent_of(make_agent, hub)
             assert agent.tools == {} and agent.server_notes == {}
-            configs["fake"] = McpServerConfig(
+            configs["fake"] = LocalMcpServer(
                 command=sys.executable, args=[FAKE], instructions=True
             )
 
@@ -612,7 +612,7 @@ class TestReconnectCommand:
         self, monkeypatch, make_agent, hub, capsys
     ):
         agent = self.agent_of(make_agent, hub)
-        hub.configs = {"fake": McpServerConfig(command="/no/such/server")}
+        hub.configs = {"fake": LocalMcpServer(command="/no/such/server")}
 
         run_repl(monkeypatch, agent, ["/reconnect fake", "/exit"], hub=hub)
 
@@ -621,7 +621,7 @@ class TestReconnectCommand:
 
 
 class TestServersStartingInTheBackground:
-    FAKE_CONFIG = McpServerConfig(command=sys.executable, args=[FAKE])
+    FAKE_CONFIG = LocalMcpServer(command=sys.executable, args=[FAKE])
 
     @pytest.fixture
     def hubs(self, tmp_path: Path):
@@ -653,7 +653,7 @@ class TestServersStartingInTheBackground:
         self, monkeypatch, make_agent, fake_server, hubs, capsys
     ):
         hub = hubs(
-            {"slow": McpServerConfig(command="sleep", args=["30"], startup_timeout=0.5)}
+            {"slow": LocalMcpServer(command="sleep", args=["30"], startup_timeout=0.5)}
         )
         hub.begin()
 
@@ -668,7 +668,7 @@ class TestServersStartingInTheBackground:
     def test_a_server_that_failed_is_told_at_the_first_input(
         self, monkeypatch, make_agent, hubs, capsys
     ):
-        hub = hubs({"bad": McpServerConfig(command="/no/such/server")})
+        hub = hubs({"bad": LocalMcpServer(command="/no/such/server")})
         hub.begin()
         deadline = time.monotonic() + 10
         while hub.starting and time.monotonic() < deadline:
@@ -683,7 +683,7 @@ class TestServersStartingInTheBackground:
     def test_servers_says_starting_for_a_server_that_is_not_up_yet(
         self, monkeypatch, make_agent, hubs, capsys
     ):
-        hub = hubs({"slow": McpServerConfig(command="sleep", args=["30"])})
+        hub = hubs({"slow": LocalMcpServer(command="sleep", args=["30"])})
         hub.begin()
 
         run_repl(monkeypatch, make_agent(), ["/servers", "/exit"], hub=hub)
@@ -693,7 +693,7 @@ class TestServersStartingInTheBackground:
     def test_reconnect_waits_for_the_start_before_it_counts_what_failed(
         self, monkeypatch, make_agent, hubs
     ):
-        configs = {"fake": McpServerConfig(command="/no/such/server")}
+        configs = {"fake": LocalMcpServer(command="/no/such/server")}
         hub = hubs(configs)
         hub.begin()
         configs["fake"] = self.FAKE_CONFIG  # the program was installed meanwhile

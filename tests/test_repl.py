@@ -10,7 +10,7 @@ from fake_api import REFUSAL, STREAM_ERROR, TEXT
 from helpers import anchor, make_config, make_context, run_repl
 from muagent.agent import Agent
 from muagent.commands import COMMANDS
-from muagent.mcp_config import McpServerConfig
+from muagent.config import LocalMcpServer
 from muagent.mcp_hub import McpHub, ServerStatus
 from muagent.repl import Repl, terminal_session
 from muagent.tools import Tool
@@ -368,7 +368,7 @@ class TestToolbarAndServers:
         return Repl(Agent(make_config()), COMMANDS, hub=hub)._toolbar()  # pyright: ignore[reportPrivateUsage]
 
     def test_it_says_while_servers_start(self, tmp_path):
-        hub = McpHub({"slow": McpServerConfig(command="sleep", args=["30"])}, tmp_path)
+        hub = McpHub({"slow": LocalMcpServer(command="sleep", args=["30"])}, tmp_path)
         try:
             hub.begin()
 
@@ -564,7 +564,7 @@ class TestTerminalSession:
         hub.statuses[:] = [
             ServerStatus("web", "running"),
             ServerStatus("bad", "failed", "boom"),
-            ServerStatus("old", "off", "enable is false"),
+            ServerStatus("old", "off", "enabled is false"),
         ]
         with create_pipe_input() as pipe:
             session = terminal_session(

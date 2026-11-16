@@ -41,7 +41,7 @@ it editable; the script is `muagent.cli:main`. Tests import modules directly
   `make_server`, `http_url` and `tools` fixtures in `conftest.py`).
 - The autouse `isolate_config` fixture runs each test in an empty `tmp_path` that is
   also `XDG_CONFIG_HOME`, and clears `OPENAI_API_KEY`, the one variable muagent reads.
-- Test files mirror the modules (`test_mcp_config.py` is `mcp_config.py`), plus `test_compaction.py` (summaries, shortened
+- Test files mirror the modules (`test_mcp_config.py` tests the server models of `config.py`), plus `test_compaction.py` (summaries, shortened
   results, the too-long retry) and `test_fake_api.py`. Helpers (`make_config`,
   `make_context`, `run_repl`, `tool_with`) are in `tests/helpers.py`; the `client` and
   `make_agent` fixtures are in `conftest.py`.
@@ -60,9 +60,10 @@ The environment has one variable, `OPENAI_API_KEY`, which beats `api_key` in the
 there is none for any other setting (a variable for `base_url` would let a project's
 environment send the key and every prompt elsewhere, one for the servers would start a
 program of its own, and `MODEL`, `BASE_URL` are exported by other programs). Only
-`--config` names another file. `load_config(path=None, **flags)` builds `Config`;
-`main()` prints the per-key errors and exits with status 1. Read the docstring of
-`config.py` for how, and why.
+`--config` names another file. `load_config(path=None, **flags)` reads the file, puts
+the key and the flags over it and validates the result as one `Config` (a plain pydantic
+model; there is no pydantic-settings); `main()` prints the per-key errors and exits with
+status 1. Read the docstring of `config.py` for how, and why.
 
 | Key | Default | Notes |
 |---|---|---|
@@ -90,8 +91,12 @@ The modules, in dependency order (each imports only from those above it):
   `check`, `runner`, `read_only`). `Tool.call` never raises (except Ctrl-C): a bad call
   or an exception comes back as text for the model, and output is cut at
   `MAX_OUTPUT_CHARS`.
-- `mcp_config.py`: `McpServerConfig` (one server in `config.json`), the url rules and the
-  `${NAME}` placeholders; what `config.py` needs of MCP, and no more.
+- `mcp_config.py`: the rules for a server's name and the `${NAME}` placeholders, which
+  `config.py` and the MCP code both need.
+- `config.py`: `Config`, `load_config()`, `EFFORTS`, the XDG directories, and the model of
+  a server in `config.json`: `LocalMcpServer` (a `command`) or `RemoteMcpServer` (a
+  `url`), told apart by `type` or by having a `url`, as the union `McpServerConfig`. A
+  field of the other kind is an error of its own, so there is no check of combinations.
 - `mcp_server.py`: `McpServer`, one connection used from synchronous code; its tools
   become `Tool`s. Imports `mcp` only when a server starts. The design notes are in its
   docstring.
@@ -100,7 +105,6 @@ The modules, in dependency order (each imports only from those above it):
   `ServerStatus` per server, which records what became of it for `/servers`.
 - `errors.py`, `prompts.py`: `TurnError`, `StreamCut`, `describe_error`,
   `is_context_overflow`, `is_images_rejected`; the three prompts as text. They import nothing of muagent.
-- `config.py`: `Config`, `load_config()`, `EFFORTS`, the XDG directories.
 - `context.py`: `Context` (the history and the summary), `estimate_tokens()`, and the
   functions on a turn's items (`drop_outputs`, `answer_open_calls`, `transcript`,
   `extract_summary`).

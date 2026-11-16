@@ -28,8 +28,9 @@ def make_context(turns: int) -> ResponseInputParam:
 
 
 def make_config(**values) -> Config:
-    # Not model_validate(): only the constructor reads names in any case.
-    return Config(**{"api_key": "test", "model": "gpt-4o", **values})  # pyright: ignore[reportCallIssue]
+    # Tests spell the settings in capitals (STREAMING=False); the fields are lowercase.
+    names = {name.lower(): value for name, value in values.items()}
+    return Config.model_validate({"api_key": "test", "model": "gpt-4o", **names})
 
 
 def run_repl(

@@ -6,13 +6,23 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from muagent.config import load_config
-from muagent.mcp_config import McpServerConfig
+from muagent.config import (
+    LocalMcpServer,
+    McpServerConfig,
+    RemoteMcpServer,
+    load_config,
+)
 
 
 def load_servers(path: Path) -> dict[str, McpServerConfig]:
     """The servers of a config file, as main() gets them."""
     return load_config(path, api_key="test").mcp_servers
+
+
+def local(servers: dict[str, McpServerConfig], name: str) -> LocalMcpServer:
+    server = servers[name]
+    assert isinstance(server, LocalMcpServer)
+    return server
 
 
 class TestLoadServers:
@@ -35,15 +45,16 @@ class TestLoadServers:
 
         servers = load_servers(path)
 
-        assert servers["plain"].args == [] and servers["plain"].env == {}
-        assert servers["plain"].read_only is False  # trust must be asked for
-        assert servers["plain"].startup_timeout == 30
-        assert servers["plain"].call_timeout == 300
-        assert servers["plain"].instructions is False
-        assert servers["plain"].images is False
-        assert servers["full"].args == ["a", "b"]
-        assert servers["full"].env == {"K": "v"}
-        assert servers["full"].read_only is True
+        plain, full = local(servers, "plain"), local(servers, "full")
+        assert plain.args == [] and plain.env == {}
+        assert plain.read_only is False  # trust must be asked for
+        assert plain.startup_timeout == 30
+        assert plain.call_timeout == 300
+        assert plain.instructions is False
+        assert plain.images is False
+        assert full.args == ["a", "b"]
+        assert full.env == {"K": "v"}
+        assert full.read_only is True
 
     def test_an_empty_object_has_no_servers(self, tmp_path):
         assert load_servers(self.write(tmp_path, "{}")) == {}
@@ -52,9 +63,15 @@ class TestLoadServers:
         ("text", "message"),
         [
             ("not json", "Invalid JSON"),
-            ('{"mcpServers": {"a": {}}}', "give either command"),
-            ('{"mcpServers": {"a": {"command": ""}}}', "mcpServers.a.command"),
-            ('{"mcpServers": {"a": {"command": "x", "arg": []}}}', "mcpServers.a.arg"),
+            (
+                '{"mcpServers": {"a": {}}}',
+                "mcpServers.a.local.command\n  Field required",
+            ),
+            ('{"mcpServers": {"a": {"command": ""}}}', "mcpServers.a.local.command"),
+            (
+                '{"mcpServers": {"a": {"command": "x", "arg": []}}}',
+                "mcpServers.a.local.arg",
+            ),
             ('{"mcpServers": {"a": {"url": "http://x"}}}', "url must be https"),
             (
                 '{"mcpServers": {"a.b": {"command": "x"}}}',
@@ -110,7 +127,8 @@ class TestUrls:
     def test_a_url_may_be_https_or_http_to_this_machine(self, tmp_path, url):
         config = self.load(tmp_path, {"url": url, "headers": {"A": "b"}})
 
-        assert (config.url, config.command) == (url, None)
+        assert isinstance(config, RemoteMcpServer)
+        assert config.url == url
         assert config.headers == {"A": "b"}
 
     @pytest.mark.parametrize(
@@ -122,11 +140,17 @@ class TestUrls:
             ({"url": "example.com/mcp"}, "url must be http"),
             ({"url": "https://"}, "url must be http"),
             ({"url": "https://user:pass@example.com/mcp"}, "user name or password"),
-            ({"url": "https://example.com", "command": "x"}, "either command"),
-            ({"url": "https://example.com", "args": ["x"]}, "go with command"),
-            ({"url": "https://example.com", "env": {"A": "b"}}, "go with command"),
-            ({"command": "x", "headers": {"A": "b"}}, "headers go with url"),
-            ({}, "either command"),
+            (
+                {"url": "https://example.com", "command": "x"},
+                r"remote\.command\n  Extra",
+            ),
+            ({"url": "https://example.com", "args": ["x"]}, r"remote\.args\n  Extra"),
+            (
+                {"url": "https://example.com", "env": {"A": "b"}},
+                r"remote\.env\n  Extra",
+            ),
+            ({"command": "x", "headers": {"A": "b"}}, r"local\.headers\n  Extra"),
+            ({}, r"local\.command\n  Field required"),
         ],
     )
     def test_a_server_is_one_thing_and_its_url_must_be_safe(
@@ -137,7 +161,7 @@ class TestUrls:
 
 
 class TestMcpJsonKeys:
-    """`type` and `enable`, as other tools' MCP files have them."""
+    """`type` and `enabled`, as other tools' MCP files have them."""
 
     def load(self, tmp_path: Path, entry: dict):
         path = tmp_path / "config.json"
@@ -145,8 +169,8 @@ class TestMcpJsonKeys:
         return load_servers(path)["s"]
 
     def test_a_server_is_on_by_default_and_can_be_switched_off(self, tmp_path):
-        assert self.load(tmp_path, {"command": "x"}).enable is True
-        assert self.load(tmp_path, {"command": "x", "enable": False}).enable is False
+        assert self.load(tmp_path, {"command": "x"}).enabled is True
+        assert self.load(tmp_path, {"command": "x", "enabled": False}).enabled is False
 
     @pytest.mark.parametrize(
         "entry",
@@ -159,7 +183,9 @@ class TestMcpJsonKeys:
     def test_there_is_no_working_directory_setting(self, tmp_path, entry):
         # A server starts where muagent does; a file that still has the key is
         # refused, and the message names it.
-        with pytest.raises(ValidationError, match=r"mcpServers\.s\.cwd"):
+        with pytest.raises(
+            ValidationError, match=r"mcpServers\.s\.(local|remote)\.cwd"
+        ):
             self.load(tmp_path, entry)
 
     @pytest.mark.parametrize(
@@ -175,16 +201,13 @@ class TestMcpJsonKeys:
     @pytest.mark.parametrize(
         ("entry", "message"),
         [
-            (
-                {"type": "remote", "command": "x"},
-                "type is 'remote', but a server with a command",
-            ),
+            ({"type": "remote", "command": "x"}, r"remote\.url\n  Field required"),
             (
                 {"type": "local", "url": "https://example.com"},
-                "type is 'local', but a server with a url",
+                r"local\.command\n  Field required",
             ),
             ({"type": "stdio", "command": "x"}, "local"),
-            ({"command": "x", "enable": "maybe"}, "enable"),
+            ({"command": "x", "enabled": "maybe"}, "enabled"),
         ],
     )
     def test_a_mistake_is_reported(self, tmp_path, entry, message):
@@ -201,14 +224,14 @@ class TestMcpJsonKeys:
                             "type": "remote",
                             "url": "https://docs.example.com/mcp",
                             "headers": {"API_KEY": "${DOCS_KEY}"},
-                            "enable": True,
+                            "enabled": True,
                         },
                         "files": {
                             "type": "local",
                             "command": "npx",
                             "args": ["-y", "files-server@1.2.3"],
                             "env": {"TOKEN": "${FILES_TOKEN}"},
-                            "enable": False,
+                            "enabled": False,
                         },
                     }
                 }
@@ -218,8 +241,9 @@ class TestMcpJsonKeys:
         servers = load_servers(path)
 
         assert list(servers) == ["docs", "files"]
-        assert servers["files"].env == {"TOKEN": "${FILES_TOKEN}"}  # filled in at start
-        assert servers["files"].enable is False
+        files = local(servers, "files")
+        assert files.env == {"TOKEN": "${FILES_TOKEN}"}  # filled in at start
+        assert files.enabled is False
 
 
 class TestToolsKey:
@@ -227,5 +251,25 @@ class TestToolsKey:
         path = tmp_path / "config.json"
         path.write_text('{"mcpServers": {"s": {"command": "x", "tools": []}}}')
 
-        with pytest.raises(ValidationError, match=r"mcpServers\.s\.tools"):
+        with pytest.raises(ValidationError, match=r"mcpServers\.s\.local\.tools"):
+            load_servers(path)
+
+
+class TestEntriesThatAreNotServers:
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            '"x"',
+            "null",
+            "[]",
+            "5",
+            '{"type": 5, "command": "x"}',
+            '{"type": ["local"]}',
+        ],
+    )
+    def test_they_are_reported_not_a_traceback(self, tmp_path, entry):
+        path = tmp_path / "config.json"
+        path.write_text(f'{{"mcpServers": {{"a": {entry}}}}}')
+
+        with pytest.raises(ValidationError, match="Unable to extract tag"):
             load_servers(path)

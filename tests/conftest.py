@@ -6,11 +6,12 @@ from pathlib import Path
 
 import pytest
 from openai import OpenAI
+from pydantic import TypeAdapter
 
 from fake_api import FakeResponsesHandler
 from helpers import FAKE, make_config, serve_http
 from muagent.agent import Agent
-from muagent.mcp_config import McpServerConfig
+from muagent.config import LocalMcpServer, McpServerConfig
 from muagent.mcp_hub import McpHub
 from muagent.mcp_server import McpServer
 from muagent.tools import Tool
@@ -71,9 +72,7 @@ def make_agent(client: OpenAI):
 def tools(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, Tool]]:
     """The fake server's tools, from one server shared by the tests that only call it."""
     log = tmp_path_factory.mktemp("mcp") / "log"
-    server = McpServer(
-        "fake", McpServerConfig(command=sys.executable, args=[FAKE]), log
-    )
+    server = McpServer("fake", LocalMcpServer(command=sys.executable, args=[FAKE]), log)
     server.start()
     yield {tool.name: tool for tool in server.tools()}
     server.close()
@@ -118,8 +117,10 @@ def make_server(tmp_path: Path) -> Iterator[Callable[..., McpServer]]:
     def make(
         *, start: bool = True, name: str = "fake", log: Path | None = None, **values
     ) -> McpServer:
-        values = {"command": sys.executable, "args": [FAKE], **values}
-        server = McpServer(name, McpServerConfig(**values), log or tmp_path / "mcp.log")
+        if "url" not in values:
+            values = {"command": sys.executable, "args": [FAKE], **values}
+        config = TypeAdapter(McpServerConfig).validate_python(values)
+        server = McpServer(name, config, log or tmp_path / "mcp.log")
         started.append(server)
         if start:
             server.start()

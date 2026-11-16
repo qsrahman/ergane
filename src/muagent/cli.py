@@ -108,7 +108,8 @@ def _exit_with(title: str, exc: ValidationError, file: Path) -> NoReturn:
     """
     print(title, file=sys.stderr)
     for error in exc.errors():
-        field = ".".join(str(part) for part in error["loc"])
+        # An error about the file as a whole has no field: it is titled with the path.
+        field = ".".join(str(part) for part in error["loc"]) or exc.title
         print(f"  - {field + ': ' if field else ''}{error['msg']}", file=sys.stderr)
     if any(e["type"] == "missing" and e["loc"] == ("api_key",) for e in exc.errors()):
         print(

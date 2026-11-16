@@ -7,16 +7,24 @@ from pathlib import Path
 import pytest
 
 from helpers import FAKE
-from muagent.mcp_config import McpServerConfig
+from muagent.config import LocalMcpServer, McpServerConfig, RemoteMcpServer
 from muagent.mcp_hub import McpHub, _expand, close_servers
 from muagent.mcp_server import McpServer, McpServerError
 from muagent.tools import Tool
 
 
 class TestPlaceholders:
-    def expand(self, **values):
-        config = McpServerConfig(command="x", **values)
-        return _expand("s", config, {"A": "1", "B": "two", "NESTED": "${A}"})
+    def expand(self, **values) -> LocalMcpServer:
+        config = LocalMcpServer(command="x", **values)
+        expanded = _expand("s", config, {"A": "1", "B": "two", "NESTED": "${A}"})
+        assert isinstance(expanded, LocalMcpServer)
+        return expanded
+
+    @staticmethod
+    def expand_remote(config: RemoteMcpServer, environ) -> RemoteMcpServer:
+        expanded = _expand("s", config, environ)
+        assert isinstance(expanded, RemoteMcpServer)
+        return expanded
 
     def test_they_are_filled_in_where_a_server_is_given_things(self):
         config = self.expand(
@@ -28,16 +36,17 @@ class TestPlaceholders:
         assert config.env == {"K": "vtwo"}
 
     def test_headers_too(self):
-        config = McpServerConfig(
+        config = RemoteMcpServer(
             url="https://example.com", headers={"H": "Bearer ${B}"}
         )
 
-        assert _expand("s", config, {"B": "tok"}).headers == {"H": "Bearer tok"}
+        assert self.expand_remote(config, {"B": "tok"}).headers == {"H": "Bearer tok"}
 
     def test_the_command_and_the_url_are_left_as_they_are(self):
         assert self.expand().command == "x"
-        config = McpServerConfig(url="https://example.com/${A}")
-        assert _expand("s", config, {"A": "1"}).url == "https://example.com/${A}"
+        config = RemoteMcpServer(url="https://example.com/${A}")
+        expanded = self.expand_remote(config, {"A": "1"})
+        assert expanded.url == "https://example.com/${A}"
 
     def test_a_value_is_not_searched_for_placeholders_again(self):
         assert self.expand(env={"K": "${NESTED}"}).env == {"K": "${A}"}
@@ -57,7 +66,7 @@ class TestPlaceholders:
 
 class TestStart:
     def fake(self, **values):
-        return McpServerConfig(command=sys.executable, args=[FAKE], **values)
+        return LocalMcpServer(command=sys.executable, args=[FAKE], **values)
 
     def test_every_server_starts_and_its_tools_are_collected(self, start_hub, tmp_path):
         notices: list[str] = []
@@ -77,7 +86,7 @@ class TestStart:
     ):
         notices: list[str] = []
         configs = {
-            "broken": McpServerConfig(command="/no/such/server"),
+            "broken": LocalMcpServer(command="/no/such/server"),
             "good": self.fake(),
         }
 
@@ -95,7 +104,7 @@ class TestStart:
         # The interrupt comes with the notice of the server that failed; the other
         # two run by then, and nobody is left to take them.
         configs = {
-            "broken": McpServerConfig(command="/no/such/server"),
+            "broken": LocalMcpServer(command="/no/such/server"),
             "first": self.fake(),
             "second": self.fake(),
         }
@@ -115,7 +124,7 @@ class TestStart:
 
     def test_a_server_that_is_too_slow_to_start_is_given_up_on(self, start_hub):
         notices: list[str] = []
-        silent = McpServerConfig(
+        silent = LocalMcpServer(
             command=sys.executable,
             args=["-c", "import time; time.sleep(60)"],
             startup_timeout=0.5,
@@ -144,10 +153,10 @@ class TestStart:
         )
         a, b = tmp_path / "a", tmp_path / "b"
         configs = {
-            "one": McpServerConfig(
+            "one": LocalMcpServer(
                 command=sys.executable, args=["-c", script, str(a), str(b)]
             ),
-            "two": McpServerConfig(
+            "two": LocalMcpServer(
                 command=sys.executable, args=["-c", script, str(b), str(a)]
             ),
         }
@@ -173,7 +182,7 @@ class TestStart:
         self, start_hub, tmp_path, http_url
     ):
         configs = {
-            "web": McpServerConfig(url=http_url, headers={"X-Test": "yes"}),
+            "web": RemoteMcpServer(url=http_url, headers={"X-Test": "yes"}),
             "local": self.fake(),
         }
 
@@ -189,7 +198,7 @@ class TestStart:
         self, start_hub, tmp_path
     ):
         notices: list[str] = []
-        configs = {"off": self.fake(enable=False), "on": self.fake()}
+        configs = {"off": self.fake(enabled=False), "on": self.fake()}
 
         hub, _ = start_hub(configs, notices.append)
 
@@ -224,7 +233,7 @@ class TestStart:
 
     def test_headers_are_filled_in_too(self, start_hub, http_url):
         configs = {
-            "web": McpServerConfig(
+            "web": RemoteMcpServer(
                 url=http_url, headers={"Authorization": "Bearer ${TOKEN}"}
             )
         }
@@ -262,15 +271,15 @@ class TestStatuses:
     """What became of each server, for /servers: the notices are shown once."""
 
     def fake(self, **values):
-        return McpServerConfig(command=sys.executable, args=[FAKE], **values)
+        return LocalMcpServer(command=sys.executable, args=[FAKE], **values)
 
     def test_every_server_has_a_status_in_the_order_of_the_file(
         self, start_hub, tmp_path
     ):
         configs = {
             "good": self.fake(tools=["add", "read_file"]),
-            "off": self.fake(enable=False),
-            "bad": McpServerConfig(command="/no/such/server"),
+            "off": self.fake(enabled=False),
+            "bad": LocalMcpServer(command="/no/such/server"),
             "unset": self.fake(env={"K": "${NOT_SET_ANYWHERE}"}),
         }
         notices: list[str] = []
@@ -291,14 +300,14 @@ class TestStatuses:
         assert notices == [by["bad"].detail, by["unset"].detail]
 
     def test_a_url_server_has_no_log(self, start_hub, http_url):
-        hub, _ = start_hub({"web": McpServerConfig(url=http_url, tools=["add"])})
+        hub, _ = start_hub({"web": RemoteMcpServer(url=http_url, tools=["add"])})
 
         assert hub.statuses[0].state == "running" and hub.statuses[0].log is None
 
 
 class TestStartingTogether:
     def hanging(self, timeout: float = 1) -> McpServerConfig:
-        return McpServerConfig(command="sleep", args=["30"], startup_timeout=timeout)
+        return LocalMcpServer(command="sleep", args=["30"], startup_timeout=timeout)
 
     def test_servers_that_never_answer_delay_the_start_by_one_timeout_not_the_sum(
         self, start_hub
@@ -348,10 +357,10 @@ class TestStartingTogether:
 class TestNamesAcrossServers:
     def test_two_servers_cannot_give_the_model_the_same_tool_name(self, start_hub):
         configs = {
-            "outer": McpServerConfig(
+            "outer": LocalMcpServer(
                 command=sys.executable, args=[FAKE], tools=["inner__tool"]
             ),
-            "outer__inner": McpServerConfig(
+            "outer__inner": LocalMcpServer(
                 command=sys.executable, args=[FAKE], tools=["tool"]
             ),
         }
@@ -373,7 +382,7 @@ class TestHub:
     @staticmethod
     def fake(**values) -> McpServerConfig:
         values = {"instructions": True, **values}  # off by default, as in the config
-        return McpServerConfig(command=sys.executable, args=[FAKE], **values)
+        return LocalMcpServer(command=sys.executable, args=[FAKE], **values)
 
     @staticmethod
     def names(tools: list[Tool]) -> list[str]:
@@ -420,7 +429,9 @@ class TestHub:
         assert log.read_text().startswith(before)
 
     def test_a_server_that_failed_can_start_when_the_cause_is_gone(self, tmp_path):
-        configs = {"fake": McpServerConfig(command="/no/such/server")}
+        configs: dict[str, McpServerConfig] = {
+            "fake": LocalMcpServer(command="/no/such/server")
+        }
         hub = McpHub(configs, tmp_path)
         try:
             assert hub.start(lambda notice: None) == []
@@ -437,7 +448,7 @@ class TestHub:
 
     def test_a_server_that_fails_again_loses_its_tools_and_says_why(self, hub):
         tools = hub.start(lambda notice: None)
-        hub.configs = {"fake": McpServerConfig(command="/no/such/server")}
+        hub.configs = {"fake": LocalMcpServer(command="/no/such/server")}
 
         update = hub.reconnect("fake")
 
@@ -448,7 +459,7 @@ class TestHub:
         assert hub.servers == {}
 
     def test_a_server_that_is_off_stays_off(self, tmp_path):
-        hub = McpHub({"fake": self.fake(enable=False)}, tmp_path)
+        hub = McpHub({"fake": self.fake(enabled=False)}, tmp_path)
         try:
             hub.start(lambda notice: None)
 
@@ -464,11 +475,11 @@ class TestStartingInTheBackground:
     @staticmethod
     def fake(**values) -> McpServerConfig:
         values = {"instructions": True, **values}
-        return McpServerConfig(command=sys.executable, args=[FAKE], **values)
+        return LocalMcpServer(command=sys.executable, args=[FAKE], **values)
 
     @staticmethod
     def hanging(timeout: float = 30) -> McpServerConfig:
-        return McpServerConfig(command="sleep", args=["30"], startup_timeout=timeout)
+        return LocalMcpServer(command="sleep", args=["30"], startup_timeout=timeout)
 
     @pytest.fixture
     def hubs(self, tmp_path: Path) -> Iterator[Callable[..., McpHub]]:
@@ -484,7 +495,7 @@ class TestStartingInTheBackground:
             hub.close()
 
     def test_begin_does_not_wait_and_the_servers_are_starting(self, hubs):
-        hub = hubs({"slow": self.hanging(), "off": self.fake(enable=False)})
+        hub = hubs({"slow": self.hanging(), "off": self.fake(enabled=False)})
 
         started = time.monotonic()
         hub.begin()
@@ -522,7 +533,7 @@ class TestStartingInTheBackground:
         assert [s.state for s in hub.statuses] == ["running"]
 
     def test_a_server_that_fails_is_told_when_taken_not_before(self, hubs):
-        hub = hubs({"bad": McpServerConfig(command="/no/such/server")})
+        hub = hubs({"bad": LocalMcpServer(command="/no/such/server")})
         notices: list[str] = []
         hub.begin()
 

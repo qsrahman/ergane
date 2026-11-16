@@ -58,7 +58,8 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
-from muagent.mcp_config import NAME_CHARS, NAME_PATTERN, McpServerConfig
+from muagent.config import McpServerConfig
+from muagent.mcp_config import NAME_CHARS, NAME_PATTERN
 from muagent.tools import Image, Tool, ToolOutput, invalid_arguments
 
 if TYPE_CHECKING:
@@ -312,7 +313,7 @@ class McpServer:
                 "install muagent with its mcp extra"
             )
         log = None
-        if self._config.command is not None:
+        if self._config.type == "local":
             try:
                 self._log_path.parent.mkdir(parents=True, exist_ok=True)
                 # A restart adds to the log: why the server stopped is in it.
@@ -409,8 +410,8 @@ class McpServer:
 
         try:
             async with AsyncExitStack() as stack:
-                if config.url is None:
-                    assert config.command is not None and log is not None
+                if config.type == "local":
+                    assert log is not None
                     params = StdioServerParameters(
                         command=config.command,
                         args=config.args,

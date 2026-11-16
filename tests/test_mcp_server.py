@@ -16,7 +16,7 @@ import pytest
 
 from fake_api import TEXT
 from helpers import FAKE, serve_http
-from muagent.mcp_config import McpServerConfig
+from muagent.config import LocalMcpServer, RemoteMcpServer
 from muagent.mcp_server import McpServer, McpServerError, _list_tools
 from muagent.tools import MAX_OUTPUT_CHARS, Tool
 
@@ -282,7 +282,7 @@ class TestLog:
         assert log.read_text() == "fake server log line\n"
 
     def test_a_log_that_cannot_be_written_is_a_start_failure(self, tmp_path):
-        config = McpServerConfig(command=sys.executable, args=[FAKE])
+        config = LocalMcpServer(command=sys.executable, args=[FAKE])
         server = McpServer("fake", config, tmp_path)  # a directory
 
         with pytest.raises(McpServerError, match="cannot write its log"):
@@ -290,7 +290,7 @@ class TestLog:
 
     def test_a_missing_mcp_package_is_explained(self, tmp_path, monkeypatch):
         monkeypatch.setattr("importlib.util.find_spec", lambda name: None)
-        config = McpServerConfig(command=sys.executable, args=[FAKE])
+        config = LocalMcpServer(command=sys.executable, args=[FAKE])
         server = McpServer("fake", config, tmp_path / "log")
 
         with pytest.raises(McpServerError, match="needs the mcp package"):
@@ -299,7 +299,7 @@ class TestLog:
 
 class TestHttp:
     def make(self, make_server, url, **values) -> McpServer:
-        return make_server(name="web", command=None, args=[], url=url, **values)
+        return make_server(name="web", url=url, **values)
 
     def test_the_tools_of_a_server_at_a_url_can_be_called(self, make_server, http_url):
         server = self.make(make_server, http_url)
@@ -397,7 +397,7 @@ class TestToolFilter:
         self, start_hub
     ):
         notices: list[str] = []
-        config = McpServerConfig(
+        config = LocalMcpServer(
             command=sys.executable, args=[FAKE], tools=["add", "ad"]
         )
 
@@ -682,7 +682,7 @@ class TestConnectionLost:
 
         process = run()
         server = McpServer(
-            "web", McpServerConfig(url=f"http://127.0.0.1:{port}/mcp"), tmp_path / "l"
+            "web", RemoteMcpServer(url=f"http://127.0.0.1:{port}/mcp"), tmp_path / "l"
         )
         try:
             server.start()

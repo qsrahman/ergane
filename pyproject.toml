@@ -13,7 +13,6 @@ dependencies = [
     "openai>=3.31.0",
     "prompt-toolkit>=3.0.53",
     "pydantic>=2.14.1",
-    "pydantic-settings>=2.16.0",
 ]
 
 [project.scripts]

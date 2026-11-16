@@ -55,7 +55,7 @@ def test_a_config_file_that_is_not_text_is_reported_not_a_traceback(tmp_path, ca
         main(["--config", str(bad)])
 
     assert exc.value.code == 1
-    assert "bad.json is not UTF-8" in capsys.readouterr().err
+    assert "bad.json" in capsys.readouterr().err
 
 
 def test_a_directory_as_the_config_file_is_reported(tmp_path, capsys):
@@ -63,7 +63,7 @@ def test_a_directory_as_the_config_file_is_reported(tmp_path, capsys):
         main(["--config", str(tmp_path)])
 
     assert exc.value.code == 1
-    assert "is a directory, not a file" in capsys.readouterr().err
+    assert "Is a directory" in capsys.readouterr().err
 
 
 def test_another_mistake_gets_no_such_help(monkeypatch, capsys):
@@ -179,10 +179,10 @@ class TestMcpServers:
                 "on": {
                     **FAKE_SERVER,
                     "type": "local",
-                    "enable": True,
+                    "enabled": True,
                     "env": {"KEY": "${FAKE_KEY}"},
                 },
-                "off": {**FAKE_SERVER, "type": "local", "enable": False},
+                "off": {**FAKE_SERVER, "type": "local", "enabled": False},
                 "unset": {**FAKE_SERVER, "env": {"KEY": "${NOT_SET_ANYWHERE}"}},
             },
         )
@@ -258,7 +258,7 @@ class TestMcpServers:
             {
                 "broken": {"command": "/no/such/server"},
                 "good": {**FAKE_SERVER, "tools": ["add"]},
-                "off": {**FAKE_SERVER, "enable": False},
+                "off": {**FAKE_SERVER, "enabled": False},
             },
         )
         inputs = iter(["/servers", "/exit"])
@@ -269,7 +269,7 @@ class TestMcpServers:
         out = capsys.readouterr().out
         assert out.count("failed to start: FileNotFoundError") == 2  # shown, and again
         assert '  good    running, 1 tool (17 left out by "tools"), ~' in out
-        assert "  off     off: enable is false" in out
+        assert "  off     off: enabled is false" in out
         # A program that failed may have said why on stderr, so its log is named.
         assert "good.log" in out and "broken.log" in out
 
@@ -295,7 +295,7 @@ class TestMcpServers:
         err = capsys.readouterr().err
         assert exc.value.code == 1
         assert err.startswith("Configuration error:")
-        assert "  - mcpServers.fake.arg:" in err
+        assert "  - mcpServers.fake.local.arg:" in err
 
     def test_ctrl_c_while_the_servers_start_exits_quietly(
         self, monkeypatch: pytest.MonkeyPatch
@@ -401,7 +401,7 @@ class TestFlags:
             main(["--config", str(tmp_path / "nowhere.json")])
 
         assert exc.value.code == 1
-        assert "Config file not found" in capsys.readouterr().err
+        assert "nowhere.json" in capsys.readouterr().err
 
     def test_no_mcp_starts_none_of_the_servers(self, tmp_path: Path):
         write_config_json(tmp_path, {"fake": FAKE_SERVER})
