@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import sys
+import textwrap
 from collections.abc import Callable, Sequence
 from typing import Any, Literal
 
@@ -158,13 +159,23 @@ class Console:
     def columns(self, rows: Sequence[tuple[str, str]]) -> None:
         """Print rows of a label and a text, the texts lined up.
 
+        A text longer than the terminal is wrapped at its spaces, the next lines
+        lined up under the first.
+
         Args:
             rows: The labels and what to say of each. Each line is indented by two
                 spaces; the caller adds the blank line after the last.
         """
         width = max(len(label) for label, _ in rows)
+        indent = " " * (width + 4)
+        room = max(shutil.get_terminal_size().columns - len(indent) - 1, 20)
         for label, text in rows:
-            self.write(f"  {label:<{width}}  {text}\n")
+            lines = textwrap.wrap(
+                text, room, break_long_words=False, break_on_hyphens=False
+            ) or [""]
+            self.write(f"  {label:<{width}}  {lines[0]}\n")
+            for line in lines[1:]:
+                self.write(f"{indent}{line}\n")
 
     def end_line(self) -> None:
         """Finish the current line, if one was started."""

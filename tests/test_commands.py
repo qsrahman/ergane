@@ -201,7 +201,7 @@ class TestCommandsWithAgent:
     def test_help_lists_every_registered_command(self, monkeypatch, make_agent, capsys):
         run_repl(monkeypatch, make_agent(), self.inputs("/help"))
 
-        out = capsys.readouterr().out
+        out = " ".join(capsys.readouterr().out.split())  # a long line wraps
         for name, cmd in COMMANDS.items():
             assert name in out
             assert cmd.description in out

@@ -498,3 +498,22 @@ class TestColumns:
         console.notice("done")
 
         assert capsys.readouterr().out == "  a  one\n[done]\n"
+
+    def test_a_long_text_wraps_under_its_own_column(self, capsys, monkeypatch):
+        monkeypatch.setenv("COLUMNS", "40")
+        names = ", ".join(f"server__tool_{n}" for n in range(6))
+
+        Console().columns([("ask first", names), ("b", "short")])
+
+        out = capsys.readouterr().out.splitlines()
+        assert len(out) > 3 and all(len(line) < 40 for line in out)
+        assert out[0].startswith("  ask first  server__tool_0,")
+        assert out[1].startswith(" " * 13 + "server__tool_")
+        assert out[-1] == "  b          short"
+
+    def test_a_name_with_a_hyphen_is_not_broken(self, capsys, monkeypatch):
+        monkeypatch.setenv("COLUMNS", "40")
+
+        Console().columns([("x", "aaaa, context7__resolve-library-id, bbbb")])
+
+        assert "context7__resolve-library-id," in capsys.readouterr().out

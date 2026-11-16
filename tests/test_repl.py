@@ -449,7 +449,7 @@ class TestTerminalSession:
         out = capsys.readouterr().out
         assert "  Alt-Enter, Ctrl-J  Add a line to the prompt" in out
         assert "Ctrl-C             Clear the line; on an empty line, press twice" in out
-        assert '"Allow …?": y allows, a allows the tool for the session' in out
+        assert '"Allow …?": y allows, a allows the tool for the' in out
 
     def test_help_lists_the_keys_in_order(self, tmp_path, capsys):
         self.read(tmp_path, "/help\r/exit\r")
