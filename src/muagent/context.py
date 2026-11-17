@@ -35,20 +35,19 @@ PRUNE_TAIL = 1000
 # A tool result in the text that is summarized is cut to this many characters.
 TRANSCRIPT_RESULT_CHARS = 2000
 
-# Item types that only matter while a turn runs, and for the turn after it.
-_TOOL_WORK = ("reasoning", "function_call", "function_call_output")
-
-
-def _is_user_message(item: object) -> bool:
-    return isinstance(item, dict) and item.get("role") == "user"
-
-
 # A picture is counted as this many tokens, whatever the bytes of its base64: the API
 # charges for its size and detail, not for its length as text.
 IMAGE_TOKENS = 1000
 
 IMAGE_DROPPED = "[image dropped to fit the context]"
 IMAGE_REFUSED = "[image removed: the model does not take pictures]"
+
+# Item types that only matter while a turn runs, and for the turn after it.
+_TOOL_WORK = ("reasoning", "function_call", "function_call_output")
+
+
+def _is_user_message(item: object) -> bool:
+    return isinstance(item, dict) and item.get("role") == "user"
 
 
 def function_output(

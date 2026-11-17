@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from fake_api import TEXT
-from helpers import FAKE, serve_http
+from helpers import FAKE, fake_config, serve_http
 from muagent.config import LocalMcpServer, RemoteMcpServer
 from muagent.mcp_client import McpClient, McpServerError, _list_tools
 from muagent.tools import MAX_OUTPUT_CHARS, Tool
@@ -282,7 +282,7 @@ class TestLog:
         assert log.read_text() == "fake server log line\n"
 
     def test_a_log_that_cannot_be_written_is_a_start_failure(self, tmp_path):
-        config = LocalMcpServer(command=sys.executable, args=[FAKE])
+        config = fake_config()
         server = McpClient("fake", config, tmp_path)  # a directory
 
         with pytest.raises(McpServerError, match="cannot write its log"):
@@ -290,7 +290,7 @@ class TestLog:
 
     def test_a_missing_mcp_package_is_explained(self, tmp_path, monkeypatch):
         monkeypatch.setattr("importlib.util.find_spec", lambda name: None)
-        config = LocalMcpServer(command=sys.executable, args=[FAKE])
+        config = fake_config()
         server = McpClient("fake", config, tmp_path / "log")
 
         with pytest.raises(McpServerError, match="needs the mcp package"):

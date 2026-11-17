@@ -118,6 +118,12 @@ def _log_file(config: McpServerConfig, log_dir: Path, name: str) -> Path | None:
     return path if config.type == "local" and path.exists() else None
 
 
+def _failed_status(
+    name: str, message: str, config: McpServerConfig, log_dir: Path
+) -> ServerStatus:
+    return ServerStatus(name, "failed", message, log=_log_file(config, log_dir, name))
+
+
 def close_servers(servers: Iterable[McpClient]) -> None:
     """Close the servers all at once.
 
@@ -214,7 +220,9 @@ class _Startup:
 
         def failed_with(name: str, message: str) -> None:
             on_notice(message)
-            statuses[name] = ServerStatus(name, "failed", message, log=log_of(name))
+            statuses[name] = _failed_status(
+                name, message, self.configs[name], self.log_dir
+            )
 
         for name, entry in self.entries:
             if isinstance(entry, str):
@@ -273,9 +281,8 @@ class McpHub:
         self.configs = configs
         self.log_dir = log_dir
         self.environ = environ
-        self.statuses: list[
-            ServerStatus
-        ] = []  # in the order of the file, kept in place
+        # In the order of the file, kept in place.
+        self.statuses: list[ServerStatus] = []
         self.servers: dict[str, McpClient] = {}  # the ones that run
         self._startup: _Startup | None = None  # begun, and not finished
         self._started: list[ServerUpdate] = []  # finished, not yet taken
@@ -431,14 +438,7 @@ class McpHub:
             if server is not None:
                 server.close()
             message = _failure_text(name, exc)
-            self._set_status(
-                ServerStatus(
-                    name,
-                    "failed",
-                    message,
-                    log=_log_file(config, self.log_dir, name),
-                )
-            )
+            self._set_status(_failed_status(name, message, config, self.log_dir))
             return ServerUpdate(name, before.tools, [], None, message)
         self.servers[name] = server
         self._set_status(

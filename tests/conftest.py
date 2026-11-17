@@ -9,9 +9,9 @@ from openai import OpenAI
 from pydantic import TypeAdapter
 
 from fake_api import FakeResponsesHandler
-from helpers import FAKE, make_config, serve_http
+from helpers import FAKE, fake_config, make_config, serve_http
 from muagent.agent import Agent
-from muagent.config import LocalMcpServer, McpServerConfig
+from muagent.config import McpServerConfig
 from muagent.mcp_client import McpClient
 from muagent.mcp_hub import McpHub
 from muagent.tools import Tool
@@ -72,7 +72,7 @@ def make_agent(client: OpenAI):
 def tools(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, Tool]]:
     """The fake server's tools, from one server shared by the tests that only call it."""
     log = tmp_path_factory.mktemp("mcp") / "log"
-    server = McpClient("fake", LocalMcpServer(command=sys.executable, args=[FAKE]), log)
+    server = McpClient("fake", fake_config(), log)
     server.start()
     yield {tool.name: tool for tool in server.tools()}
     server.close()

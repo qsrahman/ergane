@@ -6,7 +6,7 @@ import pytest
 
 from helpers import make_config, run_repl
 from muagent.agent import Agent
-from muagent.console import Console, sanitize
+from muagent.console import Console, _room, sanitize  # pyright: ignore[reportPrivateUsage]
 from muagent.errors import TurnError
 from muagent.tools import Tool
 
@@ -440,6 +440,14 @@ class TestCall:
         Console().call("read_file", arguments)
 
         assert "…" not in capsys.readouterr().out
+
+
+class TestRoom:
+    def test_a_line_never_fills_the_terminal_and_has_room_for_twenty(self, monkeypatch):
+        monkeypatch.setenv("COLUMNS", "80")
+
+        assert _room(10) == 69
+        assert _room(200) == 20
 
 
 class TestDim:

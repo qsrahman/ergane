@@ -7,10 +7,9 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
 from fake_api import REFUSAL, STREAM_ERROR, TEXT
-from helpers import anchor, make_config, make_context, run_repl
+from helpers import anchor, hanging_config, make_config, make_context, run_repl
 from muagent.agent import Agent
 from muagent.commands import COMMANDS
-from muagent.config import LocalMcpServer
 from muagent.mcp_hub import McpHub, ServerStatus, ServerUpdate
 from muagent.repl import Repl, terminal_session
 from muagent.tools import Tool
@@ -368,7 +367,7 @@ class TestToolbarAndServers:
         return Repl(Agent(make_config()), COMMANDS, hub=hub)._toolbar()  # pyright: ignore[reportPrivateUsage]
 
     def test_it_says_while_servers_start(self, tmp_path):
-        hub = McpHub({"slow": LocalMcpServer(command="sleep", args=["30"])}, tmp_path)
+        hub = McpHub({"slow": hanging_config()}, tmp_path)
         try:
             hub.begin()
 

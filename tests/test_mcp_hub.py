@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from helpers import FAKE
+from helpers import FAKE, fake_config, hanging_config
 from muagent.config import LocalMcpServer, McpServerConfig, RemoteMcpServer
 from muagent.mcp_client import McpClient, McpServerError
 from muagent.mcp_hub import McpHub, _expand, close_servers
@@ -65,12 +65,9 @@ class TestPlaceholders:
 
 
 class TestStart:
-    def fake(self, **values):
-        return LocalMcpServer(command=sys.executable, args=[FAKE], **values)
-
     def test_every_server_starts_and_its_tools_are_collected(self, start_hub, tmp_path):
         notices: list[str] = []
-        configs = {"one": self.fake(), "two": self.fake(read_only=True)}
+        configs = {"one": fake_config(), "two": fake_config(read_only=True)}
 
         _, found = start_hub(configs, notices.append)
 
@@ -87,7 +84,7 @@ class TestStart:
         notices: list[str] = []
         configs = {
             "broken": LocalMcpServer(command="/no/such/server"),
-            "good": self.fake(),
+            "good": fake_config(),
         }
 
         hub, found = start_hub(configs, notices.append)
@@ -105,8 +102,8 @@ class TestStart:
         # two run by then, and nobody is left to take them.
         configs = {
             "broken": LocalMcpServer(command="/no/such/server"),
-            "first": self.fake(),
-            "second": self.fake(),
+            "first": fake_config(),
+            "second": fake_config(),
         }
         with pytest.raises(KeyboardInterrupt):
             start_hub(configs, interrupt)
@@ -115,7 +112,7 @@ class TestStart:
         assert "mcp-first" not in names and "mcp-second" not in names
 
     def test_the_timeouts_of_a_server_are_used(self, start_hub):
-        _, found = start_hub({"quick": self.fake(call_timeout=0.3)})
+        _, found = start_hub({"quick": fake_config(call_timeout=0.3)})
         by_name = {tool.name: tool for tool in found}
 
         result = by_name["quick__slow"].call('{"seconds": 1}')
@@ -183,7 +180,7 @@ class TestStart:
     ):
         configs = {
             "web": RemoteMcpServer(url=http_url, headers={"X-Test": "yes"}),
-            "local": self.fake(),
+            "local": fake_config(),
         }
 
         _, found = start_hub(configs)
@@ -198,7 +195,7 @@ class TestStart:
         self, start_hub, tmp_path
     ):
         notices: list[str] = []
-        configs = {"off": self.fake(enabled=False), "on": self.fake()}
+        configs = {"off": fake_config(enabled=False), "on": fake_config()}
 
         hub, _ = start_hub(configs, notices.append)
 
@@ -207,7 +204,7 @@ class TestStart:
         assert not (tmp_path / "off.log").exists()
 
     def test_placeholders_are_filled_in_from_the_environment(self, start_hub):
-        configs = {"local": self.fake(env={"GIVEN": "${SOURCE}"})}
+        configs = {"local": fake_config(env={"GIVEN": "${SOURCE}"})}
 
         _, found = start_hub(configs, environ={"SOURCE": "from-the-environment"})
 
@@ -225,7 +222,7 @@ class TestStart:
         project.mkdir()
         monkeypatch.chdir(project)
 
-        _, found = start_hub({"local": self.fake()})
+        _, found = start_hub({"local": fake_config()})
 
         by_name = {tool.name: tool for tool in found}
         result = by_name["local__getcwd"].call("{}")
@@ -248,9 +245,9 @@ class TestStart:
     ):
         notices: list[str] = []
         configs = {
-            "first": self.fake(),
-            "needs": self.fake(env={"K": "${NOT_SET}"}),
-            "last": self.fake(),
+            "first": fake_config(),
+            "needs": fake_config(env={"K": "${NOT_SET}"}),
+            "last": fake_config(),
         }
 
         hub, _ = start_hub(configs, notices.append, environ={})
@@ -270,17 +267,14 @@ class TestStart:
 class TestStatuses:
     """What became of each server, for /servers: the notices are shown once."""
 
-    def fake(self, **values):
-        return LocalMcpServer(command=sys.executable, args=[FAKE], **values)
-
     def test_every_server_has_a_status_in_the_order_of_the_file(
         self, start_hub, tmp_path
     ):
         configs = {
-            "good": self.fake(tools=["add", "read_file"]),
-            "off": self.fake(enabled=False),
+            "good": fake_config(tools=["add", "read_file"]),
+            "off": fake_config(enabled=False),
             "bad": LocalMcpServer(command="/no/such/server"),
-            "unset": self.fake(env={"K": "${NOT_SET_ANYWHERE}"}),
+            "unset": fake_config(env={"K": "${NOT_SET_ANYWHERE}"}),
         }
         notices: list[str] = []
 
@@ -306,9 +300,6 @@ class TestStatuses:
 
 
 class TestStartingTogether:
-    def hanging(self, timeout: float = 1) -> McpServerConfig:
-        return LocalMcpServer(command="sleep", args=["30"], startup_timeout=timeout)
-
     def test_servers_that_never_answer_delay_the_start_by_one_timeout_not_the_sum(
         self, start_hub
     ):
@@ -316,7 +307,8 @@ class TestStartingTogether:
         started = time.monotonic()
 
         hub, found = start_hub(
-            {f"hang{i}": self.hanging() for i in range(4)}, notices.append
+            {f"hang{i}": hanging_config(startup_timeout=1) for i in range(4)},
+            notices.append,
         )
 
         elapsed = time.monotonic() - started
@@ -326,7 +318,9 @@ class TestStartingTogether:
         assert elapsed < 6
 
     def test_a_server_that_fails_to_connect_is_left_for_close(self, tmp_path):
-        server = McpClient("hang", self.hanging(1), tmp_path / "hang.log")
+        server = McpClient(
+            "hang", hanging_config(startup_timeout=1), tmp_path / "hang.log"
+        )
         server.launch()
         try:
             with pytest.raises(McpServerError, match="did not answer within 1 s"):
@@ -339,7 +333,9 @@ class TestStartingTogether:
 
     def test_servers_are_closed_together(self, tmp_path):
         servers = [
-            McpClient(f"slow{i}", self.hanging(30), tmp_path / f"{i}.log")
+            McpClient(
+                f"slow{i}", hanging_config(startup_timeout=30), tmp_path / f"{i}.log"
+            )
             for i in range(3)
         ]
         for server in servers:
@@ -357,12 +353,8 @@ class TestStartingTogether:
 class TestNamesAcrossServers:
     def test_two_servers_cannot_give_the_model_the_same_tool_name(self, start_hub):
         configs = {
-            "outer": LocalMcpServer(
-                command=sys.executable, args=[FAKE], tools=["inner__tool"]
-            ),
-            "outer__inner": LocalMcpServer(
-                command=sys.executable, args=[FAKE], tools=["tool"]
-            ),
+            "outer": fake_config(tools=["inner__tool"]),
+            "outer__inner": fake_config(tools=["tool"]),
         }
 
         _, found = start_hub(configs)
@@ -382,7 +374,7 @@ class TestHub:
     @staticmethod
     def fake(**values) -> McpServerConfig:
         values = {"instructions": True, **values}  # off by default, as in the config
-        return LocalMcpServer(command=sys.executable, args=[FAKE], **values)
+        return fake_config(**values)
 
     @staticmethod
     def names(tools: list[Tool]) -> list[str]:
@@ -475,11 +467,7 @@ class TestStartingInTheBackground:
     @staticmethod
     def fake(**values) -> McpServerConfig:
         values = {"instructions": True, **values}
-        return LocalMcpServer(command=sys.executable, args=[FAKE], **values)
-
-    @staticmethod
-    def hanging(timeout: float = 30) -> McpServerConfig:
-        return LocalMcpServer(command="sleep", args=["30"], startup_timeout=timeout)
+        return fake_config(**values)
 
     @pytest.fixture
     def hubs(self, tmp_path: Path) -> Iterator[Callable[..., McpHub]]:
@@ -495,7 +483,7 @@ class TestStartingInTheBackground:
             hub.close()
 
     def test_begin_does_not_wait_and_the_servers_are_starting(self, hubs):
-        hub = hubs({"slow": self.hanging(), "off": self.fake(enabled=False)})
+        hub = hubs({"slow": hanging_config(), "off": self.fake(enabled=False)})
 
         started = time.monotonic()
         hub.begin()
@@ -547,7 +535,7 @@ class TestStartingInTheBackground:
         assert len(notices) == 1  # once
 
     def test_a_server_that_never_answers_ends_as_failed(self, hubs):
-        hub = hubs({"slow": self.hanging(timeout=0.5)})
+        hub = hubs({"slow": hanging_config(startup_timeout=0.5)})
         hub.begin()
 
         hub.take(lambda notice: None, wait=True)
@@ -579,7 +567,7 @@ class TestStartingInTheBackground:
         assert update.name == "fake"
 
     def test_closing_while_servers_start_stops_them(self, hubs):
-        hub = hubs({"slow": self.hanging()})
+        hub = hubs({"slow": hanging_config()})
         hub.begin()
 
         hub.close()

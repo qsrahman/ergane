@@ -13,7 +13,7 @@ from openai.types.responses import ResponseInputParam
 
 from muagent.agent import Agent
 from muagent.commands import COMMANDS
-from muagent.config import Config
+from muagent.config import Config, LocalMcpServer
 from muagent.mcp_hub import McpHub, ServerStatus
 from muagent.repl import Repl
 from muagent.tools import Tool
@@ -69,6 +69,16 @@ def tool_with(function) -> Tool:
 
 
 FAKE = str(Path(__file__).parent / "fake_mcp_server.py")
+
+
+def fake_config(**values) -> LocalMcpServer:
+    """The fake MCP server (`fake_mcp_server.py`) as a program to run."""
+    return LocalMcpServer(command=sys.executable, args=[FAKE], **values)
+
+
+def hanging_config(**values) -> LocalMcpServer:
+    """A server that never answers: `sleep` does not speak MCP."""
+    return LocalMcpServer(command="sleep", args=["30"], **values)
 
 
 @contextlib.contextmanager

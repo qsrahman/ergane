@@ -63,6 +63,12 @@ def _cut_strings(value: Any, cap: int) -> Any:
     return value
 
 
+def _room(used: int) -> int:
+    """How many characters of a terminal line are left after `used` (at least 20): a
+    line that fills it exactly would wrap in some terminals."""
+    return max(shutil.get_terminal_size().columns - used - 1, 20)
+
+
 def _fit(arguments: str, room: int) -> tuple[str, bool]:
     """A tool call's arguments on one line of at most `room` characters.
 
@@ -168,7 +174,7 @@ class Console:
         """
         width = max(len(label) for label, _ in rows)
         indent = " " * (width + 4)
-        room = max(shutil.get_terminal_size().columns - len(indent) - 1, 20)
+        room = _room(len(indent))
         for label, text in rows:
             lines = textwrap.wrap(
                 text, room, break_long_words=False, break_on_hyphens=False
@@ -201,8 +207,7 @@ class Console:
             name: The tool's name.
             arguments: The model's arguments, as JSON text.
         """
-        room = shutil.get_terminal_size().columns - len(name) - len("[()]") - 1
-        shown, _ = _fit(arguments, max(room, 20))
+        shown, _ = _fit(arguments, _room(len(name) + len("[()]")))
         self.notice(f"{name}({shown})")
 
     def confirm(self, tool: Tool, arguments: str) -> bool | Literal["always"]:
@@ -225,10 +230,7 @@ class Console:
             a no.
         """
         before = f"Allow {tool.name} "
-        room = (
-            shutil.get_terminal_size().columns - len(before) - len("? [y/N/a/?] ") - 1
-        )
-        shown, shortened = _fit(arguments, max(room, 20))
+        shown, shortened = _fit(arguments, _room(len(before) + len("? [y/N/a/?] ")))
         prompt = f"{before}{shown}? [y/N/a{'/?' if shortened else ''}] "
         while True:
             self.end_line()

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from fake_api import TEXT
-from helpers import anchor, run_repl
+from helpers import anchor, fake_config, hanging_config, run_repl
 from muagent.commands import COMMANDS, Command, command
 from muagent.config import LocalMcpServer
 from muagent.context import estimate_tokens
@@ -621,7 +621,7 @@ class TestReconnectCommand:
 
 
 class TestServersStartingInTheBackground:
-    FAKE_CONFIG = LocalMcpServer(command=sys.executable, args=[FAKE])
+    FAKE_CONFIG = fake_config()
 
     @pytest.fixture
     def hubs(self, tmp_path: Path):
@@ -652,9 +652,7 @@ class TestServersStartingInTheBackground:
     def test_a_turn_says_it_waits_when_the_servers_are_not_up(
         self, monkeypatch, make_agent, fake_server, hubs, capsys
     ):
-        hub = hubs(
-            {"slow": LocalMcpServer(command="sleep", args=["30"], startup_timeout=0.5)}
-        )
+        hub = hubs({"slow": hanging_config(startup_timeout=0.5)})
         hub.begin()
 
         run_repl(monkeypatch, make_agent(), ["hi", "/exit"], hub=hub)
@@ -683,7 +681,7 @@ class TestServersStartingInTheBackground:
     def test_servers_says_starting_for_a_server_that_is_not_up_yet(
         self, monkeypatch, make_agent, hubs, capsys
     ):
-        hub = hubs({"slow": LocalMcpServer(command="sleep", args=["30"])})
+        hub = hubs({"slow": hanging_config()})
         hub.begin()
 
         run_repl(monkeypatch, make_agent(), ["/servers", "/exit"], hub=hub)

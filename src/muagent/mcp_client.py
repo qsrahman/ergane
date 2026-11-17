@@ -53,7 +53,7 @@ import re
 import threading
 import time
 from collections.abc import Callable, Coroutine, Mapping
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, suppress
 from importlib.metadata import version
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
@@ -322,10 +322,8 @@ class McpClient:
                 self._log = log = self._log_path.open("a" if append else "w")
                 # Server logs can hold tool arguments and other sensitive text; keep
                 # them to the user who started muagent.
-                try:
+                with suppress(OSError):
                     self._log_path.chmod(0o600)
-                except OSError:
-                    pass
             except OSError as exc:
                 raise McpServerError(
                     f"MCP server {self.name!r}: cannot write its log: {exc}"
