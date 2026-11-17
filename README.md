@@ -102,16 +102,22 @@ Command names are case-insensitive. A mistyped command such as `/rest` is report
 
 The model can call tools. A tool that only reads runs at once, and `muagent` prints the call as a dimmed line (on a terminal, unless `NO_COLOR` is set), such as `[add({"a": 17, "b": 25})]`, never wider than the terminal: the middle of long values is left out. A tool that can change things asks first, in one line, such as `Allow save {"path": "notes.txt"}? [y/N/a]`; type `y` to allow this call, or `a` to allow that tool for the rest of the session (it then runs like a read-only one, with its call shown as a line, and `/tools` lists it as allowed; restart muagent to take it back). Anything else is a no. The line is never wider than the terminal: if the arguments do not fit, the middle of their long values is left out (the start and the end stay) and the prompt ends `[y/N/a/?]`; type `?` to see all of it, and it asks again. The result goes back to the model, which says what it found, repeating until the model answers. When a turn grows past `max_context_tokens` while it runs, the oldest tool results are replaced by a short placeholder (the calls stay) so that it can go on; only if the latest results alone are over, it is stopped. If a call fails, the error text goes back to the model so it can correct the call. The Responses API must support function calling.
 
-`muagent` has no tools of its own: they come from the MCP servers you list in `config.json` (see below). With none, it is a plain chat, and `/tools` says so.
+`muagent` has no tools of its own yet: they come from the MCP servers you list in `config.json` (see below). With none, it is a plain chat, and `/tools` says so.
 
-To give it a tool written in Python, make a function with a docstring (its description, written for the model), type hints (its parameters) and `@tool`, and list it in `main()` in `cli.py`, next to the tools of the MCP servers (`Agent(config, tools=[add, *mcp_tools])`):
+To give it a tool written in Python, put a function with a docstring (its description, written for the model), type hints (its parameters) and `@tool` in a new file in `src/muagent/builtin/`. That is all: every tool in that package is offered, and nothing lists it.
 
 ```python
+# src/muagent/builtin/arithmetic.py
+from muagent.tools import tool
+
+
 @tool
 def add(a: int, b: int) -> str:
     """Add two integers and return the sum."""
     return str(a + b)
 ```
+
+A tool runs without asking unless it says `@tool(read_only=False)`, which it must if it changes anything outside the program. A file whose name starts with `_` is left alone, for helpers; import a heavy dependency inside the function, so that starting `muagent` does not pay for it. [TOOLS.md](TOOLS.md) has the rest: parameters and their descriptions, what to return, errors, testing.
 
 ## MCP servers
 

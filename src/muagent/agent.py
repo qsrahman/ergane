@@ -490,9 +490,12 @@ class Agent:
         tools: Iterable[Tool],
         name: str,
         notes: str | None,
-    ) -> None:
+    ) -> list[str]:
         """Take away the tools a server offered, add the ones it offers now, and set
         what it says about using them.
+
+        A tool of a name that another tool has already is not added: the one that was
+        there stays, as at start.
 
         Call it between turns: the tools of a turn that is running must not change.
         What the server counted for the last request does not hold any more.
@@ -502,15 +505,21 @@ class Agent:
             tools: The tools it offers now.
             name: The server.
             notes: What it says about using them, or None.
+
+        Returns:
+            The names of the tools that were not added because the name was taken.
         """
         for tool_name in removed:
             self.tools.pop(tool_name, None)
-        self.tools.update({tool.name: tool for tool in tools})
+        tools = list(tools)
+        skipped = [tool.name for tool in tools if tool.name in self.tools]
+        self.tools.update({t.name: t for t in tools if t.name not in self.tools})
         if notes:
             self.server_notes[name] = notes
         else:
             self.server_notes.pop(name, None)
         self.context.counted = None
+        return skipped
 
     def _tool_params(self) -> list[FunctionToolParam]:
         """The definitions of the tools, as the request carries them."""

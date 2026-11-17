@@ -1282,6 +1282,28 @@ class TestUpdateServer:
 
         assert agent.server_notes == {"b": "kept"}
 
+    def test_a_tool_of_a_name_that_is_taken_is_not_added_and_is_reported(
+        self, make_agent
+    ):
+        agent = make_agent(tools=[READ_FILE])
+        clash = Tool.from_function(read_file)
+        new = Tool.from_function(other)
+
+        skipped = agent.update_server([], [clash, new], "a", None)
+
+        assert skipped == ["read_file"]
+        assert agent.tools["read_file"] is READ_FILE
+        assert list(agent.tools) == ["read_file", "other"]
+
+    def test_a_server_that_comes_back_with_its_own_tool_is_not_skipped(
+        self, make_agent
+    ):
+        agent = make_agent(tools=[READ_FILE])
+
+        skipped = agent.update_server(["read_file"], [READ_FILE], "a", None)
+
+        assert skipped == [] and list(agent.tools) == ["read_file"]
+
     def test_what_the_server_counted_does_not_hold_any_more(self, make_agent):
         agent = make_agent(tools=[READ_FILE])
         agent.context.counted = 1000

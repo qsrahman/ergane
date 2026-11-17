@@ -12,9 +12,12 @@ MCP server, say) fills in the same parts.
 """
 
 import functools
+import importlib
 import inspect
+import pkgutil
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from types import ModuleType
 from typing import Any, get_type_hints, overload
 
 from openai.types.responses import FunctionToolParam
@@ -204,8 +207,9 @@ def tool(
     """Make a function a tool: `@tool`, or `@tool(read_only=False)`.
 
     The decorated name becomes the Tool, so a test calls `add.call('{"a": 1}')` and a
-    list of tools is `[add, look]`. Nothing is registered: whoever builds the agent
-    lists the tools to offer.
+    list of tools is `[add, look]`. Nothing is registered by the decorator: a tool in a
+    module of `muagent.builtin` is found by `tools_in`, and any other is listed by
+    whoever builds the agent.
 
     Args:
         function: The function, when used as a bare `@tool`.
@@ -223,3 +227,60 @@ def tool(
         return Tool.from_function(function, read_only)
 
     return make if function is None else make(function)
+
+
+def tools_in(
+    package: ModuleType, on_notice: Callable[[str], None] | None = None
+) -> list[Tool]:
+    """The tools a package offers: every `Tool` at the top level of its modules.
+
+    Adding a tool is writing a `@tool` function in a module of the package; nothing
+    lists it. A module whose name starts with `_` is not looked at, and a tool one
+    module imports from another is offered once. The order is the modules' names, then
+    the order of definition, so a request lists the tools the same way every time.
+
+    Args:
+        package: A package (`muagent.builtin`, say), not a plain module.
+        on_notice: Called with a line about a module that cannot be imported, which is
+            then left out so that the others still load. Without it the error is
+            raised.
+
+    Returns:
+        The tools.
+
+    Raises:
+        Exception: Whatever importing a module raises, if there is no `on_notice`.
+    """
+    found: dict[int, Tool] = {}  # by identity: a Tool holds a dict, so it has no hash
+    for info in pkgutil.iter_modules(package.__path__):
+        if info.name.startswith("_"):
+            continue
+        try:
+            module = importlib.import_module(f"{package.__name__}.{info.name}")
+        except Exception as exc:
+            if on_notice is None:
+                raise
+            on_notice(f"Tools in {info.name} not loaded: {type(exc).__name__}: {exc}")
+            continue
+        for value in vars(module).values():
+            if isinstance(value, Tool):
+                found[id(value)] = value
+    return list(found.values())
+
+
+def unique_tools(tools: Iterable[Tool], on_notice: Callable[[str], None]) -> list[Tool]:
+    """The tools with each name once: a second tool of a name is left out, with a notice.
+
+    `Agent` refuses two tools of one name, which would stop muagent from starting.
+
+    Args:
+        tools: The tools, the ones to keep first.
+        on_notice: Called with a line for each tool that is left out.
+    """
+    kept: dict[str, Tool] = {}
+    for tool in tools:
+        if tool.name in kept:
+            on_notice(f"Tool {tool.name} is defined twice; only the first is offered")
+        else:
+            kept[tool.name] = tool
+    return list(kept.values())

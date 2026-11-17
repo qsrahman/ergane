@@ -10,13 +10,14 @@ from typing import Any, NoReturn
 
 from pydantic import ValidationError
 
+from muagent import builtin
 from muagent.agent import Agent
 from muagent.commands import COMMANDS
 from muagent.config import EFFORTS, config_file, load_config, private_state_dir
 from muagent.console import Console
 from muagent.mcp_hub import McpHub, ServerStatus
 from muagent.repl import Repl, terminal_session
-from muagent.tools import Tool
+from muagent.tools import Tool, tools_in, unique_tools
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -163,7 +164,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         # The banner is separated from the notices of servers that failed by the
         # console itself, which is why it is the same one.
         agent = Agent(
-            config, tools=mcp_tools, server_notes=hub.instructions() if hub else None
+            config,
+            tools=unique_tools(
+                [*tools_in(builtin, console.notice), *mcp_tools], console.notice
+            ),
+            server_notes=hub.instructions() if hub else None,
         )
         Repl(agent, COMMANDS, session, console, statuses, hub).run()
     finally:

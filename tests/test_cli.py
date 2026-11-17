@@ -1,3 +1,4 @@
+import importlib
 import json
 import sys
 import threading
@@ -98,6 +99,77 @@ class RecordingRepl:
 
     def run(self):
         pass
+
+
+def test_a_built_in_tool_is_offered_without_being_listed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    package = tmp_path / "fake_builtin"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    (package / "look.py").write_text(
+        "from muagent.tools import tool\n\n@tool\ndef look() -> str:\n"
+        '    """Look."""\n    return "seen"\n'
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
+    monkeypatch.setattr("muagent.cli.builtin", importlib.import_module("fake_builtin"))
+
+    main([])
+
+    assert RecordingRepl.agent is not None
+    assert list(RecordingRepl.agent.tools) == ["look"]
+
+
+def test_a_built_in_module_that_fails_to_load_is_reported_and_the_rest_start(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+):
+    package = tmp_path / "broken_builtin"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    (package / "a_broken.py").write_text("import not_installed_anywhere\n")
+    (package / "look.py").write_text(
+        "from muagent.tools import tool\n\n@tool\ndef look() -> str:\n"
+        '    """Look."""\n    return "seen"\n'
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
+    monkeypatch.setattr(
+        "muagent.cli.builtin", importlib.import_module("broken_builtin")
+    )
+
+    main([])
+
+    assert RecordingRepl.agent is not None
+    assert list(RecordingRepl.agent.tools) == ["look"]
+    assert (
+        "Tools in a_broken not loaded: ModuleNotFoundError" in capsys.readouterr().out
+    )
+
+
+def test_two_built_in_tools_of_one_name_are_reported_and_the_first_is_offered(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+):
+    package = tmp_path / "twice_builtin"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    for module, text in (("a", "first"), ("b", "second")):
+        (package / f"{module}.py").write_text(
+            "from muagent.tools import tool\n\n@tool\ndef look() -> str:\n"
+            f'    """Look."""\n    return "{text}"\n'
+        )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
+    monkeypatch.setattr("muagent.cli.builtin", importlib.import_module("twice_builtin"))
+
+    main([])
+
+    assert RecordingRepl.agent is not None
+    assert RecordingRepl.agent.tools["look"].call("{}") == "first"
+    assert "Tool look is defined twice" in capsys.readouterr().out
 
 
 def test_without_an_mcp_json_the_agent_has_no_tools(monkeypatch: pytest.MonkeyPatch):

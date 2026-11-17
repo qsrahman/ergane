@@ -292,11 +292,16 @@ class Repl:
         Args:
             update: What the hub returned for the server.
         """
-        self.agent.update_server(
+        skipped = self.agent.update_server(
             update.removed, update.tools, update.name, update.instructions
         )
         if update.message:
             self.console.notice(update.message)
+        for tool in skipped:
+            self.console.notice(
+                f"Tool {tool} of server {update.name} is not offered: "
+                "another tool has that name"
+            )
 
     def attach(self, *, wait: bool) -> None:
         """Give the agent the servers that started in the background, and tell of the

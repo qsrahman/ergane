@@ -7,8 +7,9 @@ turn through the code; this file keeps what a change must not break.
 ## Overview
 
 `muagent` is a minimal interactive terminal chat agent on the OpenAI **Responses API**
-(`src/muagent/`, `src` layout). Its tools all come from MCP servers listed in
-`config.json`; with none it is a plain chat.
+(`src/muagent/`, `src` layout). Its tools come from MCP servers listed in
+`config.json` and from the Python functions in `src/muagent/builtin/` (none yet); with
+no tool at all it is a plain chat.
 
 ## Commands
 
@@ -90,7 +91,9 @@ The modules, in dependency order (each imports only from those above it):
 - `tools.py`: the `@tool` decorator and `Tool` (`name`, `description`, `parameters`,
   `check`, `runner`, `read_only`). `Tool.call` never raises (except Ctrl-C): a bad call
   or an exception comes back as text for the model, and output is cut at
-  `MAX_OUTPUT_CHARS`.
+  `MAX_OUTPUT_CHARS`. `tools_in(package)` finds the tools of a package: a `@tool`
+  function in a module of `builtin/` is offered with nothing else to edit; [TOOLS.md](TOOLS.md)
+  is the guide to writing one.
 - `config.py`: `Config`, `load_config()`, `EFFORTS`, the XDG directories, the model of a
   server in `config.json`: `LocalMcpServer` (a `command`) or `RemoteMcpServer` (a
   `url`), told apart by `type` or by having a `url`, as the union `McpServerConfig` (a
