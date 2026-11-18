@@ -5,6 +5,7 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import fragment_list_to_text, to_formatted_text
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
+from prompt_toolkit.styles import default_ui_style, merge_styles
 
 from fake_api import REFUSAL, STREAM_ERROR, TEXT
 from helpers import anchor, hanging_config, make_config, make_context, run_repl
@@ -201,45 +202,15 @@ class TestReplRendering:
             f"{TEXT}\n\n> /exit\nBye.\n"
         )
 
-    @pytest.mark.parametrize(
-        ("tools", "banner"),
-        [
-            ([], "muagent | model: gpt-4o | /help lists commands"),
-            (["one"], "muagent | model: gpt-4o | 1 tool | /help lists commands"),
-            (
-                ["one", "two"],
-                "muagent | model: gpt-4o | 2 tools | /help lists commands",
-            ),
-        ],
-    )
-    def test_the_banner_is_one_line(
-        self, monkeypatch, make_agent, capsys, streaming, tools, banner
-    ):
-        def tool_named(name: str) -> Tool:
-            def function() -> str:
-                """Do nothing."""
-                return ""
-
-            function.__name__ = name
-            return Tool.from_function(function)
-
-        agent = make_agent(tools=[tool_named(n) for n in tools], STREAMING=streaming)
-        self.terminal(monkeypatch, ["/exit"])
-
-        self.run(agent)
-
-        assert capsys.readouterr().out.startswith(f"{banner}\n\n> /exit\n")
-
-    def test_the_banner_names_the_effort_when_it_is_set(
-        self, monkeypatch, make_agent, capsys, streaming
-    ):
+    def test_the_banner_is_one_line(self, monkeypatch, make_agent, capsys, streaming):
+        # The effort and the tools are in the toolbar, which a terminal shows.
         agent = make_agent(STREAMING=streaming, REASONING_EFFORT="high")
         self.terminal(monkeypatch, ["/exit"])
 
         self.run(agent)
 
         assert capsys.readouterr().out.startswith(
-            "muagent | model: gpt-4o | effort: high | /help lists commands\n\n"
+            "muagent · gpt-4o · /help for commands\n\n> /exit\n"
         )
 
     def test_an_api_error_is_one_line_with_what_to_check(
@@ -337,23 +308,49 @@ class TestToolbar:
             assert session is not None
             Repl(agent, COMMANDS, session)
             assert callable(session.bottom_toolbar)
-            return str(session.bottom_toolbar())
+            return fragment_list_to_text(to_formatted_text(session.bottom_toolbar()))
 
     def test_it_names_the_model_and_the_budget(self, tmp_path):
         text = self.toolbar(tmp_path, model="m1", max_context_tokens=10000)
 
-        assert text.startswith(" m1 | context ~")
+        assert text.startswith(" m1  ")
         assert text.endswith("% of 10,000")
-        assert "effort" not in text
+        assert "~" in text  # nothing has been counted by the server yet
+        assert "·" not in text
 
     def test_it_names_the_effort_when_there_is_one(self, tmp_path):
-        assert " | effort: high | " in self.toolbar(tmp_path, reasoning_effort="high")
+        assert " m1 · high  " in self.toolbar(
+            tmp_path, model="m1", reasoning_effort="high"
+        )
 
-    def test_the_servers_count_is_not_marked_as_an_estimate(self):
+    def test_the_count_of_the_server_is_not_marked_as_an_estimate(self):
         agent = Agent(make_config(max_context_tokens=10000))
         anchor(agent, 2500)
 
-        assert Repl(agent, COMMANDS)._toolbar().endswith("context 25% of 10,000")  # pyright: ignore[reportPrivateUsage]
+        text = fragment_list_to_text(Repl(agent, COMMANDS)._toolbar())  # pyright: ignore[reportPrivateUsage]
+
+        assert text.endswith(" 25% of 10,000") and "~" not in text
+
+    @pytest.mark.parametrize(
+        ("counted", "lit", "style"),
+        [
+            (0, 0, "class:toolbar.meter"),
+            (2500, 2, "class:toolbar.meter"),
+            (5999, 5, "class:toolbar.meter"),
+            (6000, 6, "class:toolbar.warn"),
+            (8500, 8, "class:toolbar.bad"),
+            (30000, 10, "class:toolbar.bad"),  # over the budget: the meter is full
+        ],
+    )
+    def test_the_meter_fills_and_turns_yellow_then_red(self, counted, lit, style):
+        agent = Agent(make_config(max_context_tokens=10000))
+        anchor(agent, counted)
+
+        bar = Repl(agent, COMMANDS)._toolbar()  # pyright: ignore[reportPrivateUsage]
+
+        gap = next(i for i, fragment in enumerate(bar) if fragment[1] == "  ")
+        assert bar[gap + 1] == (style, "▰" * lit)  # the meter follows the gap
+        assert bar[gap + 2] == ("", "▱" * (10 - lit))
 
 
 class TestToolbarAndServers:
@@ -364,14 +361,15 @@ class TestToolbarAndServers:
         hub.close()
 
     def toolbar(self, hub: McpHub) -> str:
-        return Repl(Agent(make_config()), COMMANDS, hub=hub)._toolbar()  # pyright: ignore[reportPrivateUsage]
+        bar = Repl(Agent(make_config()), COMMANDS, hub=hub)._toolbar()  # pyright: ignore[reportPrivateUsage]
+        return fragment_list_to_text(bar)
 
     def test_it_says_while_servers_start(self, tmp_path):
         hub = McpHub({"slow": hanging_config()}, tmp_path)
         try:
             hub.begin()
 
-            assert " | starting MCP servers | context" in self.toolbar(hub)
+            assert " · starting MCP servers  " in self.toolbar(hub)
         finally:
             hub.close()
 
@@ -382,7 +380,7 @@ class TestToolbarAndServers:
             ServerStatus("c", "failed", "boom"),
         ]
 
-        assert " | 3 tools | 1 MCP failed: /servers | context" in self.toolbar(hub)
+        assert " · 3 tools · 1 MCP failed: /servers  " in self.toolbar(hub)
 
     def test_it_says_nothing_of_servers_when_there_are_none(self, hub):
         assert "MCP" not in self.toolbar(hub) and "tools" not in self.toolbar(hub)
@@ -472,7 +470,33 @@ class TestTerminalSession:
                 COMMANDS, tmp_path / "history", input=pipe, output=DummyOutput()
             )
 
-            assert session is not None and session.prompt_continuation == ". "
+        assert session is not None and callable(session.prompt_continuation)
+        marker = session.prompt_continuation
+
+        def shown(width: int, wraps: int) -> str:
+            return fragment_list_to_text(to_formatted_text(marker(width, 1, wraps)))
+
+        assert shown(2, 0) == "· "
+        assert shown(4, 0) == "  · "  # lined up under the end of the prompt
+        assert shown(2, 1) == "  "  # a line that only wraps has none
+
+    def test_the_menu_does_not_keep_the_black_on_grey_of_prompt_toolkit(self, tmp_path):
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, tmp_path / "history", input=pipe, output=DummyOutput()
+            )
+
+        assert session is not None and session.style is not None
+        style = merge_styles([default_ui_style(), session.style])
+        for item in (
+            "class:completion-menu.completion",
+            "class:completion-menu.meta.completion",
+            "class:completion-menu.completion.current",
+        ):
+            attrs = style.get_attrs_for_style_str(item)
+            # Black text on the terminal's own background could not be read on a dark one.
+            assert attrs.color != "000000", item
+            assert attrs.bgcolor in ("", "default"), item  # not the grey of the default
 
     def test_a_pasted_block_is_one_prompt(self, tmp_path):
         paste = "\x1b[200~line one\nline two\x1b[201~\r"

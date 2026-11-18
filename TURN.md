@@ -369,21 +369,21 @@ This is real output, from three MCP servers that are copies of the test server
 (14 tools each, so 42). `docs` is marked `read_only`; `files` and `notes` are not:
 
 ```
-muagent | model: gemma4:cloud | 42 tools | /help lists commands
+muagent · gemma4:cloud · /help for commands
 
-> What is 1 plus 2? Use the docs__add tool. Answer in one short sentence.
+❯ What is 1 plus 2? Use the docs__add tool. Answer in one short sentence.
 
 [docs__add({"a":1,"b":2})]
 
 1 plus 2 is 3.
 
-> Now add 40 and 2 with the files__add tool. Answer in one short sentence.
+❯ Now add 40 and 2 with the files__add tool. Answer in one short sentence.
 
 Allow files__add {"a": 40, "b": 2}? [y/N/a] y
 
 40 plus 2 is 42.
 
-> Add 5 and 6 with the notes__add tool. Answer in one short sentence.
+❯ Add 5 and 6 with the notes__add tool. Answer in one short sentence.
 
 Allow notes__add {"a": 5, "b": 6}? [y/N/a] n
 

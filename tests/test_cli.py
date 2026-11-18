@@ -16,7 +16,7 @@ def test_main_wires_config_agent_and_repl(monkeypatch: pytest.MonkeyPatch, capsy
     main(["--model", "wired-model"])
 
     out = capsys.readouterr().out
-    assert "model: wired-model" in out
+    assert "muagent · wired-model" in out
     assert out.endswith("Bye.\n")
 
 
@@ -293,7 +293,7 @@ class TestMcpServers:
 
         assert "mcp-fake" not in threads()
 
-    def test_a_server_that_starts_is_not_announced_but_counted_in_the_banner(
+    def test_a_server_that_starts_is_not_announced(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
     ):
         write_config_json(tmp_path, {"fake": FAKE_SERVER})
@@ -301,11 +301,9 @@ class TestMcpServers:
 
         main(["--model", "banner-model"])
 
+        # The banner is the first line: nothing was said of the server.
         first_line = capsys.readouterr().out.splitlines()[0]
-        # The server's 18.
-        assert first_line == (
-            "muagent | model: banner-model | 18 tools | /help lists commands"
-        )
+        assert first_line == "muagent · banner-model · /help for commands"
 
     def test_a_server_that_fails_does_not_stop_muagent(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
@@ -319,7 +317,7 @@ class TestMcpServers:
         assert out.startswith("[MCP server 'broken' failed to start: FileNotFoundError")
         # A blank line sets the failure apart from the banner under it.
         _failure, blank, banner = out.splitlines()[:3]
-        assert blank == "" and banner.startswith("muagent | model: ")
+        assert blank == "" and banner.startswith("muagent · ")
         assert out.endswith("Bye.\n")
 
     def test_servers_tells_again_what_became_of_a_server_that_failed(

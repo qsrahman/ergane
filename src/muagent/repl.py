@@ -13,6 +13,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.completion import CompleteEvent, Completer, Completion
 from prompt_toolkit.document import Document
+from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.history import FileHistory, History, InMemoryHistory
 from prompt_toolkit.input import Input
 from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
@@ -35,10 +36,37 @@ for _sequence in ("\x1b[13;2u", "\x1b[27;2;13~"):
     ANSI_SEQUENCES[_sequence] = (Keys.Escape, Keys.ControlM)
 
 # Colour is the terminal's own (the ANSI names), and prompt_toolkit drops it all when
-# NO_COLOR is set. The toolbar is not reversed, which would make it a loud bar.
+# NO_COLOR is set. The toolbar is not reversed, which would make it a loud bar. The menu
+# says `fg` and `bg` both: prompt_toolkit's own menu is black on grey, and a style that
+# sets only one of them would leave black text on the terminal's background.
 _STYLE = Style.from_dict(
-    {"bottom-toolbar": "noreverse ansibrightblack", "placeholder": "dim"}
+    {
+        "prompt": "ansicyan bold",
+        "continuation": "ansibrightblack",
+        "placeholder": "dim",
+        "bottom-toolbar": "noreverse ansibrightblack",
+        "toolbar.strong": "fg:default bold",
+        "toolbar.meter": "fg:default",
+        "toolbar.warn": "ansiyellow",
+        "toolbar.bad": "ansired",
+        "completion-menu": "fg:default bg:default",
+        "completion-menu.completion": "fg:default bg:default",
+        "completion-menu.completion.current": "fg:ansicyan bg:default bold reverse",
+        "completion-menu.meta.completion": "fg:ansibrightblack bg:default",
+        "completion-menu.meta.completion.current": "fg:ansibrightblack bg:default",
+        "scrollbar.background": "bg:default",
+        "scrollbar.button": "bg:ansibrightblack",
+    }
 )
+
+# The prompt at a terminal; redirected input is read with a plain "> ".
+_PROMPT = FormattedText([("class:prompt", "❯ ")])
+
+# How many cells the context meter in the toolbar has, and the shares of the budget at
+# which it turns yellow and red.
+_METER_CELLS = 10
+_METER_WARN = 60
+_METER_BAD = 85
 
 _KEYS = KeyBindings()
 
@@ -57,6 +85,14 @@ def _interrupt(event) -> None:
         event.current_buffer.reset()
     else:
         event.app.exit(exception=KeyboardInterrupt, style="class:aborting")
+
+
+def _continuation(width: int, line_number: int, wrap_count: int) -> FormattedText:
+    """The marker in front of a line added by hand or pasted, lined up under the
+    prompt; a line that only wraps has none."""
+    return FormattedText(
+        [("class:continuation", ("· " if not wrap_count else "").rjust(width))]
+    )
 
 
 class _CommandCompleter(Completer):
@@ -129,7 +165,7 @@ def terminal_session(
         history=_history_file(history),
         completer=_CommandCompleter(commands),
         auto_suggest=AutoSuggestFromHistory(),
-        prompt_continuation=". ",  # lines added by hand or pasted line up under "> "
+        prompt_continuation=_continuation,
         key_bindings=_KEYS,
         style=_STYLE,
         # A plain string would get no style: only formatted text carries the class.
@@ -190,40 +226,52 @@ class Repl:
         self.commands = commands
         self.session = session
 
-    def _toolbar(self) -> str:
-        """The line under the prompt: the model, the effort and how full the context
-        is, as `/context` counts it."""
+    def _toolbar(self) -> FormattedText:
+        """The line under the prompt: the model, the effort, the servers and how full
+        the context is, as `/context` counts it, with a meter that turns yellow and
+        then red as it fills (the share is written too, for a terminal without colour).
+        """
         agent = self.agent
         config = agent.config
         used = agent.request_tokens()
         estimated = "" if agent.counted_tokens() is not None else "~"
-        effort = (
-            f" | effort: {config.reasoning_effort}" if config.reasoning_effort else ""
+        share = used * 100 // config.max_context_tokens
+        lit = min(share * _METER_CELLS // 100, _METER_CELLS)
+        meter = (
+            "class:toolbar.bad"
+            if share >= _METER_BAD
+            else "class:toolbar.warn"
+            if share >= _METER_WARN
+            else "class:toolbar.meter"
         )
-        servers = ""
+        bar: list[tuple[str, str]] = [("class:toolbar.strong", " " + config.model)]
+        if config.reasoning_effort:
+            bar.append(("", f" · {config.reasoning_effort}"))
         if self.hub is not None:
             self.hub.poll()  # servers that have all answered are counted at once
             if self.hub.starting:
-                servers = " | starting MCP servers"
+                bar.append(("", " · starting MCP servers"))
             else:
                 tools = sum(len(status.tools) for status in self.hub.statuses)
                 failed = sum(status.state == "failed" for status in self.hub.statuses)
-                servers = f" | {tools} tools" if tools else ""
-                servers += f" | {failed} MCP failed: /servers" if failed else ""
-        return (
-            f" {config.model}{effort}{servers} | context {estimated}"
-            f"{used * 100 // config.max_context_tokens}% of {config.max_context_tokens:,}"
-        )
+                if tools:
+                    bar.append(("", f" · {tools} tools"))
+                if failed:
+                    bar.append(
+                        ("class:toolbar.bad", f" · {failed} MCP failed: /servers")
+                    )
+        bar += [
+            ("", "  "),
+            (meter, "▰" * lit),
+            ("", "▱" * (_METER_CELLS - lit)),
+            ("", f" {estimated}{share}% of {config.max_context_tokens:,}"),
+        ]
+        return FormattedText(bar)
 
     def run(self) -> None:
         """Read and handle prompts until the user quits."""
-        tools = len(self.agent.tools)
-        count = f" | {tools} tool{'s' if tools != 1 else ''}" if tools else ""
-        effort = self.agent.config.reasoning_effort
-        shown = f" | effort: {effort}" if effort else ""
         self.console.write(
-            f"muagent | model: {self.agent.config.model}{shown}{count}"
-            " | /help lists commands\n\n"
+            f"muagent · {self.agent.config.model} · /help for commands\n\n"
         )
 
         self.running = True
@@ -234,7 +282,7 @@ class Repl:
                 self.session.refresh_interval = 0.5 if self.hub.starting else 0
             try:
                 prompt = (
-                    self.session.prompt("> ") if self.session else input("> ")
+                    self.session.prompt(_PROMPT) if self.session else input("> ")
                 ).strip()
             except EOFError:
                 # Redirected input ends here. At a terminal a stray Ctrl-D must not
