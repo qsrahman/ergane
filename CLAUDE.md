@@ -164,7 +164,9 @@ What must stay true:
   `RUF100` (a noqa that silences nothing goes).
 - Google-style docstrings (`Args:` / `Returns:` / `Raises:`) on functions.
 - Show the user only what they need, to decide or to know that something went wrong. A
-  call that asks is one line, the question; a call that runs freely is one line; a result
+  call that asks is one line, the question (at a terminal a short menu under it, which
+  goes away when answered and leaves one line of what was decided); a call that runs
+  freely is one line; a result
   is not shown (the reply says what it found); a server that starts is not announced; the
   banner is one line. Before adding output, ask whether anyone would miss it.
 - Output is a plain terminal: the system prompt forbids LaTeX in favor of Unicode math

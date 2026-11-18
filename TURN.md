@@ -182,14 +182,17 @@ no output (400) and an output with no call:
 
 | The call                                   | On screen                       | The model is told                                  |
 |--------------------------------------------|---------------------------------|----------------------------------------------------|
-| names a tool that does not exist           | `[name(args)]`                  | `Unknown tool: NAME. Available tools: …`          |
-| has arguments that fail `Tool.check`       | `[name(args)]`                  | `Invalid arguments: …` (you are never asked)       |
-| is to a read-only tool                     | `[name(args)]`                  | its result                                         |
-| is to a tool that asks, and you say yes    | `Allow name {args}? [y/N/a] y`  | its result                                         |
-| is to a tool that asks, and you say no     | `Allow name {args}? [y/N/a] n`  | `The user denied this call.`                       |
-| is to a tool you answered `a` to earlier   | `[name(args)]`                  | its result                                         |
+| names a tool that does not exist           | `▸ name  args`                  | `Unknown tool: NAME. Available tools: …`          |
+| has arguments that fail `Tool.check`       | `▸ name  args`                  | `Invalid arguments: …` (you are never asked)       |
+| is to a read-only tool                     | `▸ name  args`                  | its result                                         |
+| is to a tool that asks, and you say yes    | `▸ name  args  allowed` ¹       | its result                                         |
+| is to a tool that asks, and you say no     | `▸ name  args  denied` ¹        | `The user denied this call.`                       |
+| is to a tool you answered `a` to earlier   | `▸ name  args`                  | its result                                         |
 
-- The `[…]` line (`Console.call`) is as wide as the terminal at most, the arguments on one
+¹ At a terminal the question is a menu that goes away when answered, leaving this line;
+with input or output redirected it is the typed line `Allow name {args}? [y/N/a] y`.
+
+- The `▸` line (`Console.call`) is as wide as the terminal at most, the arguments on one
   line with the middle of long values left out, like the permission line. That line
   shows the arguments in full if they fit the terminal, otherwise with the middle
   of long values left out and `[y/N/a/?]`; `?` prints everything and asks again; `a`
@@ -373,19 +376,19 @@ muagent · gemma4:cloud · /help for commands
 
 ❯ What is 1 plus 2? Use the docs__add tool. Answer in one short sentence.
 
-[docs__add({"a":1,"b":2})]
+▸ docs__add  {"a": 1, "b": 2}
 
 1 plus 2 is 3.
 
 ❯ Now add 40 and 2 with the files__add tool. Answer in one short sentence.
 
-Allow files__add {"a": 40, "b": 2}? [y/N/a] y
+▸ files__add  {"a": 40, "b": 2}  allowed
 
 40 plus 2 is 42.
 
 ❯ Add 5 and 6 with the notes__add tool. Answer in one short sentence.
 
-Allow notes__add {"a": 5, "b": 6}? [y/N/a] n
+▸ notes__add  {"a": 5, "b": 6}  denied
 
 The tool call was denied, but 5 plus 6 is 11.
 ```

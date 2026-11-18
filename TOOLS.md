@@ -110,8 +110,8 @@ def save(path: str, text: str) -> str:
 Say `False` for anything that changes something outside the program: a file, a process,
 the network with a side effect.
 
-- A tool that is not read-only asks the user before each call (`Allow save {…}? [y/N/a]`,
-  with the arguments); `a` allows that tool for the rest of the session. A read-only
+- A tool that is not read-only asks the user before each call (`Allow save {…}?`, with the
+  arguments, and a menu); "Always allow" (`a`) allows that tool for the rest of the session. A read-only
   tool runs at once and is shown as a line.
 - Read-only calls of one response run **at the same time**, on threads (up to 8), so such
   a tool must be safe to call from several threads. Any other call runs alone, after the

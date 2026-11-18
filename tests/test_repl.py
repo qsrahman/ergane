@@ -12,7 +12,7 @@ from helpers import anchor, hanging_config, make_config, make_context, run_repl
 from muagent.agent import Agent
 from muagent.commands import COMMANDS
 from muagent.mcp_hub import McpHub, ServerStatus, ServerUpdate
-from muagent.repl import Repl, terminal_session
+from muagent.repl import Repl, _choose, _Menu, terminal_session  # pyright: ignore[reportPrivateUsage]
 from muagent.tools import Tool
 
 
@@ -184,7 +184,7 @@ class TestReplRendering:
 
         out = capsys.readouterr().out
         assert out.endswith(
-            f'> tool_call\n\n[read_file({{"path": "notes.txt"}})]\n\n{TEXT}\n\n> /exit\nBye.\n'
+            f'> tool_call\n\n▸ read_file  {{"path": "notes.txt"}}\n\n{TEXT}\n\n> /exit\nBye.\n'
         )
 
     def test_a_call_that_asks_is_one_line_and_nothing_else(
@@ -238,7 +238,7 @@ class TestReplRendering:
         run_repl(monkeypatch, agent, ["tool_call", "/exit"])
 
         out = capsys.readouterr().out
-        shown = '[read_file({"path": "notes.txt"})]'
+        shown = '▸ read_file  {"path": "notes.txt"}'
         assert f"\n{shown}\n\n{TEXT}\n\nBye." in out
 
     def test_reports_trimmed_context(self, monkeypatch, make_agent, capsys, streaming):
@@ -384,6 +384,60 @@ class TestToolbarAndServers:
 
     def test_it_says_nothing_of_servers_when_there_are_none(self, hub):
         assert "MCP" not in self.toolbar(hub) and "tools" not in self.toolbar(hub)
+
+
+class TestMenu:
+    """The question before a tool runs, as a menu on the session's terminal."""
+
+    OPTIONS = (("n", "Deny"), ("y", "Allow once"), ("a", "Always allow save"))
+
+    def choose(self, tmp_path, keys: str) -> str:
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, tmp_path / "history", input=pipe, output=DummyOutput()
+            )
+            assert session is not None
+            pipe.send_text(keys)
+            return _choose(session, "Allow save?", self.OPTIONS)
+
+    @pytest.mark.parametrize(
+        ("keys", "chosen"),
+        [
+            ("\r", "n"),  # Enter takes the first, which is the default
+            ("\x1b[B\r", "y"),
+            ("\x1b[B\x1b[B\r", "a"),
+            ("\x1b[B\x1b[B\x1b[A\r", "y"),
+            ("3\r", "a"),
+            ("y", "y"),
+            ("a", "a"),
+            ("n", "n"),
+        ],
+    )
+    def test_arrows_numbers_and_keys_choose(self, tmp_path, keys, chosen):
+        assert self.choose(tmp_path, keys) == chosen
+
+    def test_ctrl_c_is_a_keyboard_interrupt_like_at_the_prompt(self, tmp_path):
+        with pytest.raises(KeyboardInterrupt):
+            self.choose(tmp_path, "\x03")
+
+    def test_the_menu_is_erased_when_it_is_answered(self):
+        app = _Menu(message="m", options=self.OPTIONS)._create_application()  # pyright: ignore[reportPrivateUsage]
+
+        assert app.erase_when_done is True
+
+    def test_a_repl_at_a_terminal_asks_with_the_menu_and_one_without_types(
+        self, tmp_path
+    ):
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, tmp_path / "history", input=pipe, output=DummyOutput()
+            )
+            assert session is not None
+
+            at_terminal = Repl(Agent(make_config()), COMMANDS, session)
+
+        assert at_terminal.console.choose is not None
+        assert Repl(Agent(make_config()), COMMANDS).console.choose is None
 
 
 class TestTerminalSession:

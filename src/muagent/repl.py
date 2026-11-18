@@ -7,19 +7,22 @@ prompts. With input or output redirected there is no session and `input()` reads
 
 import sys
 from collections.abc import Mapping, Sequence
+from functools import partial
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.application import Application, create_app_session
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.completion import CompleteEvent, Completer, Completion
 from prompt_toolkit.document import Document
-from prompt_toolkit.formatted_text import FormattedText
+from prompt_toolkit.formatted_text import AnyFormattedText, FormattedText
 from prompt_toolkit.history import FileHistory, History, InMemoryHistory
 from prompt_toolkit.input import Input
 from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.output import Output
+from prompt_toolkit.shortcuts.choice_input import ChoiceInput
 from prompt_toolkit.styles import Style
 
 from muagent.agent import Agent
@@ -49,6 +52,8 @@ _STYLE = Style.from_dict(
         "toolbar.meter": "fg:default",
         "toolbar.warn": "ansiyellow",
         "toolbar.bad": "ansired",
+        "selected-option": "ansicyan bold",
+        "number": "ansibrightblack",
         "completion-menu": "fg:default bg:default",
         "completion-menu.completion": "fg:default bg:default",
         "completion-menu.completion.current": "fg:ansicyan bg:default bold reverse",
@@ -93,6 +98,52 @@ def _continuation(width: int, line_number: int, wrap_count: int) -> FormattedTex
     return FormattedText(
         [("class:continuation", ("· " if not wrap_count else "").rjust(width))]
     )
+
+
+class _Menu(ChoiceInput[str]):
+    """prompt_toolkit's choice menu, gone from the screen once it is answered."""
+
+    def _create_application(self) -> Application[str]:
+        # The menu would leave all its options in the scrollback; `Console` prints one
+        # line of what was decided instead.
+        app = super()._create_application()
+        app.erase_when_done = True
+        return app
+
+
+def _choose(
+    session: PromptSession[str],
+    message: AnyFormattedText,
+    options: Sequence[tuple[str, str]],
+) -> str:
+    """Ask a question on the session's terminal with a menu, and give the key of the
+    option chosen. The first option is the default; arrows and Enter, the option's
+    number or its key choose. Ctrl-C raises KeyboardInterrupt, as at the prompt.
+
+    Args:
+        session: The line editor, whose input and output the menu uses.
+        message: The question.
+        options: The (key, label) of each option.
+    """
+    keys = KeyBindings()
+    for key, _ in options:
+        keys.add(key)(_exit_with(key))
+    with create_app_session(input=session.app.input, output=session.app.output):
+        return _Menu(
+            message=message,
+            options=options,
+            default=options[0][0],
+            style=_STYLE,
+            symbol="❯",
+            key_bindings=keys,
+        ).prompt()
+
+
+def _exit_with(key: str):
+    def handler(event) -> None:
+        event.app.exit(result=key, style="class:accepted")
+
+    return handler
 
 
 class _CommandCompleter(Completer):
@@ -212,11 +263,9 @@ class Repl:
         self.agent = agent
         self.console = console or Console()
         if session:
-            # An answer to "Allow …?" is not a prompt: it has its own editor, so it
+            # An answer to "Allow …?" is not a prompt: it is a menu of its own, so it
             # is not kept in the history or completed as a command.
-            self.console.ask = PromptSession(
-                input=session.app.input, output=session.app.output
-            ).prompt
+            self.console.choose = partial(_choose, session)
             session.bottom_toolbar = self._toolbar
             if isinstance(session.completer, _CommandCompleter):
                 session.completer.repl = self

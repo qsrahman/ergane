@@ -3,6 +3,9 @@ import json
 import sys
 
 import pytest
+from prompt_toolkit.data_structures import Size
+from prompt_toolkit.formatted_text import fragment_list_to_text, to_formatted_text
+from prompt_toolkit.output.vt100 import Vt100_Output
 
 from helpers import make_config, run_repl
 from muagent.agent import Agent
@@ -415,11 +418,138 @@ class TestConfirm:
         assert capsys.readouterr().out == "\n[Closed]\n"
 
 
+class TestConfirmMenu:
+    """At a terminal the question is a menu: `Repl` supplies `choose`, which gives the
+    key of the option chosen (the real one is tested with the REPL)."""
+
+    @staticmethod
+    def ask(answers, arguments: str = '{"path": "notes.txt"}', console=None):
+        """Ask `confirm` with a menu that answers from `answers` (a key, or an
+        exception to raise); gives the decision and what the menu was shown."""
+        replies = iter(
+            [answers] if isinstance(answers, (str, BaseException)) else answers
+        )
+        shown: list[tuple[str, list[tuple[str, str]]]] = []
+
+        def choose(question, options):
+            shown.append(
+                (fragment_list_to_text(to_formatted_text(question)), list(options))
+            )
+            reply = next(replies)
+            if isinstance(reply, BaseException):
+                raise reply
+            return reply
+
+        console = console or Console()
+        console.choose = choose
+        return console.confirm(SAVE, arguments), shown
+
+    @pytest.mark.parametrize(
+        ("key", "decision"), [("y", True), ("a", "always"), ("n", False)]
+    )
+    def test_the_key_chosen_is_the_decision(self, key, decision):
+        assert self.ask(key)[0] == decision
+
+    def test_deny_is_first_so_that_it_is_the_default(self):
+        _, [(question, options)] = self.ask("n")
+
+        assert question == 'Allow save {"path": "notes.txt"}?'
+        assert options == [
+            ("n", "Deny"),
+            ("y", "Allow once"),
+            ("a", "Always allow save"),
+        ]
+
+    def test_arguments_that_are_cut_can_be_shown_in_full(self, monkeypatch):
+        monkeypatch.setenv("COLUMNS", "100")
+        arguments = json.dumps({"content": "x" * 300})
+
+        _, [(question, options)] = self.ask("n", arguments)
+
+        assert "…" in question and len(question) < 100
+        assert options[-1] == ("?", "Show full arguments")
+
+    def test_arguments_that_fit_offer_nothing_more(self):
+        _, [(_, options)] = self.ask("n")
+
+        assert [key for key, _ in options] == ["n", "y", "a"]
+
+    def test_a_question_mark_prints_the_arguments_in_full_and_asks_again(self, capsys):
+        arguments = json.dumps({"content": "x" * 300 + "\x1b[2J"})
+
+        decision, shown = self.ask(["?", "y"], arguments)
+
+        assert decision is True and len(shown) == 2 and shown[0] == shown[1]
+        out = capsys.readouterr().out
+        assert "x" * 300 in out and '{\n  "content"' in out
+        assert "\x1b" not in out
+
+    @pytest.mark.parametrize(
+        ("key", "line"),
+        [
+            ("y", "allowed"),
+            ("a", "always allowed"),
+            ("n", "denied"),
+        ],
+    )
+    def test_a_line_of_what_was_decided_is_left_in_place_of_the_menu(
+        self, capsys, key, line
+    ):
+        self.ask(key)
+
+        assert capsys.readouterr().out == f'▸ save  {{"path": "notes.txt"}}  {line}\n'
+
+    def test_the_decision_is_in_colour_where_there_is_colour(self):
+        written = io.StringIO()
+        console = Console(output=Vt100_Output(written, lambda: Size(24, 80)))
+
+        self.ask("n", console=console)
+
+        assert f"{BOLD}▸ save" in written.getvalue()
+        assert "\x1b[0;31m  denied" in written.getvalue()  # red, and not dim
+
+    @pytest.mark.parametrize(
+        "arguments", ['{"path": "a\x1b]52;c;x"}', "not json\x1b[2J"]
+    )
+    def test_the_question_is_sanitized(self, arguments):
+        _, [(question, _)] = self.ask("n", arguments)
+
+        assert "\x1b" not in question and "\n" not in question
+
+    def test_it_starts_on_a_new_line_after_a_cut_off_reply(self, capsys):
+        console = Console()
+        console.write("partial")
+
+        self.ask("y", console=console)
+
+        assert capsys.readouterr().out.startswith("partial\n▸ save")
+
+    def test_a_reply_after_the_decision_starts_after_a_blank_line(self, capsys):
+        console = Console()
+        self.ask("y", console=console)
+        capsys.readouterr()
+
+        console.write("Saved.")
+
+        assert capsys.readouterr().out == "\nSaved."
+
+    def test_ctrl_c_is_not_swallowed_and_nothing_is_printed(self, capsys):
+        with pytest.raises(KeyboardInterrupt):
+            self.ask(KeyboardInterrupt())
+
+        assert capsys.readouterr().out == ""
+
+
 class TestCall:
     def test_a_call_is_a_status_line_with_the_name_and_the_arguments(self, capsys):
         Console().call("read_file", '{"path":"notes.txt"}')
 
-        assert capsys.readouterr().out == '[read_file({"path": "notes.txt"})]\n'
+        assert capsys.readouterr().out == '▸ read_file  {"path": "notes.txt"}\n'
+
+    def test_a_name_with_a_line_break_stays_on_the_line(self, capsys):
+        Console().call("read\nfile\x1b[2J", "{}")
+
+        assert capsys.readouterr().out == "▸ read file[2J  {}\n"
 
     def test_the_line_follows_the_width_of_the_terminal(self, monkeypatch, capsys):
         arguments = json.dumps({"text": "x" * 300})
@@ -450,47 +580,74 @@ class TestRoom:
         assert _room(200) == 20
 
 
-class TestDim:
-    @pytest.fixture
-    def console(self):
-        console = Console()
-        console.color = True
-        return console
+DIM = "\x1b[0;2m"  # what prompt_toolkit writes for dim text
+BOLD = "\x1b[0;1m"
 
-    def test_a_notice_is_dimmed_where_there_is_colour(self, console, capsys):
+
+class TestStyle:
+    """Where there is colour, status lines are written by prompt_toolkit to `output`
+    (a terminal's would be a `Vt100_Output`); replies and everything else are printed."""
+
+    @pytest.fixture
+    def written(self):
+        return io.StringIO()
+
+    @pytest.fixture
+    def console(self, written):
+        output = Vt100_Output(written, lambda: Size(24, 80), term="xterm-256color")
+        return Console(output=output)
+
+    def test_a_notice_is_dimmed_where_there_is_colour(self, console, written, capsys):
         console.notice("Cancelled")
 
-        assert capsys.readouterr().out == "\033[2m[Cancelled]\033[0m\n"
+        assert f"{DIM}[Cancelled]" in written.getvalue()
+        assert capsys.readouterr().out == ""
 
-    def test_the_fresh_line_stays_outside_the_dimmed_part(self, console, capsys):
+    def test_a_call_has_its_name_in_bold_and_its_arguments_dim(self, console, written):
+        console.call("read_file", '{"path": "notes.txt"}')
+
+        assert f'{BOLD}▸ read_file{DIM}  {{"path": "notes.txt"}}' in written.getvalue()
+
+    def test_the_fresh_line_comes_before_the_styled_part(
+        self, console, written, capsys
+    ):
         console.write("partial")
 
         console.notice("Cancelled")
 
-        assert capsys.readouterr().out == "partial\n\033[2m[Cancelled]\033[0m\n"
+        assert capsys.readouterr().out == "partial"
+        styled = written.getvalue()
+        assert styled.index("\n") < styled.index(f"{DIM}[Cancelled]")
 
-    def test_a_reply_is_not_dimmed(self, console, capsys):
+    def test_a_reply_is_not_styled(self, console, written, capsys):
         console.write("hello\n")
 
         assert capsys.readouterr().out == "hello\n"
+        assert written.getvalue() == ""
 
-    def test_text_from_the_model_cannot_add_codes_of_its_own(self, console, capsys):
+    def test_text_from_the_model_cannot_add_codes_of_its_own(self, console, written):
         console.notice("a\033[31mb")
 
-        assert capsys.readouterr().out.count("\033") == 2  # ours: dim and reset
+        assert "\x1b[31m" not in written.getvalue()
+        assert "a[31mb" in written.getvalue()
 
-    def test_without_a_terminal_there_are_no_codes(self, capsys):
+    def test_without_a_terminal_there_are_no_codes_and_no_carriage_returns(
+        self, capsys
+    ):
         # Under pytest stdout is not a terminal.
         Console().notice("Cancelled")
 
         assert capsys.readouterr().out == "[Cancelled]\n"
 
-    def test_no_color_turns_it_off(self, monkeypatch):
+    def test_no_color_turns_it_off(self, monkeypatch, written):
         monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
         assert Console().color is True
         monkeypatch.setenv("NO_COLOR", "1")
 
         assert Console().color is False
+        assert (
+            Console(output=Vt100_Output(written, lambda: Size(24, 80))).color is False
+        )
 
 
 class TestColumns:

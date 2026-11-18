@@ -1,10 +1,14 @@
 """All terminal output, and the question that asks permission for a tool.
 
 Output is plain text (a streamed reply, a command's output) or a status block (a
-notice, the question). Both go through `Console._emit`, the one place that keeps them
-apart: a status block starts on a fresh line, and plain text after one starts after a
-blank line. A new kind of output goes through `_emit` too. Replies and notices carry
-text from the model or a server, so everything is `sanitize`d first.
+notice, a call, the question). Both go through `Console._emit`, the one place that
+keeps them apart: a status block starts on a fresh line, and plain text after one
+starts after a blank line. A new kind of output goes through `_emit` too. Replies and
+notices carry text from the model or a server, so everything is `sanitize`d first.
+
+A status block is a list of styled pieces, as prompt_toolkit has them. On a terminal
+with colour they are printed by prompt_toolkit; otherwise only their text is, since
+`print_formatted_text` ends every line with `\\r\\n`, which a file or a pipe would keep.
 """
 
 import io
@@ -17,7 +21,27 @@ import textwrap
 from collections.abc import Callable, Sequence
 from typing import Any, Literal
 
+from prompt_toolkit import print_formatted_text
+from prompt_toolkit.formatted_text import AnyFormattedText, FormattedText
+from prompt_toolkit.output import Output
+from prompt_toolkit.styles import Style
+
 from muagent.tools import Tool
+
+# The look of what is not a reply: the colours are the terminal's own (ANSI names).
+_STYLE = Style.from_dict(
+    {
+        "notice": "dim",
+        "call.name": "bold",
+        "call.args": "dim",
+        "allowed": "dim",
+        "denied": "ansired",
+    }
+)
+
+# Asks a question with a menu: the question, and the options as (key, label); gives the
+# key of the one chosen (the first is the default). `Repl` supplies it on a terminal.
+Choose = Callable[[AnyFormattedText, Sequence[tuple[str, str]]], str]
 
 # Control characters that could manipulate the terminal (escape sequences such as
 # OSC 52 clipboard writes, cursor movement, BEL, carriage return), Unicode bidi
@@ -109,16 +133,28 @@ class Console:
     text that follows one starts after a blank line.
     """
 
-    def __init__(self, ask: Callable[[str], str] | None = None) -> None:
+    def __init__(
+        self,
+        ask: Callable[[str], str] | None = None,
+        choose: Choose | None = None,
+        output: Output | None = None,
+    ) -> None:
         """Create a console, with the cursor at the start of a line.
 
         Args:
             ask: Reads the answer to a question, given the question as its prompt;
-                `input()` if omitted.
+                `input()` if omitted. Used when there is no `choose`.
+            choose: Asks the question of `confirm` with a menu, on a terminal.
+            output: Where styled text is written, as prompt_toolkit has it; the
+                terminal if omitted. Giving one turns styling on.
         """
         self.ask = ask
-        # Status lines are dimmed on a terminal, unless NO_COLOR asks for no colour.
-        self.color = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+        self.choose = choose
+        self.output = output
+        # Status lines are styled on a terminal, unless NO_COLOR asks for no colour.
+        self.color = (output is not None or sys.stdout.isatty()) and not os.environ.get(
+            "NO_COLOR"
+        )
         self.at_line_start = True
         self.after_status = False  # whether the last output was a status block
         # Text the terminal's encoding cannot show is replaced, not an error that
@@ -126,27 +162,37 @@ class Console:
         if isinstance(sys.stdout, io.TextIOWrapper):
             sys.stdout.reconfigure(errors="replace")
 
-    def _emit(self, text: str, *, status: bool, dim: bool = False) -> None:
+    def _emit(self, pieces: Sequence[tuple[str, str]], *, status: bool) -> None:
         """Print sanitized text, separating status blocks from plain text.
 
         Args:
-            text: The text to print, without a newline added.
-            status: Whether the text is a status block (a notice or a question).
-            dim: Whether to dim it where there is colour. The codes are added
-                after the text is sanitized, which would remove them.
+            pieces: The (style, text) pieces to print, without a newline added; the
+                style is prompt_toolkit's, such as "class:notice".
+            status: Whether the text is a status block (a notice, a call or a
+                question).
         """
-        text = sanitize(text)
+        pieces = [(style, sanitize(text)) for style, text in pieces]
+        text = "".join(piece for _, piece in pieces)
         if not text:
             return
+        styled = self.color and any(style for style, _ in pieces)  # not a reply
         if status and not self.at_line_start:
-            text = "\n" + text  # never inside a line of reply
+            pieces.insert(0, ("", "\n"))  # never inside a line of reply
+            text = "\n" + text
         elif self.after_status and not status and text.strip():
-            text = "\n" + text  # a reply stands apart from the status lines before it
-        shown = text
-        if dim and self.color:
-            body = text.strip("\n")
-            shown = text.replace(body, f"\033[2m{body}\033[0m", 1)
-        print(shown, end="", flush=True)
+            pieces.insert(0, ("", "\n"))  # a reply stands apart from the status lines
+            text = "\n" + text
+        if styled:
+            print_formatted_text(
+                FormattedText(pieces),
+                end="",
+                flush=True,
+                style=_STYLE,
+                output=self.output,
+                file=None if self.output else sys.stdout,
+            )
+        else:
+            print(text, end="", flush=True)
         self.at_line_start = text.endswith("\n")
         self.after_status = status
 
@@ -156,7 +202,7 @@ class Console:
         Args:
             text: Text to print, such as a piece of a streamed reply.
         """
-        self._emit(text, status=False)
+        self._emit([("", text)], status=False)
 
     def blank(self) -> None:
         """Print an empty line."""
@@ -195,52 +241,100 @@ class Console:
             text: The status message; it is flattened to one line, so text from
                 the server cannot break out of the brackets.
         """
-        self._emit(f"[{' '.join(text.split())}]\n", status=True, dim=True)
+        self._emit([("class:notice", f"[{' '.join(text.split())}]\n")], status=True)
 
-    def call(self, name: str, arguments: str) -> None:
-        """Show a tool call that runs without asking, as one status line.
+    def _call_line(self, name: str, arguments: str, outcome: str, style: str) -> None:
+        """Print a tool call as one status line: `▸ name  arguments`, then `outcome`.
 
         The line is as wide as the terminal at most, with the middle of long strings
         in the arguments left out (see `confirm`).
+        """
+        name = " ".join(name.split())  # one line, whatever the server called it
+        used = len(f"▸ {name}  ") + (len(f"  {outcome}") if outcome else 0)
+        shown, _ = _fit(arguments, _room(used))
+        self._emit(
+            [
+                ("class:call.name", f"▸ {name}"),
+                ("class:call.args", f"  {shown}"),
+                (style, f"  {outcome}" if outcome else ""),
+                ("", "\n"),
+            ],
+            status=True,
+        )
+
+    def call(self, name: str, arguments: str) -> None:
+        """Show a tool call that runs without asking, as one status line.
 
         Args:
             name: The tool's name.
             arguments: The model's arguments, as JSON text.
         """
-        shown, _ = _fit(arguments, _room(len(name) + len("[()]")))
-        self.notice(f"{name}({shown})")
+        self._call_line(name, arguments, "", "")
+
+    def _ask_typed(self, tool: Tool, arguments: str) -> str:
+        """The question as a line the user types the answer to: "y", "a", "?" or "n"
+        (anything else, and the end of input, is a no)."""
+        before = f"Allow {tool.name} "
+        shown, shortened = _fit(arguments, _room(len(before) + len("? [y/N/a/?] ")))
+        prompt = f"{before}{shown}? [y/N/a{'/?' if shortened else ''}] "
+        self.at_line_start = False  # the prompt leaves the cursor after it
+        try:
+            answer = (self.ask or input)(sanitize(prompt)).strip().lower()
+        except EOFError:
+            print()  # no Enter ended the line
+            answer = ""
+        self.at_line_start = True
+        return {"y": "y", "yes": "y", "a": "a", "always": "a", "?": "?"}.get(
+            answer, "n"
+        )
+
+    def _ask_menu(self, choose: Choose, tool: Tool, arguments: str) -> str:
+        """The question as a menu (see `Choose`), whose first option, the default, is
+        the no. It is gone when answered: `confirm` prints a line of what was decided."""
+        name = " ".join(sanitize(tool.name).split())
+        shown, shortened = _fit(arguments, _room(len(f"Allow {name} ") + 4))
+        question = FormattedText(
+            [
+                ("", "Allow "),
+                ("class:call.name", name),
+                ("class:call.args", f" {sanitize(shown)}"),
+                ("", "?"),
+            ]
+        )
+        options = [("n", "Deny"), ("y", "Allow once"), ("a", f"Always allow {name}")]
+        if shortened:
+            options.append(("?", "Show full arguments"))
+        return choose(question, options)
 
     def confirm(self, tool: Tool, arguments: str) -> bool | Literal["always"]:
-        """Ask the user, on one line, whether a tool that is not read-only may run.
+        """Ask the user whether a tool that is not read-only may run.
 
-        The line is as wide as the terminal at most, so the arguments are shown
-        whole if they fit and otherwise with the middle of their long strings left
-        out, which the prompt says (`[y/N/a/?]`). Answering `?` prints the arguments
-        in full and asks again, so nothing is hidden for good. The line is the JSON
-        that will be run, on one line: padding between its tokens cannot push the
-        call off the screen.
+        The question is one line, as wide as the terminal at most, so the arguments
+        are shown whole if they fit and otherwise with the middle of their long
+        strings left out, which the question says (`?` at the prompt, "Show full
+        arguments" in the menu). Asking for them prints the arguments in full and asks
+        again, so nothing is hidden for good. The line is the JSON that will be run, on
+        one line: padding between its tokens cannot push the call off the screen.
+
+        On a terminal the question is a menu with Deny first, which Enter picks; y, a,
+        n and ? choose too. When it is answered the menu is gone and a line of the
+        call and what was decided is left, as a typed question leaves its answer.
 
         Args:
             tool: The tool the model wants to call.
             arguments: The model's arguments, as JSON text.
 
         Returns:
-            True if the user answers y or yes, "always" for a or always (allow this
-            tool for the rest of the session), and False otherwise; end of input is
-            a no.
+            True if the user allows it (y or yes), "always" for a or always (allow
+            this tool for the rest of the session), and False otherwise; end of input
+            is a no.
         """
-        before = f"Allow {tool.name} "
-        shown, shortened = _fit(arguments, _room(len(before) + len("? [y/N/a/?] ")))
-        prompt = f"{before}{shown}? [y/N/a{'/?' if shortened else ''}] "
         while True:
             self.end_line()
-            self.at_line_start = False  # the prompt leaves the cursor after it
-            try:
-                answer = (self.ask or input)(sanitize(prompt)).strip().lower()
-            except EOFError:
-                print()  # no Enter ended the line
-                answer = ""
-            self.at_line_start = True
+            if self.choose is not None:
+                answer = self._ask_menu(self.choose, tool, arguments)
+            else:
+                answer = self._ask_typed(tool, arguments)
             if answer != "?":
                 break
             try:
@@ -249,12 +343,17 @@ class Console:
                 )
             except ValueError:
                 everything = " ".join(arguments.split())
-            self._emit(everything + "\n", status=True)
+            self._emit([("", everything + "\n")], status=True)
         # A reply to what was typed stands apart from it, as from a status line.
         self.after_status = True
-        if answer in ("a", "always"):
+        if self.choose is not None:
+            self.at_line_start = True  # the menu was erased
+            decided = {"y": "allowed", "a": "always allowed"}.get(answer, "denied")
+            style = "class:allowed" if answer in ("y", "a") else "class:denied"
+            self._call_line(tool.name, arguments, decided, style)
+        if answer == "a":
             return "always"
-        return answer in ("y", "yes")
+        return answer == "y"
 
     def clear(self) -> None:
         """Clear the screen and scrollback, like `clear`; the history is kept."""
