@@ -14,7 +14,7 @@ line, because lines move. Everything is in [`src/muagent/`](src/muagent/).
  you type a line
       │
       ▼
- Repl.run ── session.prompt(_PROMPT) ──► Repl.handle
+ Repl.run ── session.prompt(PROMPT) ──► Repl.handle
                                 │
               /command ─────────┼──► the command's handler (no model call; /retry sends a prompt again)
                                 │
@@ -199,7 +199,7 @@ with input or output redirected it is the typed line `Allow name {args}? [y/N/a]
   menu's fourth option, "Show full arguments", or `[y/N/a/?]` typed). `a` allows the
   call and every later call to that tool until muagent ends (`Agent.always_allowed`, by
   tool name). At a terminal the question is a menu (`Console.choose`, which `Repl`
-  supplies as `_choose`; Deny is first, so Enter denies); typed, anything but `y` and
+  supplies as `choose`, in `terminal.py`; Deny is first, so Enter denies); typed, anything but `y` and
   `a` is a no, and so is the end of input. Ctrl-C stops the turn (§8).
 - **Read-only calls that follow one another run at the same time**, each on a thread of its
   own (at most `MAX_PARALLEL_CALLS`, 8): they change nothing, so they cannot depend on one
@@ -408,7 +408,8 @@ the model still answered.
 
 | What                                  | Where                                                        |
 |---------------------------------------|--------------------------------------------------------------|
-| reading input, commands, `ask`, the permission menu | `Repl` and `_choose` in [`repl.py`](src/muagent/repl.py), [`commands.py`](src/muagent/commands.py) |
+| reading input, commands, `ask`           | `Repl` in [`repl.py`](src/muagent/repl.py), [`commands.py`](src/muagent/commands.py) |
+| the prompt, the toolbar, the permission menu | [`terminal.py`](src/muagent/terminal.py) |
 | the turn, the rounds, the stops       | `Agent.run_turn`, `_ask`, `_run_round` in [`agent.py`](src/muagent/agent.py) |
 | the request and the stream            | `Responder` in [`responses.py`](src/muagent/responses.py)    |
 | calls and permissions                 | `Agent._run_tools`, `Tool` in [`tools.py`](src/muagent/tools.py) |

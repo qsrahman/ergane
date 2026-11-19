@@ -463,7 +463,7 @@ class TestServersCommand:
     @staticmethod
     def hub_of(tmp_path, statuses) -> McpHub:
         hub = McpHub({}, tmp_path)
-        hub.statuses[:] = statuses
+        hub.statuses = {s.name: s for s in statuses}
         return hub
 
     def test_it_says_when_there_are_none(self, monkeypatch, make_agent, capsys):

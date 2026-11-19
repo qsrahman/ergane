@@ -53,7 +53,7 @@ it editable; the script is `muagent.cli:main`. Tests import modules directly
   drives a real `Agent` through `run_repl()` and pins the layout of an exchange.
 - `test_console.py` gives `Console` an `output=Vt100_Output(io.StringIO(), …)` to see the
   codes of styled lines, and a `choose` function in place of the menu; the real menu is
-  driven with a pipe input in `TestMenu` (`test_repl.py`), like the prompt.
+  driven with a pipe input in `TestMenu` (`test_terminal.py`), like the prompt.
 - A behaviour change gets a mutation check: break the code, see the test fail.
 
 ## Configuration
@@ -69,18 +69,8 @@ the key and the flags over it and validates the result as one `Config` (a plain 
 model; there is no pydantic-settings); `main()` prints the per-key errors and exits with
 status 1. Read the docstring of `config.py` for how, and why.
 
-| Key | Default | Notes |
-|---|---|---|
-| `api_key` | — | required; a `SecretStr`; may say `${NAME}`; no flag |
-| `base_url` | `None` | for OpenAI-compatible endpoints |
-| `model` | `gpt-5.4-mini` | |
-| `streaming` | `true` | stream deltas vs. one `responses.create` |
-| `max_context_tokens` | `65536` | budget for the whole request input: instructions, tool definitions and history (the output excluded) |
-| `auto_compact` | `true` | summarize the oldest turns past `compact_at` |
-| `compact_at` | `0.75` | share of the budget at which to summarize (0 < x ≤ 1) |
-| `keep_recent_tokens` | `15000` | newest turns a summary leaves as they are; at most half the trigger |
-| `reasoning_effort` | unset | unset sends no `reasoning`, since non-reasoning models reject it |
-| `max_turns` | `25` | most model calls per prompt |
+The keys, their flags and their defaults are the table in
+[README.md](README.md#setup); `Config` in `config.py` is where they are defined.
 
 MCP servers are `mcpServers` in the same file (`Config.mcp_servers`), and only there: a
 server is a program, so neither the environment nor a project's files may define one.
@@ -108,7 +98,8 @@ The modules, in dependency order (each imports only from those above it):
   docstring.
 - `mcp_hub.py`: the servers together: `close_servers`, `McpHub` (starts
   them, at a terminal in the background, and starts one again for `/reconnect`), and a
-  `ServerStatus` per server, which records what became of it for `/servers`.
+  `ServerStatus` per server (`McpHub.statuses`, by name), which records what became of it
+  for `/servers`; `reconnect` starts a server again through the same `_Startup`.
 - `errors.py`, `prompts.py`: `TurnError`, `StreamCut`, `describe_error`,
   `is_context_overflow`, `is_images_rejected`; the three prompts as text. They import nothing of muagent.
 - `context.py`: `Context` (the history and the summary) and `estimate_tokens()`.
@@ -130,9 +121,11 @@ The modules, in dependency order (each imports only from those above it):
   colour; the question is a typed line, or a menu when `Repl` gives the console `choose`.
 - `commands.py`: the `@command` registry and the slash commands (imports `Repl` for type
   checking only).
-- `repl.py`: `Repl`, the input loop, `terminal_session` (prompt_toolkit: the prompt, its
-  toolbar and completion menu, and their styles) and `_choose`, the menu of the permission
-  question.
+- `terminal.py`: the prompt_toolkit side: `terminal_session` (the prompt, history,
+  completion and key bindings, and their styles), `toolbar` (the line under the prompt)
+  and `choose` (the menu of the permission question). Imports `Repl` for type checking
+  only.
+- `repl.py`: `Repl`, the input loop.
 - `cli.py`: `main()`.
 
 Dependencies are passed in through constructors (`Agent(config, client=None, tools=(),

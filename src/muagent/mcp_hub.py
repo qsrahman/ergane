@@ -18,7 +18,8 @@ Design notes, for whoever changes this:
   server has answered, for the toolbar. Ctrl-C while waiting leaves the start to be
   waited for again. Notices about servers that failed are kept until `take`: they
   must not be printed over the prompt.
-- `McpHub.reconnect` starts a server again and returns a `ServerUpdate` instead of
+- `McpHub.reconnect` starts a server again (through `_Startup`, for that one server, with
+  the names of the others' tools taken) and returns a `ServerUpdate` instead of
   touching the agent: the caller applies it between turns, because the tools of a turn
   must not change under it, and what the server counted for the last request no longer
   holds.
@@ -31,7 +32,7 @@ Design notes, for whoever changes this:
 
 import concurrent.futures
 import os
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -151,11 +152,27 @@ class _Startup:
         log_dir: Path,
         environ: Mapping[str, str],
         all_off: str | None,
+        *,
+        append_log: bool = False,
+        taken: Collection[str] = (),
     ) -> None:
+        """Describe the start.
+
+        Args:
+            configs: The servers to start, by name and in the order of the file.
+            log_dir: Where a program's stderr goes, as `NAME.log`.
+            environ: What `${NAME}` placeholders are filled in from.
+            all_off: Why none is to be started, or None.
+            append_log: Add to the logs instead of emptying them: the servers replace
+                ones that ran before, and why those stopped is in them.
+            taken: The names of tools that others have, which these must not repeat.
+        """
         self.configs = configs
         self.log_dir = log_dir
         self.environ = environ
         self.all_off = all_off
+        self.append_log = append_log
+        self.taken = taken
         # Each server, or why it cannot be started, in the order of the file.
         self.entries: list[tuple[str, McpClient | str]] = []
         self.off: dict[str, ServerStatus] = {}
@@ -174,6 +191,7 @@ class _Startup:
                     name,
                     _expand(name, config, self.environ),
                     self.log_dir / f"{name}.log",
+                    append_log=self.append_log,
                 )
                 server.launch()
             except McpServerError as exc:
@@ -216,7 +234,7 @@ class _Startup:
         running: dict[str, McpClient] = {}
         found: dict[str, list[Tool]] = {}
         failed: list[McpClient] = []
-        taken: set[str] = set()  # names are unique across the servers too
+        taken = set(self.taken)  # names are unique across the servers too
 
         def log_of(name: str) -> Path | None:
             return _log_file(self.configs[name], self.log_dir, name)
@@ -295,8 +313,8 @@ class McpHub:
         self.log_dir = log_dir
         self.environ = environ
         self.all_off = all_off
-        # In the order of the file, kept in place.
-        self.statuses: list[ServerStatus] = []
+        # What became of each server, by name and in the order of the file.
+        self.statuses: dict[str, ServerStatus] = {}
         self.servers: dict[str, McpClient] = {}  # the ones that run
         self._startup: _Startup | None = None  # begun, and not finished
         self._started: list[ServerUpdate] = []  # finished, not yet taken
@@ -336,10 +354,10 @@ class McpHub:
             self._startup.abort()
             self._startup = None
             raise
-        self.statuses[:] = [
-            self._startup.off.get(name) or ServerStatus(name, "starting")
+        self.statuses = {
+            name: self._startup.off.get(name) or ServerStatus(name, "starting")
             for name in self.configs
-        ]
+        }
 
     @property
     def starting(self) -> bool:
@@ -389,7 +407,7 @@ class McpHub:
         self._startup = None
         self._notices += notices
         self.servers = running
-        self.statuses[:] = statuses.values()
+        self.statuses = statuses
         notes = self.instructions()
         self._started = [
             ServerUpdate(name, (), found[name], notes.get(name), "") for name in running
@@ -404,23 +422,6 @@ class McpHub:
             if server.instructions and self.configs[name].instructions
         }
 
-    def _status(self, name: str) -> ServerStatus:
-        return next(status for status in self.statuses if status.name == name)
-
-    def _set_status(self, status: ServerStatus) -> None:
-        index = next(i for i, s in enumerate(self.statuses) if s.name == status.name)
-        self.statuses[index] = status
-
-    def _taken(self, besides: str) -> set[str]:
-        """The names of the tools of the other servers, which a new list must not
-        repeat."""
-        return {
-            tool
-            for status in self.statuses
-            if status.name != besides
-            for tool in status.tools
-        }
-
     def reconnect(self, name: str) -> ServerUpdate:
         """Stop the server `name` if it runs, and start it again.
 
@@ -431,33 +432,35 @@ class McpHub:
             What to change in the agent: nothing but a message for a server that is
             switched off, the tools gone for one that fails, the new ones if it starts.
         """
-        config = self.configs[name]
-        before = self._status(name)
+        before = self.statuses[name]
         if before.state == "off":
             return ServerUpdate(name, (), [], None, f"MCP server {name!r} is off")
         previous = self.servers.pop(name, None)
         if previous is not None:
             previous.close()
-        server = None
-        try:
-            server = McpClient(
-                name,
-                _expand(name, config, self.environ),
-                self.log_dir / f"{name}.log",
-                append_log=True,  # the log of the one that ran before says why it ended
-            )
-            server.start()
-            tools = server.tools(self._taken(name))
-        except Exception as exc:  # noqa: BLE001
-            if server is not None:
-                server.close()
-            message = _failure_text(name, exc)
-            self._set_status(_failed_status(name, message, config, self.log_dir))
-            return ServerUpdate(name, before.tools, [], None, message)
-        self.servers[name] = server
-        self._set_status(
-            _running_status(name, server, tools, _log_file(config, self.log_dir, name))
+        # The same start as at the beginning, for this one server, with the names of
+        # the others' tools taken.
+        startup = _Startup(
+            {name: self.configs[name]},
+            self.log_dir,
+            self.environ,
+            None,
+            append_log=True,
+            taken={
+                tool for n, s in self.statuses.items() if n != name for tool in s.tools
+            },
         )
+        startup.begin()
+        try:
+            running, found, statuses = startup.finish(lambda notice: None)
+        except BaseException:
+            startup.abort()
+            raise
+        self.statuses[name] = status = statuses[name]
+        if name not in running:
+            return ServerUpdate(name, before.tools, [], None, status.detail)
+        self.servers[name] = running[name]
+        tools = found[name]
         count = f"{len(tools)} tool{'s' if len(tools) != 1 else ''}"
         return ServerUpdate(
             name,

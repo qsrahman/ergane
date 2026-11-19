@@ -16,7 +16,8 @@ from muagent.commands import COMMANDS
 from muagent.config import EFFORTS, config_file, load_config, private_state_dir
 from muagent.console import Console
 from muagent.mcp_hub import McpHub
-from muagent.repl import Repl, terminal_session
+from muagent.repl import Repl
+from muagent.terminal import terminal_session
 from muagent.tools import Tool, tool_clash, tools_in
 
 

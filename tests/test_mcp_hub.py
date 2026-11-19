@@ -9,7 +9,7 @@ import pytest
 from helpers import FAKE, fake_config, hanging_config
 from muagent.config import LocalMcpServer, McpServerConfig, RemoteMcpServer
 from muagent.mcp_client import McpClient, McpServerError
-from muagent.mcp_hub import McpHub, _expand, close_servers
+from muagent.mcp_hub import McpHub, ServerStatus, _expand, close_servers
 from muagent.tools import Tool
 
 
@@ -210,7 +210,7 @@ class TestStart:
             tools = hub.start(lambda notice: None)
 
             assert tools == [] and hub.servers == {}
-            assert [(s.name, s.state, s.detail) for s in hub.statuses] == [
+            assert [(s.name, s.state, s.detail) for s in hub.statuses.values()] == [
                 ("a", "off", "--no-mcp"),
                 ("b", "off", "--no-mcp"),
             ]
@@ -295,7 +295,7 @@ class TestStatuses:
 
         hub, found = start_hub(configs, notices.append, environ={})
 
-        by = {status.name: status for status in hub.statuses}
+        by = {status.name: status for status in hub.statuses.values()}
         assert list(by) == list(configs)
         assert by["good"].state == "running"
         assert by["good"].tools == ("good__add", "good__read_file")
@@ -311,7 +311,9 @@ class TestStatuses:
     def test_a_url_server_has_no_log(self, start_hub, http_url):
         hub, _ = start_hub({"web": RemoteMcpServer(url=http_url, tools=["add"])})
 
-        assert hub.statuses[0].state == "running" and hub.statuses[0].log is None
+        assert (
+            hub.statuses["web"].state == "running" and hub.statuses["web"].log is None
+        )
 
 
 class TestStartingTogether:
@@ -399,7 +401,7 @@ class TestHub:
         tools = hub.start(lambda notice: None)
 
         assert "fake__add" in self.names(tools)
-        assert [s.state for s in hub.statuses] == ["running"]
+        assert [s.state for s in hub.statuses.values()] == ["running"]
         assert hub.instructions() == {"fake": "Dates are YYYY-MM-DD."}
 
     def test_instructions_are_kept_from_the_model_unless_asked_for(self, tmp_path):
@@ -408,6 +410,22 @@ class TestHub:
             hub.start(lambda notice: None)
 
             assert hub.instructions() == {}
+        finally:
+            hub.close()
+
+    def test_a_server_started_again_does_not_take_a_name_another_has(self, tmp_path):
+        configs = {"fake": self.fake(tools=["add"]), "other": self.fake(enabled=False)}
+        hub = McpHub(configs, tmp_path)
+        try:
+            hub.start(lambda notice: None)
+            # Another server that offers a tool of the name this one's would get.
+            hub.statuses["other"] = ServerStatus(
+                "other", "running", tools=("fake__add",)
+            )
+
+            update = hub.reconnect("fake")
+
+            assert self.names(update.tools) == ["fake__add_2"]
         finally:
             hub.close()
 
@@ -442,14 +460,14 @@ class TestHub:
         hub = McpHub(configs, tmp_path)
         try:
             assert hub.start(lambda notice: None) == []
-            assert hub.statuses[0].state == "failed"
+            assert hub.statuses["fake"].state == "failed"
             configs["fake"] = self.fake()  # the program was installed
 
             update = hub.reconnect("fake")
 
             assert "fake__add" in self.names(update.tools)
-            assert hub.statuses[0].state == "running"
-            assert hub.statuses[0].detail == ""
+            assert hub.statuses["fake"].state == "running"
+            assert hub.statuses["fake"].detail == ""
         finally:
             hub.close()
 
@@ -462,7 +480,7 @@ class TestHub:
         assert update.tools == [] and update.instructions is None
         assert set(update.removed) == {tool.name for tool in tools}
         assert "FileNotFoundError" in update.message
-        assert hub.statuses[0].state == "failed"
+        assert hub.statuses["fake"].state == "failed"
         assert hub.servers == {}
 
     def test_a_server_that_is_off_stays_off(self, tmp_path):
@@ -473,7 +491,7 @@ class TestHub:
             update = hub.reconnect("fake")
 
             assert update.message == "MCP server 'fake' is off"
-            assert hub.statuses[0].state == "off" and hub.servers == {}
+            assert hub.statuses["fake"].state == "off" and hub.servers == {}
         finally:
             hub.close()
 
@@ -505,7 +523,7 @@ class TestStartingInTheBackground:
 
         assert time.monotonic() - started < 1
         assert hub.starting
-        assert [(s.name, s.state) for s in hub.statuses] == [
+        assert [(s.name, s.state) for s in hub.statuses.values()] == [
             ("slow", "starting"),
             ("off", "off"),
         ]
@@ -521,7 +539,7 @@ class TestStartingInTheBackground:
         assert "fake__add" in [tool.name for tool in update.tools]
         assert update.instructions == "Dates are YYYY-MM-DD."
         assert update.message == ""
-        assert [s.state for s in hub.statuses] == ["running"]
+        assert [s.state for s in hub.statuses.values()] == ["running"]
         assert hub.take(lambda notice: None, wait=True) == []
 
     def test_poll_finishes_a_start_every_server_has_answered(self, hubs):
@@ -533,7 +551,7 @@ class TestStartingInTheBackground:
 
         hub.poll()
 
-        assert [s.state for s in hub.statuses] == ["running"]
+        assert [s.state for s in hub.statuses.values()] == ["running"]
 
     def test_a_server_that_fails_is_told_when_taken_not_before(self, hubs):
         hub = hubs({"bad": LocalMcpServer(command="/no/such/server")})
@@ -545,7 +563,7 @@ class TestStartingInTheBackground:
 
         assert hub.take(notices.append, wait=True) == []
         assert len(notices) == 1 and "FileNotFoundError" in notices[0]
-        assert [s.state for s in hub.statuses] == ["failed"]
+        assert [s.state for s in hub.statuses.values()] == ["failed"]
         hub.take(notices.append)
         assert len(notices) == 1  # once
 
@@ -555,7 +573,7 @@ class TestStartingInTheBackground:
 
         hub.take(lambda notice: None, wait=True)
 
-        assert "did not answer within 0.5 s" in hub.statuses[0].detail
+        assert "did not answer within 0.5 s" in hub.statuses["slow"].detail
 
     def test_ctrl_c_while_waiting_leaves_the_start_to_be_waited_for_again(
         self, hubs, monkeypatch
