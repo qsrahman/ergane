@@ -1260,15 +1260,15 @@ def test_the_prompt_keeps_what_the_terminal_depends_on(prompt):
     assert "Markdown" in prompt
 
 
-def test_the_agent_needs_nothing_of_how_settings_are_loaded_or_of_mcp():
+def test_the_agent_needs_nothing_of_mcp():
     # A fresh interpreter: this process has imported everything already.
     import subprocess
     import sys
 
     code = (
         "import sys, muagent.agent; "
-        "loaded = [m for m in ('muagent.config', 'muagent.mcp_client', "
-        "'muagent.mcp_hub') if m in sys.modules]; "
+        "loaded = [m for m in ('muagent.mcp_client', 'muagent.mcp_hub') "
+        "if m in sys.modules]; "
         "print(loaded)"
     )
     result = subprocess.run(

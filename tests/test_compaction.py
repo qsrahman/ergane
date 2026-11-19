@@ -1,14 +1,13 @@
 """Summaries of old turns, shortened tool results, and the retry of a request that
 was too long: the ways the context is kept inside the budget."""
 
-from dataclasses import dataclass
 from typing import cast
 
 import pytest
 from openai.types.responses import ResponseInputParam
 
 from fake_api import TEXT
-from helpers import anchor, tool_with
+from helpers import anchor, make_config, tool_with
 from muagent.compaction import (
     COMPACT_FAILURES,
     SUMMARY_MAX_TOKENS,
@@ -488,14 +487,6 @@ class TestShorteningResults:
         assert outputs[-1].startswith("head") and "hidden" not in outputs[-1]
 
 
-@dataclass
-class Settings:
-    auto_compact: bool = True
-    compact_at: float = 0.5
-    max_context_tokens: int = 1000
-    keep_recent_tokens: int = 100
-
-
 class TestCompactor:
     """The summarizing on its own: no agent, no API, only a function that answers."""
 
@@ -510,7 +501,11 @@ class TestCompactor:
 
         context = Context()
         context.items = old_turns(6)
-        return Compactor(context, Settings(**settings), ask), context, asked
+        config = make_config(
+            **{"compact_at": 0.5, "max_context_tokens": 1000, "keep_recent_tokens": 100}
+            | settings
+        )
+        return Compactor(context, config, ask), context, asked
 
     def test_nothing_is_asked_while_the_request_fits(self):
         compactor, context, asked = self.compactor()
@@ -582,7 +577,7 @@ class TestCompactor:
 
         code = (
             "import sys, muagent.compaction; "
-            "print([m for m in ('muagent.agent', 'muagent.config') if m in sys.modules])"
+            "print([m for m in ('muagent.agent',) if m in sys.modules])"
         )
         result = subprocess.run(
             [sys.executable, "-c", code], capture_output=True, text=True, check=True

@@ -122,9 +122,9 @@ The modules, in dependency order (each imports only from those above it):
   breaks before any text) and `response_problem`. It needs nothing of the agent.
 - `agent.py`: `Agent`: `run_turn` (a loop of `_ask` and `_run_round` around a `_Turn`),
   `compact` (which is `Compactor`'s), and the tools (`add_tools`: the first of a name
-  wins, here and wherever tools are added). It imports nothing of
-  `config.py` or MCP: the settings it reads are `AgentSettings`, which `Config` satisfies
-  (a test pins this).
+  wins, here and wherever tools are added). It reads its settings from `Config`, each
+  where it is used (as do `Responder` and `Compactor`), and imports nothing of MCP (a
+  test pins this).
 - `console.py`: all terminal output, `sanitize()`, and the permission question. A status
   line is styled pieces (prompt_toolkit's), printed by prompt_toolkit where there is
   colour; the question is a typed line, or a menu when `Repl` gives the console `choose`.

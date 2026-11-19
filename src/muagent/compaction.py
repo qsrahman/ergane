@@ -12,10 +12,10 @@ with undo.
 
 import re
 from collections.abc import Callable
-from typing import Protocol
 
 from openai.types.responses import ResponseInputParam
 
+from muagent.config import Config
 from muagent.context import Context, as_dicts
 from muagent.errors import TurnError, describe_error
 from muagent.outputs import output_text
@@ -28,16 +28,6 @@ COMPACT_FAILURES = 3
 
 # A tool result in the text that is summarized is cut to this many characters.
 TRANSCRIPT_RESULT_CHARS = 2000
-
-
-class CompactionSettings(Protocol):
-    """The settings summarizing reads, each where it is used, so a change takes effect
-    at once. `Config` has them all."""
-
-    auto_compact: bool
-    compact_at: float
-    max_context_tokens: int
-    keep_recent_tokens: int
 
 
 def _cut(text: str, chars: int) -> str:
@@ -99,7 +89,7 @@ class Compactor:
     def __init__(
         self,
         context: Context,
-        settings: CompactionSettings,
+        settings: Config,
         ask: Callable[[ResponseInputParam, Callable[[str], None]], str],
     ) -> None:
         """Create a compactor for a conversation.

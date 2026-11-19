@@ -8,13 +8,12 @@ tool definitions, and reads what is wrong with the response with `response_probl
 """
 
 from collections.abc import Callable, Sequence
-from typing import Protocol
 
 from openai import APIConnectionError, OpenAI
 from openai.types.responses import FunctionToolParam, Response, ResponseInputParam
 from openai.types.responses.response_create_params import ResponseCreateParamsBase
-from openai.types.shared import ReasoningEffort
 
+from muagent.config import Config
 from muagent.errors import StreamCut, TurnError
 
 # How many times a round is sent again when its stream breaks before any text of the
@@ -26,15 +25,6 @@ STREAM_RETRIES = 2
 # What a response with neither text nor a call is reported as. Some compatible models
 # now and then answer with nothing; asking again once usually gets a reply.
 NO_TEXT = "No text in response"
-
-
-class ResponseSettings(Protocol):
-    """The settings a request reads, each where it is used, so a change (`/model`)
-    takes effect at once. `Config` has them all."""
-
-    model: str
-    reasoning_effort: ReasoningEffort | None
-    streaming: bool
 
 
 def with_output(response: Response) -> Response:
@@ -84,7 +74,7 @@ def response_problem(response: Response) -> str | None:
 class Responder:
     """Sends requests to the Responses API."""
 
-    def __init__(self, client: OpenAI, settings: ResponseSettings) -> None:
+    def __init__(self, client: OpenAI, settings: Config) -> None:
         self.client = client
         self.settings = settings
 

@@ -24,7 +24,7 @@ import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
-from typing import Literal, Protocol, cast
+from typing import Literal, cast
 
 from openai import OpenAI
 from openai.types.responses import (
@@ -35,7 +35,8 @@ from openai.types.responses import (
     ResponseInputParam,
 )
 
-from muagent.compaction import SUMMARY_MAX_TOKENS, CompactionSettings, Compactor
+from muagent.compaction import SUMMARY_MAX_TOKENS, Compactor
+from muagent.config import Config
 from muagent.context import Context, as_dicts, estimate_tokens
 from muagent.errors import TurnError, is_context_overflow, is_images_rejected
 from muagent.outputs import (
@@ -50,30 +51,11 @@ from muagent.prompts import (
     SYSTEM_PROMPT,
     SYSTEM_PROMPT_NO_TOOLS,
 )
-from muagent.responses import NO_TEXT, Responder, ResponseSettings, response_problem
+from muagent.responses import NO_TEXT, Responder, response_problem
 from muagent.tools import Tool, ToolOutput
 
 # The reason in the note that closes a turn the user stopped.
 INTERRUPTED = "interrupted by the user"
-
-
-class _Secret(Protocol):
-    def get_secret_value(self) -> str: ...
-
-
-class AgentSettings(ResponseSettings, CompactionSettings, Protocol):
-    """The settings an agent reads, each where it is used, so a change (`/model`)
-    takes effect at once: those of a request and of summarizing (their own protocols)
-    and the rest. Written here and not imported from `config.py`, so that the agent
-    needs nothing of how settings are loaded, or of MCP, which `Config` lists. The ones
-    a command may change are plain attributes; the key is only read.
-    """
-
-    base_url: str | None
-    max_turns: int
-
-    @property
-    def api_key(self) -> _Secret: ...
 
 
 # Calls to read-only tools that run at the same time, at most.
@@ -156,7 +138,7 @@ class Agent:
 
     def __init__(
         self,
-        config: AgentSettings,
+        config: Config,
         client: OpenAI | None = None,
         tools: Sequence[Tool] = (),
         server_notes: Mapping[str, str] | None = None,
@@ -164,7 +146,8 @@ class Agent:
         """Create an agent with an empty conversation.
 
         Args:
-            config: The settings the agent reads (`Config` has them all).
+            config: The settings, which the agent reads each where it is used, so a
+                change (`/model`) takes effect at once.
             client: The API client; built from the config if omitted.
             tools: The tools the model may call. The agent only ever uses the tools
                 it is given here, and `update_server` changes them.

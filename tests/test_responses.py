@@ -126,14 +126,14 @@ class TestStreamRetries:
         assert notices == [] and len(fake_server.requests) == 1
 
 
-def test_it_needs_nothing_of_the_agent_or_the_settings_loader():
+def test_it_needs_nothing_of_the_agent_or_the_history():
     # A fresh interpreter: this process has imported everything already.
     import subprocess
     import sys
 
     code = (
         "import sys, muagent.responses; "
-        "print([m for m in ('muagent.agent', 'muagent.config', 'muagent.context') "
+        "print([m for m in ('muagent.agent', 'muagent.context') "
         "if m in sys.modules])"
     )
     result = subprocess.run(
