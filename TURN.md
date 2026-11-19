@@ -1,6 +1,6 @@
 # How a turn flows
 
-A **turn** is everything between you pressing Enter on a prompt and the next `> `.
+A **turn** is everything between you pressing Enter on a prompt and the next `❯ `.
 One turn can hold several **rounds**: a round is one request to the model, and the
 model keeps asking for tool calls until it answers with text.
 
@@ -14,7 +14,7 @@ line, because lines move. Everything is in [`src/muagent/`](src/muagent/).
  you type a line
       │
       ▼
- Repl.run ── session.prompt("> ") ──► Repl.handle
+ Repl.run ── session.prompt(_PROMPT) ──► Repl.handle
                                 │
               /command ─────────┼──► the command's handler (no model call; /retry sends a prompt again)
                                 │
@@ -35,7 +35,7 @@ line, because lines move. Everything is in [`src/muagent/`](src/muagent/).
                        Context.save_turn (or nothing), then a TurnError becomes one notice line
 ```
 
-The agent does no terminal I/O. Everything you see passes through three callbacks
+The agent does no terminal I/O. Everything you see passes through four callbacks
 that `Repl.ask` hands it, which are methods of `Console`:
 
 | Callback    | Is                | Carries                                                       |
@@ -193,17 +193,19 @@ no output (400) and an output with no call:
 with input or output redirected it is the typed line `Allow name {args}? [y/N/a] y`.
 
 - The `▸` line (`Console.call`) is as wide as the terminal at most, the arguments on one
-  line with the middle of long values left out, like the permission line. That line
-  shows the arguments in full if they fit the terminal, otherwise with the middle
-  of long values left out and `[y/N/a/?]`; `?` prints everything and asks again; `a`
-  allows the call and every later call to that tool until muagent ends (`Agent.always_allowed`,
-  by tool name). End of
-  input counts as no; Ctrl-C stops the turn (§8).
+  line with the middle of long values left out. The permission question is cut the same
+  way: it shows the arguments in full if they fit the terminal, otherwise with the middle
+  of long values left out, and then offers to print everything and ask again (`?`: the
+  menu's fourth option, "Show full arguments", or `[y/N/a/?]` typed). `a` allows the
+  call and every later call to that tool until muagent ends (`Agent.always_allowed`, by
+  tool name). At a terminal the question is a menu (`Console.choose`, which `Repl`
+  supplies as `_choose`; Deny is first, so Enter denies); typed, anything but `y` and
+  `a` is a no, and so is the end of input. Ctrl-C stops the turn (§8).
 - **Read-only calls that follow one another run at the same time**, each on a thread of its
   own (at most `MAX_PARALLEL_CALLS`, 8): they change nothing, so they cannot depend on one
   another, and a batch takes as long as its slowest call, not the sum. Any other call is a
   barrier: it waits for the calls before it, runs alone, and the user is asked about it
-  alone. The `[…]` lines of a batch print before it starts, in the order of the calls, and
+  alone. The `▸` lines of a batch print before it starts, in the order of the calls, and
   the outputs are added in that order whichever call ends first. Ctrl-C cancels the
   requests that are still waiting (`Tool.cancel`; for an MCP tool, the SDK tells the
   server) and keeps the outputs of the calls that had ended.
@@ -339,8 +341,10 @@ back as that text (so it tells the model not to repeat it). If either changes in
 code, change the prompt.
 
 `Console` keeps the screen tidy with one rule in one place (`_emit`): a status line
-(a notice, the permission question) always starts on a fresh line, and plain text that
-follows one, such as the reply, starts after a blank line.
+(a notice, a call, the permission question) always starts on a fresh line, and plain
+text that follows one, such as the reply, starts after a blank line. A status line is
+made of styled pieces: prompt_toolkit prints them on a terminal with colour, and only
+their text is printed when output is redirected or `NO_COLOR` is set.
 
 ## 10. Commands that touch a turn
 
@@ -364,7 +368,7 @@ follows one, such as the reply, starts after a blank line.
 - **The newest user message is never trimmed away,** and neither is the summary.
 - **A summary replaces turns only when it is good:** the history is whole after a failure.
 - **The agent prints nothing.** If a new message is for the user, it goes through one
-  of the three callbacks.
+  of the four callbacks.
 
 ## An example
 
@@ -404,7 +408,7 @@ the model still answered.
 
 | What                                  | Where                                                        |
 |---------------------------------------|--------------------------------------------------------------|
-| reading input, commands, `ask`        | `Repl` in [`repl.py`](src/muagent/repl.py), [`commands.py`](src/muagent/commands.py) |
+| reading input, commands, `ask`, the permission menu | `Repl` and `_choose` in [`repl.py`](src/muagent/repl.py), [`commands.py`](src/muagent/commands.py) |
 | the turn, the rounds, the stops       | `Agent.run_turn`, `_ask`, `_run_round` in [`agent.py`](src/muagent/agent.py) |
 | the request and the stream            | `Responder` in [`responses.py`](src/muagent/responses.py)    |
 | calls and permissions                 | `Agent._run_tools`, `Tool` in [`tools.py`](src/muagent/tools.py) |

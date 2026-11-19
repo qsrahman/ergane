@@ -51,6 +51,9 @@ it editable; the script is `muagent.cli:main`. Tests import modules directly
   `Tool.from_function`. `Agent` tests check return values and `TurnError`, not printed
   output. `TestRepl` replaces `agent.run_turn` on one instance; `TestReplRendering`
   drives a real `Agent` through `run_repl()` and pins the layout of an exchange.
+- `test_console.py` gives `Console` an `output=Vt100_Output(io.StringIO(), …)` to see the
+  codes of styled lines, and a `choose` function in place of the menu; the real menu is
+  driven with a pipe input in `TestMenu` (`test_repl.py`), like the prompt.
 - A behaviour change gets a mutation check: break the code, see the test fail.
 
 ## Configuration
@@ -119,14 +122,19 @@ The modules, in dependency order (each imports only from those above it):
   `compact` (which is `Compactor`'s), and the tools. It imports nothing of
   `config.py` or MCP: the settings it reads are `AgentSettings`, which `Config` satisfies
   (a test pins this).
-- `console.py`: all terminal output, `sanitize()`, and the permission question.
+- `console.py`: all terminal output, `sanitize()`, and the permission question. A status
+  line is styled pieces (prompt_toolkit's), printed by prompt_toolkit where there is
+  colour; the question is a typed line, or a menu when `Repl` gives the console `choose`.
 - `commands.py`: the `@command` registry and the slash commands (imports `Repl` for type
   checking only).
-- `repl.py`: `Repl`, the input loop, and `terminal_session` (prompt_toolkit).
+- `repl.py`: `Repl`, the input loop, `terminal_session` (prompt_toolkit: the prompt, its
+  toolbar and completion menu, and their styles) and `_choose`, the menu of the permission
+  question.
 - `cli.py`: `main()`.
 
-Dependencies are passed in through constructors (`Agent(config, client=None, tools=())`,
-`Repl(agent, commands, session=None, console=None)`); there is no global config lookup.
+Dependencies are passed in through constructors (`Agent(config, client=None, tools=(),
+server_notes=None)`, `Repl(agent, commands, session=None, console=None, servers=(),
+hub=None)`); there is no global config lookup.
 Every setting is read where it is used, so `/model` and `/effort` take effect at once.
 
 What must stay true:
@@ -169,6 +177,15 @@ What must stay true:
   freely is one line; a result
   is not shown (the reply says what it found); a server that starts is not announced; the
   banner is one line. Before adding output, ask whether anyone would miss it.
+- **The look is the terminal's own.** Styles use ANSI names (`ansicyan`,
+  `ansibrightblack`), never hex, so a theme decides the colours; text must still read
+  without them (the toolbar meter writes its percentage too), and `NO_COLOR` is honoured.
+  A style for something prompt_toolkit already styles says `fg` and `bg` both: its
+  completion menu is black on grey, which a change of `bg` alone leaves black on a dark
+  terminal. A dotted class inherits its parent's style (a `decision.denied` class came out dim
+  red), so give independent looks independent names. Status lines go through
+  `print_formatted_text` only on a terminal with colour: it ends lines with `\r\n`, which
+  a file or a pipe would keep.
 - Output is a plain terminal: the system prompt forbids LaTeX in favor of Unicode math
   and says Markdown is not rendered. Keep those if editing the prompt.
 - The system prompt follows OpenAI's guidance for agentic coding models and depends on how

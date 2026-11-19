@@ -2,7 +2,8 @@
 
 The line editor is prompt_toolkit (history, completion, bracketed paste); macOS's
 Python has libedit, which has no bracketed paste, so a pasted block would be many
-prompts. With input or output redirected there is no session and `input()` reads.
+prompts. The question before a tool runs is a menu of the same library (`_choose`). With
+input or output redirected there is no session and `input()` reads.
 """
 
 import sys

@@ -89,7 +89,7 @@ should read.
 - **Long output is cut** at 20 KiB (`MAX_OUTPUT_CHARS`), with a note saying how much was
   left out. It all goes into the next request, so return what is needed: a start, a
   count, a path to the rest.
-- **Print nothing.** The user sees the call (one dimmed line, or the question) and not
+- **Print nothing.** The user sees the call (one line, or the question) and not
   the result: the model's reply says what it found. A `print` lands in the middle of the
   terminal.
 - The result is **untrusted text to the next step**: the model is told that a file or a
@@ -110,9 +110,10 @@ def save(path: str, text: str) -> str:
 Say `False` for anything that changes something outside the program: a file, a process,
 the network with a side effect.
 
-- A tool that is not read-only asks the user before each call (`Allow save {…}?`, with the
-  arguments, and a menu); "Always allow" (`a`) allows that tool for the rest of the session. A read-only
-  tool runs at once and is shown as a line.
+- A tool that is not read-only asks the user before each call: the question is
+  `Allow save {…}?` with the arguments, over a menu whose default is Deny. "Always allow"
+  (`a`) allows that tool for the rest of the session. A read-only tool runs at once and is
+  shown as a line.
 - Read-only calls of one response run **at the same time**, on threads (up to 8), so such
   a tool must be safe to call from several threads. Any other call runs alone, after the
   ones before it.

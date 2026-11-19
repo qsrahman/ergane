@@ -128,7 +128,7 @@ class Console:
 
     Text is sanitized, since replies and notices carry text from the model or the
     server. There are two kinds of output: plain text (a streamed reply, a command's
-    output) and status blocks (notices and questions). Both go through _emit(),
+    output) and status blocks (notices, calls and questions). Both go through _emit(),
     which keeps them apart: a status block always starts on a fresh line, and plain
     text that follows one starts after a blank line.
     """
