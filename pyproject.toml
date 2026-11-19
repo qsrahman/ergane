@@ -10,6 +10,7 @@ authors = [
     { name = "Qazi Sami ur Rahman", email = "qsrahmans@gmail.com" }
 ]
 dependencies = [
+    "anyio>=4.16.0",
     "openai>=3.31.0",
     "prompt-toolkit>=3.0.53",
     "pydantic>=2.14.1",

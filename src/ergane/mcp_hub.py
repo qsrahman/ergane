@@ -6,12 +6,12 @@ of each (`ServerStatus`, for `/servers`), and start one again (`McpHub.reconnect
 
 Design notes, for whoever changes this:
 
-- Starting (`_Startup`): `launch()` every server, and then each one connects and lists
-  its tools on a thread of its own, so a slow one holds up no other. The startup
-  timeout counts from `launch()`, so servers that never answer delay the start by one
-  timeout. The tools are named afterwards, in the order of the file, so that the names
-  do not depend on who answered first. A server that failed is closed with the other
-  failed ones; `close_servers` closes the running ones.
+- Starting (`_Startup`): each server starts and lists its tools on a thread of its own,
+  so a slow one holds up no other. They begin together, so servers that never answer
+  delay the start by one timeout. The tools are named afterwards, in the order of the
+  file, so that the names do not depend on who answered first. A server that fails to
+  start has stopped itself; one whose tools cannot be listed is closed with the other
+  such ones; `close_servers` closes the running ones.
 - At a terminal the hub does not wait (`McpHub.begin`): the prompt comes up at once
   and `take` collects the servers when the caller is between inputs, waiting for
   them only before a turn, which needs the tools. `poll` finishes a start that every
@@ -138,8 +138,8 @@ def close_servers(servers: Iterable[McpClient]) -> None:
 
 
 class _Startup:
-    """Servers being started: launched at once, then each connecting and listing its
-    tools on a thread of its own, so that a slow one holds up no other.
+    """Servers being started, each starting and listing its tools on a thread of its
+    own, so that a slow one holds up no other.
 
     `begin()` does not wait. `finish()` does, and then names the tools in the order of
     the file, which is why that is done there and not on the threads: the names must
@@ -180,7 +180,7 @@ class _Startup:
         self._pool: concurrent.futures.ThreadPoolExecutor | None = None
 
     def begin(self) -> None:
-        """Launch the servers that are on, and start connecting to them."""
+        """Start the servers that are on, each on a thread of its own."""
         for name, config in self.configs.items():
             if self.all_off or not config.enabled:
                 reason = self.all_off or "enabled is false"
@@ -193,8 +193,7 @@ class _Startup:
                     self.log_dir / f"{name}.log",
                     append_log=self.append_log,
                 )
-                server.launch()
-            except McpServerError as exc:
+            except McpServerError as exc:  # a variable that is not set
                 self.entries.append((name, str(exc)))
             else:
                 self.entries.append((name, server))
@@ -204,13 +203,13 @@ class _Startup:
                 len(servers), thread_name_prefix="mcp-start"
             )
             self._futures = {
-                name: self._pool.submit(self._connect, server)
+                name: self._pool.submit(self._start, server)
                 for name, server in servers.items()
             }
 
     @staticmethod
-    def _connect(server: McpClient) -> list[ToolDefinition]:
-        server.connect()
+    def _start(server: McpClient) -> list[ToolDefinition]:
+        server.start()
         return server.definitions()
 
     def done(self) -> bool:

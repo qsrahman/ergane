@@ -15,7 +15,8 @@ from types import SimpleNamespace
 import pytest
 
 from ergane.config import LocalMcpServer, RemoteMcpServer
-from ergane.mcp_client import McpClient, McpServerError, _list_tools
+from ergane.mcp_client import McpClient, McpServerError
+from ergane.mcp_tools import list_tools
 from ergane.tools import MAX_OUTPUT_CHARS, Tool
 from fake_api import TEXT
 from helpers import FAKE, fake_config, serve_http
@@ -187,7 +188,9 @@ class TestServer:
 
         assert by_name["fake__add"].call('{"a": 2, "b": 2}') == "4"
 
-    def test_a_server_that_exits_mid_call_gives_an_error_not_a_hang(self, make_server):
+    def test_a_server_that_exits_mid_call_gives_an_error_not_a_hang_and_the_next_call_works(
+        self, make_server
+    ):
         server = make_server()
         by_name = {tool.name: tool for tool in server.tools()}
 
@@ -197,11 +200,8 @@ class TestServer:
             .call("{}")
             .startswith("Error: McpServerError: MCP server 'fake': ")
         )
-        assert (
-            by_name["fake__add"]
-            .call('{"a": 1, "b": 1}')
-            .startswith("Error: McpServerError: MCP server 'fake': ")
-        )
+        # The call that failed made the next one look: the server is started again.
+        assert by_name["fake__add"].call('{"a": 1, "b": 1}') == "2"
 
     def test_a_call_after_close_says_the_server_is_not_running(self, make_server):
         server = make_server()
@@ -212,6 +212,23 @@ class TestServer:
         assert add.call('{"a": 1, "b": 1}') == (
             "Error: McpServerError: MCP server 'fake' is not running"
         )
+
+    def test_a_server_closed_before_it_starts_does_not_start(self, make_server):
+        server = make_server(name="early", start=False)
+        server.close()
+
+        with pytest.raises(McpServerError, match="closed while it started"):
+            server.start()
+
+        assert "mcp-early" not in [t.name for t in threading.enumerate()]
+
+    def test_the_startup_timeout_does_not_end_a_server_that_is_up(self, make_server):
+        server = make_server(startup_timeout=1)
+        tools = {t.name: t for t in server.tools()}
+
+        time.sleep(1.5)  # past the startup timeout, which only counts until it is up
+
+        assert tools["fake__add"].call('{"a": 1, "b": 2}') == "3"
 
     def test_close_stops_the_thread_and_can_be_repeated(self, make_server):
         server = make_server(name="closing")
@@ -419,7 +436,7 @@ class TestListTools:
             async def list_tools(self, params=None):
                 return pages[params.cursor if params else None]
 
-        assert asyncio.run(_list_tools(Session())) == ["a", "b", "c"]  # pyright: ignore[reportArgumentType]
+        assert asyncio.run(list_tools(Session())) == ["a", "b", "c"]  # pyright: ignore[reportArgumentType]
 
 
 class TestAgentGate:
@@ -479,34 +496,34 @@ class TestPictures:
     def test_only_the_kinds_of_picture_the_api_takes(self):
         import mcp_types
 
-        from ergane.mcp_client import _images
+        from ergane.mcp_tools import result_images
 
         def block(mime: str):
             return mcp_types.ImageContent(type="image", data="aGk=", mime_type=mime)
 
         result = block_result(block("image/png"), block("image/svg+xml"))
 
-        assert [i.mime_type for i in _images(result)] == ["image/png"]
+        assert [i.mime_type for i in result_images(result)] == ["image/png"]
 
     def test_a_picture_too_large_is_left_out(self, monkeypatch):
         import mcp_types
 
-        from ergane.mcp_client import _images
+        from ergane.mcp_tools import result_images
 
-        monkeypatch.setattr("ergane.mcp_client._MAX_IMAGE_CHARS", 4)
+        monkeypatch.setattr("ergane.mcp_tools._MAX_IMAGE_CHARS", 4)
         big = mcp_types.ImageContent(type="image", data="x" * 5, mime_type="image/png")
         small = mcp_types.ImageContent(
             type="image", data="x" * 4, mime_type="image/png"
         )
 
-        assert [len(i.data) for i in _images(block_result(big, small))] == [4]
+        assert [len(i.data) for i in result_images(block_result(big, small))] == [4]
 
 
 class TestResultText:
     def test_a_text_file_the_server_embedded_is_text(self):
         import mcp_types
 
-        from ergane.mcp_client import _text
+        from ergane.mcp_tools import result_text
 
         file = mcp_types.EmbeddedResource(
             type="resource",
@@ -515,12 +532,12 @@ class TestResultText:
             ),
         )
 
-        assert _text(block_result(file)) == "contents"
+        assert result_text(block_result(file)) == "contents"
 
     def test_a_binary_one_and_a_link_are_named(self):
         import mcp_types
 
-        from ergane.mcp_client import _text
+        from ergane.mcp_tools import result_text
 
         blob = mcp_types.EmbeddedResource(
             type="resource",
@@ -528,32 +545,32 @@ class TestResultText:
         )
         link = mcp_types.ResourceLink(type="resource_link", uri="file:///b", name="b")
 
-        assert _text(block_result(blob, link)) == (
+        assert result_text(block_result(blob, link)) == (
             "[resource: file:///a.bin]\n[resource_link: file:///b]"
         )
 
     def test_a_result_with_only_structured_content_is_that_as_json(self):
-        from ergane.mcp_client import _text
+        from ergane.mcp_tools import result_text
 
-        assert _text(block_result(structured={"sum": 3})) == '{"sum": 3}'
+        assert result_text(block_result(structured={"sum": 3})) == '{"sum": 3}'
 
     def test_structured_content_next_to_text_is_not_repeated(self):
         import mcp_types
 
-        from ergane.mcp_client import _text
+        from ergane.mcp_tools import result_text
 
         text = mcp_types.TextContent(type="text", text="3")
 
-        assert _text(block_result(text, structured={"sum": 3})) == "3"
+        assert result_text(block_result(text, structured={"sum": 3})) == "3"
 
     def test_an_error_is_marked(self):
         import mcp_types
 
-        from ergane.mcp_client import _text
+        from ergane.mcp_tools import result_text
 
         text = mcp_types.TextContent(type="text", text="bad")
 
-        assert _text(block_result(text, is_error=True)) == "Error: bad"
+        assert result_text(block_result(text, is_error=True)) == "Error: bad"
 
 
 class TestConnectionLost:
@@ -578,6 +595,29 @@ class TestConnectionLost:
         self.kill(server, tools["fake__pid"])
 
         assert tools["fake__add"].call('{"a": 1, "b": 2}') == "3"  # no error at all
+
+    def test_a_call_that_failed_makes_the_next_one_check_the_connection(
+        self, make_server, monkeypatch
+    ):
+        # No ping for idleness: only the failed call can make the next one look.
+        monkeypatch.setattr("ergane.mcp_client._IDLE_SECONDS", 3600)
+        server = make_server(name="checked")
+        tools = {t.name: t for t in server.tools()}
+        self.kill(server, tools["checked__pid"])
+
+        assert tools["checked__add"].call('{"a": 1, "b": 2}').startswith("Error:")
+        assert tools["checked__add"].call('{"a": 1, "b": 2}') == "3"
+
+    def test_the_old_connection_is_gone_when_a_server_is_started_again(
+        self, make_server
+    ):
+        server = make_server(name="again")
+        tools = {t.name: t for t in server.tools()}
+        self.kill(server, tools["again__pid"])
+
+        assert tools["again__add"].call('{"a": 1, "b": 2}') == "3"
+
+        assert [t.name for t in threading.enumerate()].count("mcp-again") == 1
 
     def test_calls_on_several_threads_at_once_start_a_dead_server_once(
         self, make_server
@@ -659,7 +699,7 @@ class TestConnectionLost:
         server.close()
 
         assert "is not running" in tools["fake__add"].call('{"a": 1, "b": 2}')
-        assert server._thread is None
+        assert server._portal is None  # pyright: ignore[reportPrivateUsage]
 
     def test_a_remote_server_that_went_away_and_came_back_works_again(self, tmp_path):
         with socket.socket() as probe:

@@ -13,6 +13,14 @@ from ergane.tools import Tool
 from helpers import FAKE, fake_config, hanging_config
 
 
+def wait_for_thread(name: str, seconds: float = 5) -> None:
+    """Wait until a thread of that name runs: the server's, which a start creates."""
+    deadline = time.monotonic() + seconds
+    while name not in [t.name for t in threading.enumerate()]:
+        assert time.monotonic() < deadline, f"no thread {name}"
+        time.sleep(0.02)
+
+
 class TestPlaceholders:
     def expand(self, **values) -> LocalMcpServer:
         config = LocalMcpServer(command="x", **values)
@@ -167,12 +175,24 @@ class TestStart:
         server = make_server(
             name="pending", args=["-c", "import time; time.sleep(60)"], start=False
         )
-        server.launch()
+        failures: list[McpServerError] = []
+
+        def start() -> None:
+            try:
+                server.start()
+            except McpServerError as exc:
+                failures.append(exc)
+
+        starting = threading.Thread(target=start)
+        starting.start()
+        wait_for_thread("mcp-pending")
         started = time.monotonic()
 
         server.close()
+        starting.join(10)
 
         assert time.monotonic() - started < 6
+        assert not starting.is_alive() and len(failures) == 1
         assert "mcp-pending" not in [t.name for t in threading.enumerate()]
 
     def test_a_server_at_a_url_starts_with_its_headers_and_leaves_no_log(
@@ -317,6 +337,13 @@ class TestStatuses:
 
 
 class TestStartingTogether:
+    @staticmethod
+    def try_start(server: McpClient) -> None:
+        try:
+            server.start()
+        except McpServerError:
+            pass
+
     def test_servers_that_never_answer_delay_the_start_by_one_timeout_not_the_sum(
         self, start_hub
     ):
@@ -334,19 +361,16 @@ class TestStartingTogether:
         # leave), together: it was 4 x 3 s when each was waited for in turn.
         assert elapsed < 6
 
-    def test_a_server_that_fails_to_connect_is_left_for_close(self, tmp_path):
+    def test_a_server_that_fails_to_start_has_stopped(self, tmp_path):
         server = McpClient(
             "hang", hanging_config(startup_timeout=1), tmp_path / "hang.log"
         )
-        server.launch()
-        try:
-            with pytest.raises(McpServerError, match="did not answer within 1 s"):
-                server.connect()
 
-            assert "mcp-hang" in [t.name for t in threading.enumerate()]
-        finally:
-            server.close()
+        with pytest.raises(McpServerError, match="did not answer within 1 s"):
+            server.start()
+
         assert "mcp-hang" not in [t.name for t in threading.enumerate()]
+        server.close()  # and closing it again is harmless
 
     def test_servers_are_closed_together(self, tmp_path):
         servers = [
@@ -355,12 +379,15 @@ class TestStartingTogether:
             )
             for i in range(3)
         ]
-        for server in servers:
-            server.launch()
+        starting = [threading.Thread(target=self.try_start, args=(s,)) for s in servers]
+        for thread in starting:
+            thread.start()
         time.sleep(0.5)  # let each start its process
         started = time.monotonic()
 
         close_servers(servers)
+        for thread in starting:
+            thread.join(10)
 
         # Each takes about 2 s to stop (the process ignores its closed input).
         assert time.monotonic() - started < 4.5

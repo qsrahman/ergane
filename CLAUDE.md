@@ -93,9 +93,12 @@ The modules, in dependency order (each imports only from those above it):
   field of the other kind is an error of its own, so there is no check of
   combinations), and what the MCP code shares with it: the rules for a server's name
   and the `${NAME}` placeholders (`fill_placeholders`).
-- `mcp_client.py`: `McpClient`, one connection used from synchronous code; its tools
-  become `Tool`s. Imports `mcp` only when a server starts. The design notes are in its
-  docstring.
+- `mcp_tools.py`: what an MCP server's tools and results become for the model: names,
+  the text and pictures of a result, the check of a call's arguments. Plain functions.
+- `mcp_client.py`: `McpClient`, one connection used from synchronous code (on anyio's
+  blocking portal, a thread with an event loop); its tools become `Tool`s. `start()`
+  blocks until the server is up, so servers are started at once on threads of their
+  own. Imports `mcp` only when a server starts. The design notes are in its docstring.
 - `mcp_hub.py`: the servers together: `close_servers`, `McpHub` (starts
   them, at a terminal in the background, and starts one again for `/reconnect`), and a
   `ServerStatus` per server (`McpHub.statuses`, by name), which records what became of it
