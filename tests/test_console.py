@@ -654,15 +654,15 @@ class TestColumns:
     def test_the_texts_are_lined_up_under_the_longest_label(self, capsys):
         Console().columns([("a", "one"), ("long", "two")])
 
-        assert capsys.readouterr().out == "  a     one\n  long  two\n"
+        assert capsys.readouterr().out == "  a     one\n  long  two\n\n"
 
-    def test_it_is_plain_text_that_the_next_notice_stands_apart_from(self, capsys):
+    def test_a_blank_line_follows_the_last_row(self, capsys):
         console = Console()
 
         console.columns([("a", "one")])
         console.notice("done")
 
-        assert capsys.readouterr().out == "  a  one\n[done]\n"
+        assert capsys.readouterr().out == "  a  one\n\n[done]\n"
 
     def test_a_long_text_wraps_under_its_own_column(self, capsys, monkeypatch):
         monkeypatch.setenv("COLUMNS", "40")
@@ -674,7 +674,7 @@ class TestColumns:
         assert len(out) > 3 and all(len(line) < 40 for line in out)
         assert out[0].startswith("  ask first  server__tool_0,")
         assert out[1].startswith(" " * 13 + "server__tool_")
-        assert out[-1] == "  b          short"
+        assert out[-2:] == ["  b          short", ""]
 
     def test_a_name_with_a_hyphen_is_not_broken(self, capsys, monkeypatch):
         monkeypatch.setenv("COLUMNS", "40")

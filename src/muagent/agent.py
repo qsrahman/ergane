@@ -24,7 +24,7 @@ import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Literal, Protocol, cast
+from typing import Literal, Protocol, cast
 
 from openai import OpenAI
 from openai.types.responses import (
@@ -39,6 +39,7 @@ from muagent.compaction import SUMMARY_MAX_TOKENS, CompactionSettings, Compactor
 from muagent.context import (
     Context,
     answer_open_calls,
+    as_dicts,
     drop_images,
     drop_outputs,
     estimate_tokens,
@@ -243,20 +244,9 @@ class Agent:
             on_notice("Context trimmed: oldest turns dropped")
         turn = _Turn(prompt, items)
 
-        # Asking again (below) is not one of the calls the cap counts, or the last
-        # of them would be announced and never sent. Each happens a bounded number
-        # of times in a turn, so the loop ends.
-        asked = 0
-        while asked < self.config.max_turns:
+        for _ in range(self.config.max_turns):
             response = self._ask(turn, on_text, on_notice)
-            if response is None:  # the request was shortened: ask again
-                continue
             problem = response_problem(response)
-            if problem == NO_TEXT and not turn.emptied:
-                turn.emptied = True
-                on_notice("The model sent an empty reply; trying again")
-                continue
-            asked += 1
             calls = [item for item in response.output if item.type == "function_call"]
             if problem or not calls:
                 break
@@ -306,53 +296,60 @@ class Agent:
         turn: _Turn,
         on_text: Callable[[str], None],
         on_notice: Callable[[str], None],
-    ) -> Response | None:
+    ) -> Response:
         """Send the turn's items and get the model's response.
 
-        A request the server refuses as too long is shortened, once in a turn, and one
-        it refuses because the model takes no pictures is sent again without them;
-        the caller asks again (None). Any other failure ends the turn,
-        and once a round has completed the turn is kept first: every call has its
-        output at this point, so what the earlier rounds did (it may have had
-        effects) is known.
+        A request the server refuses as too long is shortened, once in a turn, one it
+        refuses because the model takes no pictures is sent again without them, and a
+        response with nothing in it is asked for again, once in a turn. Each happens a
+        bounded number of times, so this ends, and none of them is one of the calls
+        `max_turns` counts, or the last of those would be announced and never sent.
+        Any other failure ends the turn, and once a round has completed the turn is
+        kept first: every call has its output at this point, so what the earlier
+        rounds did (it may have had effects) is known.
 
         Raises:
             Exception: Whatever `Responder.send` raises.
             KeyboardInterrupt: On Ctrl-C.
         """
-        try:
-            response = self.responder.send(
-                turn.items,
-                self._instructions(),
-                on_text,
-                on_notice,
-                tools=self._tool_params(),
-            )
-        except (Exception, KeyboardInterrupt) as exc:
-            # Only if there was a picture to take out: then the same request cannot
-            # be refused for it again, and this does not go on for ever.
-            if is_images_rejected(exc) and drop_images(turn.items):
-                on_notice(
-                    "The model does not take pictures, so they were dropped; "
-                    "set images to false for the server that sent them"
+        while True:
+            try:
+                response = self.responder.send(
+                    turn.items,
+                    self._instructions(),
+                    on_text,
+                    on_notice,
+                    tools=self._tool_params(),
                 )
-                return None
-            if is_context_overflow(exc) and not turn.refused:
-                turn.refused = True
-                if self._shrink(turn, on_notice):
-                    return None
-            if turn.rounds:
-                if isinstance(exc, KeyboardInterrupt):
-                    reason = INTERRUPTED
-                elif isinstance(exc, TurnError):
-                    reason = str(exc)
-                else:
-                    reason = type(exc).__name__
-                self._keep_stopped_turn(turn.items, turn.rounds, reason)
-            raise
-        if response.usage is not None:
-            self.last_input_tokens = response.usage.input_tokens
-        return response
+            except (Exception, KeyboardInterrupt) as exc:
+                # Only if there was a picture to take out: then the same request
+                # cannot be refused for it again, and this does not go on for ever.
+                if is_images_rejected(exc) and drop_images(turn.items):
+                    on_notice(
+                        "The model does not take pictures, so they were dropped; "
+                        "set images to false for the server that sent them"
+                    )
+                    continue
+                if is_context_overflow(exc) and not turn.refused:
+                    turn.refused = True
+                    if self._shrink(turn, on_notice):
+                        continue
+                if turn.rounds:
+                    if isinstance(exc, KeyboardInterrupt):
+                        reason = INTERRUPTED
+                    elif isinstance(exc, TurnError):
+                        reason = str(exc)
+                    else:
+                        reason = type(exc).__name__
+                    self._keep_stopped_turn(turn.items, turn.rounds, reason)
+                raise
+            if response.usage is not None:
+                self.last_input_tokens = response.usage.input_tokens
+            if response_problem(response) == NO_TEXT and not turn.emptied:
+                turn.emptied = True
+                on_notice("The model sent an empty reply; trying again")
+                continue
+            return response
 
     def _run_round(
         self,
@@ -387,21 +384,24 @@ class Agent:
             raise
         budget = self.config.max_context_tokens
         used = self._next_request_tokens(response, turn.items, sent)
-        if used > budget:
-            # Results of earlier rounds go first, so the work goes on; the latest
-            # ones are what the model needs to read next.
-            freed = drop_outputs(turn.items, sent, used - budget)
-            if freed:
-                on_notice("Context full: older tool results dropped")
-            used -= freed
-        if used > budget:
-            # Only the latest round is left: shorten its results, but keep their
-            # start and end, which is what the model needs to read.
+        # Results of earlier rounds go first, so the work goes on; the latest ones are
+        # what the model needs to read next, so they are only shortened, keeping their
+        # start and end.
+        for upto, placeholders, notice in (
+            (sent, True, "Context full: older tool results dropped"),
+            (
+                len(turn.items),
+                False,
+                "Context full: this round's tool results shortened",
+            ),
+        ):
+            if used <= budget:
+                break
             freed = drop_outputs(
-                turn.items, len(turn.items), used - budget, placeholders=False
+                turn.items, upto, used - budget, placeholders=placeholders
             )
             if freed:
-                on_notice("Context full: this round's tool results shortened")
+                on_notice(notice)
             used -= freed
         if used > budget:
             # Still over. The calls have run and may have had effects: keep the turn,
@@ -475,7 +475,7 @@ class Agent:
         else:
             results = sum(
                 estimate_tokens(item)
-                for item in cast(list[dict[str, Any]], turn.items)
+                for item in as_dicts(turn.items)
                 if item.get("type") == "function_call_output"
             )
             # Half of them: shortened first, dropped only if that is not enough.

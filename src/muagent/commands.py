@@ -86,7 +86,6 @@ def help_(repl: Repl, args: str) -> None:
     repl.console.columns(
         [(name, cmd.description) for name, cmd in sorted(repl.commands.items())]
     )
-    repl.console.blank()
     allow = 'At "Allow …?": y allows, a allows the tool for the session, ? shows it all'
     keys = [("y, a, ?", allow)]
     if repl.session:
@@ -106,7 +105,6 @@ def help_(repl: Repl, args: str) -> None:
             *keys,
         ]
     repl.console.columns(sorted(keys, key=lambda row: row[0].lower()))
-    repl.console.blank()
 
 
 @command("/reset")
@@ -228,7 +226,6 @@ def context_(repl: Repl, args: str) -> None:
             ("last request", f"{agent.last_input_tokens:,} (counted by the server)")
         )
     repl.console.columns(rows)
-    repl.console.blank()
 
 
 def _servers_to_start(repl: Repl) -> list[str]:
@@ -287,7 +284,6 @@ def servers_(repl: Repl, args: str) -> str | None:
             text += f", log {'~' + log[len(home) :] if log.startswith(home) else log}"
         rows.append((server.name, text))
     repl.console.columns(rows)
-    repl.console.blank()
     return None
 
 
@@ -312,5 +308,4 @@ def tools_(repl: Repl, args: str) -> str | None:
             if names
         ]
     )
-    repl.console.blank()
     return None

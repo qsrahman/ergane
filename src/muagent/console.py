@@ -134,21 +134,16 @@ class Console:
     """
 
     def __init__(
-        self,
-        ask: Callable[[str], str] | None = None,
-        choose: Choose | None = None,
-        output: Output | None = None,
+        self, choose: Choose | None = None, output: Output | None = None
     ) -> None:
         """Create a console, with the cursor at the start of a line.
 
         Args:
-            ask: Reads the answer to a question, given the question as its prompt;
-                `input()` if omitted. Used when there is no `choose`.
-            choose: Asks the question of `confirm` with a menu, on a terminal.
+            choose: Asks the question of `confirm` with a menu, on a terminal; without
+                one the question is typed, and `input()` reads the answer.
             output: Where styled text is written, as prompt_toolkit has it; the
                 terminal if omitted. Giving one turns styling on.
         """
-        self.ask = ask
         self.choose = choose
         self.output = output
         # Status lines are styled on a terminal, unless NO_COLOR asks for no colour.
@@ -209,14 +204,14 @@ class Console:
         self.write("\n")
 
     def columns(self, rows: Sequence[tuple[str, str]]) -> None:
-        """Print rows of a label and a text, the texts lined up.
+        """Print rows of a label and a text, the texts lined up, and a blank line.
 
         A text longer than the terminal is wrapped at its spaces, the next lines
         lined up under the first.
 
         Args:
             rows: The labels and what to say of each. Each line is indented by two
-                spaces; the caller adds the blank line after the last.
+                spaces.
         """
         width = max(len(label) for label, _ in rows)
         indent = " " * (width + 4)
@@ -228,6 +223,7 @@ class Console:
             self.write(f"  {label:<{width}}  {lines[0]}\n")
             for line in lines[1:]:
                 self.write(f"{indent}{line}\n")
+        self.blank()
 
     def end_line(self) -> None:
         """Finish the current line, if one was started."""
@@ -279,7 +275,7 @@ class Console:
         prompt = f"{before}{shown}? [y/N/a{'/?' if shortened else ''}] "
         self.at_line_start = False  # the prompt leaves the cursor after it
         try:
-            answer = (self.ask or input)(sanitize(prompt)).strip().lower()
+            answer = input(sanitize(prompt)).strip().lower()
         except EOFError:
             print()  # no Enter ended the line
             answer = ""

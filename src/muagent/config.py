@@ -225,24 +225,14 @@ def _xdg_dir(variable: str, default: str) -> Path:
     return base / "muagent"
 
 
-def user_config_dir() -> Path:
-    """Return the user-level config directory, `$XDG_CONFIG_HOME/muagent`."""
-    return _xdg_dir("XDG_CONFIG_HOME", ".config")
-
-
-def user_state_dir() -> Path:
-    """Return the directory for logs, `$XDG_STATE_HOME/muagent`."""
-    return _xdg_dir("XDG_STATE_HOME", ".local/state")
-
-
 def private_state_dir() -> Path:
-    """Return `user_state_dir()`, made if needed and closed to other users.
+    """Return `$XDG_STATE_HOME/muagent`, made if needed and closed to other users.
 
     It holds the prompt history and the server logs, which can contain whatever was
     pasted or logged. A directory that cannot be made or changed is left as it is:
     whoever writes there reports it.
     """
-    path = user_state_dir()
+    path = _xdg_dir("XDG_STATE_HOME", ".local/state")
     with suppress(OSError):
         path.mkdir(parents=True, exist_ok=True)
         path.chmod(0o700)
@@ -251,15 +241,15 @@ def private_state_dir() -> Path:
 
 def config_file(path: Path | None = None) -> Path:
     """The config file in use: the one the user named, or `config.json` in
-    `user_config_dir()`, which may not exist."""
-    return path or user_config_dir() / "config.json"
+    `$XDG_CONFIG_HOME/muagent`, which may not exist."""
+    return path or _xdg_dir("XDG_CONFIG_HOME", ".config") / "config.json"
 
 
 def load_config(path: Path | None = None, **flags: object) -> Config:
     """Load the settings: the flags, then the environment, then the file.
 
-    The file is `path` (`--config`), or `config.json` in `user_config_dir()`, which may
-    be missing; see the module docstring for why no variable or directory names it.
+    The file is `path` (`--config`), or `config.json` in `$XDG_CONFIG_HOME/muagent`, which
+    may be missing; see the module docstring for why no variable or directory names it.
 
     Args:
         path: The file, if the user named one.

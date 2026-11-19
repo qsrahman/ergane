@@ -46,6 +46,12 @@ IMAGE_REFUSED = "[image removed: the model does not take pictures]"
 _TOOL_WORK = ("reasoning", "function_call", "function_call_output")
 
 
+def as_dicts(items: ResponseInputParam) -> list[dict[str, Any]]:
+    """The items as the plain dicts they are: the SDK types them as a union of
+    TypedDicts, which `.get` and item assignment do not fit."""
+    return cast(list[dict[str, Any]], items)
+
+
 def _is_user_message(item: object) -> bool:
     return isinstance(item, dict) and item.get("role") == "user"
 
@@ -97,7 +103,7 @@ def drop_images(items: ResponseInputParam) -> int:
     Returns:
         How many results had pictures.
     """
-    plain = cast(list[dict[str, Any]], items)
+    plain = as_dicts(items)
     dropped = 0
     for i, item in enumerate(plain):
         if item.get("type") == "function_call_output" and _has_images(item["output"]):
@@ -159,7 +165,7 @@ def transcript(items: ResponseInputParam) -> str:
     results are cut, and reasoning is left out.
     """
     lines = []
-    for item in cast(list[dict[str, Any]], items):
+    for item in as_dicts(items):
         if item.get("type") == "function_call":
             lines.append(f"[Tool call]: {item['name']}({_cut(item['arguments'], 500)})")
         elif item.get("type") == "function_call_output":
@@ -201,7 +207,7 @@ def extract_summary(text: str, replaces: str) -> str:
 def answer_open_calls(items: ResponseInputParam) -> None:
     """Give every function call in `items` that has no output one that says the
     user interrupted it."""
-    plain = cast(list[dict[str, Any]], items)
+    plain = as_dicts(items)
     answered = {i["call_id"] for i in plain if i.get("type") == "function_call_output"}
     for item in list(plain):
         if item.get("type") == "function_call" and item["call_id"] not in answered:
@@ -234,7 +240,7 @@ def drop_outputs(
     Returns:
         The estimated number of tokens freed.
     """
-    plain = cast(list[dict[str, Any]], items)
+    plain = as_dicts(items)
     freed = 0
 
     def replace(wanted: Callable[[Any], bool], new: Callable[[Any], str]) -> None:
