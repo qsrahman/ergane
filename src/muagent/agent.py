@@ -36,16 +36,14 @@ from openai.types.responses import (
 )
 
 from muagent.compaction import SUMMARY_MAX_TOKENS, CompactionSettings, Compactor
-from muagent.context import (
-    Context,
+from muagent.context import Context, as_dicts, estimate_tokens
+from muagent.errors import TurnError, is_context_overflow, is_images_rejected
+from muagent.outputs import (
     answer_open_calls,
-    as_dicts,
     drop_images,
     drop_outputs,
-    estimate_tokens,
     function_output,
 )
-from muagent.errors import TurnError, is_context_overflow, is_images_rejected
 from muagent.prompts import (
     COMPACT_PROMPT,
     SERVER_NOTES,
@@ -131,6 +129,17 @@ def _output_item(
     }
 
 
+@dataclass(frozen=True)
+class _Callbacks:
+    """Where a turn reports to: the callbacks `run_turn` was given, together, since
+    each round passes all of them down."""
+
+    on_text: Callable[[str], None]
+    on_notice: Callable[[str], None]
+    on_call: Callable[[str, str], None]
+    confirm: Callable[[Tool, str], bool | Literal["always"]]
+
+
 @dataclass
 class _Turn:
     """The turn that is running: what it has sent and done so far."""
@@ -179,9 +188,9 @@ class Agent:
         # and when a compatible server sends no usage.
         self.last_input_tokens: int | None = None
         self.compactor = Compactor(self.context, config, self._summarize)
-        self.tools = {tool.name: tool for tool in tools}
-        if len(self.tools) < len(tools):
-            raise ValueError("Tool names must be unique")
+        self.tools: dict[str, Tool] = {}
+        if clashes := self.add_tools(tools):
+            raise ValueError(f"Tool names must be unique: {', '.join(clashes)}")
         self.server_notes = dict(server_notes or {})
 
     def run_turn(
@@ -232,6 +241,7 @@ class Agent:
                 (see above) before any of these is raised, except the budget one.
             KeyboardInterrupt: On Ctrl-C, after the turn is kept (see above).
         """
+        io = _Callbacks(on_text, on_notice, on_call, confirm)
         self.compactor.compact_if_due(
             self.request_tokens()
             + estimate_tokens({"role": "user", "content": prompt}),
@@ -245,12 +255,12 @@ class Agent:
         turn = _Turn(prompt, items)
 
         for _ in range(self.config.max_turns):
-            response = self._ask(turn, on_text, on_notice)
+            response = self._ask(turn, io)
             problem = response_problem(response)
             calls = [item for item in response.output if item.type == "function_call"]
             if problem or not calls:
                 break
-            self._run_round(turn, response, calls, on_notice, on_call, confirm)
+            self._run_round(turn, response, calls, io)
         else:
             # Every call has its output, so the turn is coherent. Keep it, closed with
             # a note, so the model still knows the question and the work already done
@@ -291,12 +301,7 @@ class Agent:
         and the instructions and the tool definitions are in every one."""
         return self.config.max_context_tokens - self._fixed_tokens()
 
-    def _ask(
-        self,
-        turn: _Turn,
-        on_text: Callable[[str], None],
-        on_notice: Callable[[str], None],
-    ) -> Response:
+    def _ask(self, turn: _Turn, io: _Callbacks) -> Response:
         """Send the turn's items and get the model's response.
 
         A request the server refuses as too long is shortened, once in a turn, one it
@@ -317,22 +322,22 @@ class Agent:
                 response = self.responder.send(
                     turn.items,
                     self._instructions(),
-                    on_text,
-                    on_notice,
+                    io.on_text,
+                    io.on_notice,
                     tools=self._tool_params(),
                 )
             except (Exception, KeyboardInterrupt) as exc:
                 # Only if there was a picture to take out: then the same request
                 # cannot be refused for it again, and this does not go on for ever.
                 if is_images_rejected(exc) and drop_images(turn.items):
-                    on_notice(
+                    io.on_notice(
                         "The model does not take pictures, so they were dropped; "
                         "set images to false for the server that sent them"
                     )
                     continue
                 if is_context_overflow(exc) and not turn.refused:
                     turn.refused = True
-                    if self._shrink(turn, on_notice):
+                    if self._shrink(turn, io.on_notice):
                         continue
                 if turn.rounds:
                     if isinstance(exc, KeyboardInterrupt):
@@ -347,7 +352,7 @@ class Agent:
                 self.last_input_tokens = response.usage.input_tokens
             if response_problem(response) == NO_TEXT and not turn.emptied:
                 turn.emptied = True
-                on_notice("The model sent an empty reply; trying again")
+                io.on_notice("The model sent an empty reply; trying again")
                 continue
             return response
 
@@ -356,9 +361,7 @@ class Agent:
         turn: _Turn,
         response: Response,
         calls: Sequence[ResponseFunctionToolCall],
-        on_notice: Callable[[str], None],
-        on_call: Callable[[str, str], None],
-        confirm: Callable[[Tool, str], bool | Literal["always"]],
+        io: _Callbacks,
     ) -> None:
         """Add a response that calls tools to the turn, run the calls, and make sure
         the next request will fit.
@@ -374,7 +377,7 @@ class Agent:
                 ResponseInputParam,
                 [item.model_dump(exclude_none=True) for item in response.output],
             )
-            self._run_tools(calls, turn.items, on_call, confirm)
+            self._run_tools(calls, turn.items, io)
         except KeyboardInterrupt:
             # A call that was running, or had not run yet, has no output: say so, or
             # the API rejects the history. The call may have done part of its work,
@@ -401,7 +404,7 @@ class Agent:
                 turn.items, upto, used - budget, placeholders=placeholders
             )
             if freed:
-                on_notice(notice)
+                io.on_notice(notice)
             used -= freed
         if used > budget:
             # Still over. The calls have run and may have had effects: keep the turn,
@@ -484,6 +487,21 @@ class Agent:
         on_notice("The request was too long for the model; trying again, shorter")
         return True
 
+    def add_tools(self, tools: Iterable[Tool]) -> list[str]:
+        """Offer more tools. When a name is taken, the tool that has it stays: the
+        first of a name wins, here and everywhere tools are added.
+
+        Returns:
+            The names of the tools that were not added because the name was taken.
+        """
+        skipped = []
+        for tool in tools:
+            if tool.name in self.tools:
+                skipped.append(tool.name)
+            else:
+                self.tools[tool.name] = tool
+        return skipped
+
     def update_server(
         self,
         removed: Iterable[str],
@@ -511,9 +529,7 @@ class Agent:
         """
         for tool_name in removed:
             self.tools.pop(tool_name, None)
-        tools = list(tools)
-        skipped = [tool.name for tool in tools if tool.name in self.tools]
-        self.tools.update({t.name: t for t in tools if t.name not in self.tools})
+        skipped = self.add_tools(tools)
         if notes:
             self.server_notes[name] = notes
         else:
@@ -605,8 +621,7 @@ class Agent:
         self,
         calls: Sequence[ResponseFunctionToolCall],
         items: ResponseInputParam,
-        on_call: Callable[[str, str], None],
-        confirm: Callable[[Tool, str], bool | Literal["always"]],
+        io: _Callbacks,
     ) -> None:
         """Run the model's tool calls, adding each output to `items` in the order of
         the calls.
@@ -624,11 +639,11 @@ class Agent:
             calls: The function calls in the model's response.
             items: The turn's items; the outputs are added at the end, in order. If
                 Ctrl-C interrupts, the outputs made so far are already there.
-            on_call: Called with each call that runs without asking, before it is
-                run. A call that is asked about is shown by `confirm`, and a result
-                is not shown at all: it goes to the model, and the reply says what
-                it found.
-            confirm: Asked before each call to a tool that is not read-only.
+            io: Its `on_call` is called with each call that runs without asking,
+                before it is run, and its `confirm` is asked before each call to a
+                tool that is not read-only. A call that is asked about is shown by
+                `confirm`, and a result is not shown at all: it goes to the model,
+                and the reply says what it found.
         """
         together: list[tuple[ResponseFunctionToolCall, _Running]] = []
 
@@ -655,38 +670,50 @@ class Agent:
             tool = self.tools.get(call.name)
             problem = tool.check(call.arguments) if tool else None
             if tool is not None and problem is None and tool.read_only:
-                on_call(call.name, call.arguments)
+                io.on_call(call.name, call.arguments)
                 together.append((call, _Running(tool, call.arguments, self._slots)))
                 continue
             settle()  # what came before is answered first
-            # `confirm` shows the call it asks about, so such a call gets no line here.
-            asks = (
-                tool is not None
-                and problem is None
-                and tool.name not in self.always_allowed
-            )
-            if not asks:
-                on_call(call.name, call.arguments)
-            result: ToolOutput
-            if tool is None:
-                known = ", ".join(self.tools) or "none"
-                result = ToolOutput(
-                    f"Unknown tool: {call.name}. Available tools: {known}."
-                )
-            elif problem:
-                # A call that would be rejected is not worth asking the user about.
-                result = ToolOutput(problem)
-            else:
-                answer = confirm(tool, call.arguments) if asks else True
-                if answer == "always":
-                    self.always_allowed.add(tool.name)
-                result = (
-                    tool.call_output(call.arguments)
-                    if answer
-                    else ToolOutput("The user denied this call.")
-                )
-            items.append(_output_item(call, result))
+            items.append(_output_item(call, self._answer(call, tool, problem, io)))
         settle()
+
+    def _answer(
+        self,
+        call: ResponseFunctionToolCall,
+        tool: Tool | None,
+        problem: str | None,
+        io: _Callbacks,
+    ) -> ToolOutput:
+        """The output of a call that runs alone: the error for a tool that does not
+        exist or arguments that do not fit, the note of a call the user denied, or the
+        result of the tool.
+
+        Args:
+            call: The model's call.
+            tool: The tool it names, if there is one.
+            problem: What is wrong with its arguments (`Tool.check`), if anything.
+            io: Where to show the call, and whom to ask.
+        """
+        # `confirm` shows the call it asks about, so such a call gets no line here.
+        asks = (
+            tool is not None
+            and problem is None
+            and tool.name not in self.always_allowed
+        )
+        if not asks:
+            io.on_call(call.name, call.arguments)
+        if tool is None:
+            known = ", ".join(self.tools) or "none"
+            return ToolOutput(f"Unknown tool: {call.name}. Available tools: {known}.")
+        if problem:
+            # A call that would be rejected is not worth asking the user about.
+            return ToolOutput(problem)
+        answer = io.confirm(tool, call.arguments) if asks else True
+        if answer == "always":
+            self.always_allowed.add(tool.name)
+        if not answer:
+            return ToolOutput("The user denied this call.")
+        return tool.call_output(call.arguments)
 
     @staticmethod
     def _next_request_tokens(

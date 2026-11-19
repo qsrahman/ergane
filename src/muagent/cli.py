@@ -15,9 +15,9 @@ from muagent.agent import Agent
 from muagent.commands import COMMANDS
 from muagent.config import EFFORTS, config_file, load_config, private_state_dir
 from muagent.console import Console
-from muagent.mcp_hub import McpHub, ServerStatus
+from muagent.mcp_hub import McpHub
 from muagent.repl import Repl, terminal_session
-from muagent.tools import Tool, tools_in, unique_tools
+from muagent.tools import Tool, tool_clash, tools_in
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -147,15 +147,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     console = Console()
     state = private_state_dir()
     session = terminal_session(COMMANDS, state / "history")
-    hub = None if no_mcp else McpHub(config.mcp_servers, state)
-    statuses = [ServerStatus(n, "off", "--no-mcp") for n in config.mcp_servers]
+    hub = McpHub(config.mcp_servers, state, all_off="--no-mcp" if no_mcp else None)
     mcp_tools: list[Tool] = []
     try:
-        if hub is not None and session is not None:
+        if session is not None:
             # At a terminal the prompt comes up at once and the servers connect while
             # the user types; the first turn waits for them if they are not up.
             hub.begin()
-        elif hub is not None:
+        else:
             mcp_tools = hub.start(console.notice)
     except KeyboardInterrupt:
         raise SystemExit(130) from None
@@ -163,14 +162,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     try:
         # The banner is separated from the notices of servers that failed by the
         # console itself, which is why it is the same one.
-        agent = Agent(
-            config,
-            tools=unique_tools(
-                [*tools_in(builtin, console.notice), *mcp_tools], console.notice
-            ),
-            server_notes=hub.instructions() if hub else None,
-        )
-        Repl(agent, COMMANDS, session, console, statuses, hub).run()
+        agent = Agent(config, server_notes=hub.instructions())
+        for name in agent.add_tools([*tools_in(builtin, console.notice), *mcp_tools]):
+            console.notice(tool_clash(name))
+        Repl(agent, COMMANDS, session, console, hub).run()
     finally:
-        if hub:
-            hub.close()
+        hub.close()

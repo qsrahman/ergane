@@ -10,19 +10,24 @@ that shares the chat's cache, splitting one oversized turn, and a stored transcr
 with undo.
 """
 
+import re
 from collections.abc import Callable
 from typing import Protocol
 
 from openai.types.responses import ResponseInputParam
 
-from muagent.context import Context, extract_summary, transcript
+from muagent.context import Context, as_dicts
 from muagent.errors import TurnError, describe_error
+from muagent.outputs import output_text
 
 # The summary of old turns may have this many tokens.
 SUMMARY_MAX_TOKENS = 8000
 
 # Summaries that failed one after another, after which none is tried by itself.
 COMPACT_FAILURES = 3
+
+# A tool result in the text that is summarized is cut to this many characters.
+TRANSCRIPT_RESULT_CHARS = 2000
 
 
 class CompactionSettings(Protocol):
@@ -33,6 +38,59 @@ class CompactionSettings(Protocol):
     compact_at: float
     max_context_tokens: int
     keep_recent_tokens: int
+
+
+def _cut(text: str, chars: int) -> str:
+    """The text, or its first `chars` characters and a count of the rest."""
+    if len(text) <= chars:
+        return text
+    return f"{text[:chars]} [... {len(text) - chars:,} more characters]"
+
+
+def transcript(items: ResponseInputParam) -> str:
+    """Items as labelled text, for the model that summarizes them.
+
+    As text, so that it does not take the conversation for one to continue. Tool
+    results are cut, and reasoning is left out.
+    """
+    lines = []
+    for item in as_dicts(items):
+        if item.get("type") == "function_call":
+            lines.append(f"[Tool call]: {item['name']}({_cut(item['arguments'], 500)})")
+        elif item.get("type") == "function_call_output":
+            result = _cut(output_text(item["output"]), TRANSCRIPT_RESULT_CHARS)
+            lines.append(f"[Tool result]: {result}")
+        elif item.get("role") in ("user", "assistant"):
+            content = item["content"]
+            if not isinstance(content, str):  # the model's own message items
+                content = "".join(part.get("text", "") for part in content)
+            label = "User" if item["role"] == "user" else "Assistant"
+            lines.append(f"[{label}]: {content}")
+    return "\n".join(lines)
+
+
+def extract_summary(text: str, replaces: str) -> str:
+    """The summary out of the model's answer, if it is one worth keeping.
+
+    The scratchpad (<analysis>) is dropped. The summary is what is in <summary>, or
+    else the rest of the answer: models that were asked for the tags do not all
+    write them (gemma4 does not), and an answer that was cut off by the output cap
+    never gets here, since its status says so.
+
+    Raises:
+        TurnError: If there is nothing left, it has no headings (so it is not the
+            summary that was asked for), or it is longer than the text it replaces.
+    """
+    text = re.sub(r"<analysis>.*?(</analysis>|$)", "", text, flags=re.DOTALL)
+    match = re.search(r"<summary>(.*?)(</summary>|$)", text, flags=re.DOTALL)
+    summary = (match.group(1) if match else text).strip()
+    if not summary:
+        raise TurnError("the summary is empty")
+    if "##" not in summary:
+        raise TurnError("the answer is not a summary: it has no headings")
+    if len(summary) >= len(replaces):
+        raise TurnError("the summary is longer than the text it replaces")
+    return summary
 
 
 class Compactor:

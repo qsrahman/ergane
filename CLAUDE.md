@@ -111,15 +111,18 @@ The modules, in dependency order (each imports only from those above it):
   `ServerStatus` per server, which records what became of it for `/servers`.
 - `errors.py`, `prompts.py`: `TurnError`, `StreamCut`, `describe_error`,
   `is_context_overflow`, `is_images_rejected`; the three prompts as text. They import nothing of muagent.
-- `context.py`: `Context` (the history and the summary), `estimate_tokens()`, and the
-  functions on a turn's items (`drop_outputs`, `answer_open_calls`, `transcript`,
-  `extract_summary`).
+- `context.py`: `Context` (the history and the summary) and `estimate_tokens()`.
+- `outputs.py`: the results of tools in the history: their form (`function_output`,
+  pictures) and how they are made to fit (`drop_images`, `shorten`, `drop_outputs`,
+  `answer_open_calls`).
 - `compaction.py`: `Compactor`: when to summarize the oldest turns, what to keep, and the
-  summary itself, through a function that asks the model. It needs nothing of the agent.
+  summary itself, through a function that asks the model; `transcript` (the text it is
+  given) and `extract_summary` (the check of the answer). It needs nothing of the agent.
 - `responses.py`: `Responder` (one request to the API, streamed, sent again when the stream
   breaks before any text) and `response_problem`. It needs nothing of the agent.
 - `agent.py`: `Agent`: `run_turn` (a loop of `_ask` and `_run_round` around a `_Turn`),
-  `compact` (which is `Compactor`'s), and the tools. It imports nothing of
+  `compact` (which is `Compactor`'s), and the tools (`add_tools`: the first of a name
+  wins, here and wherever tools are added). It imports nothing of
   `config.py` or MCP: the settings it reads are `AgentSettings`, which `Config` satisfies
   (a test pins this).
 - `console.py`: all terminal output, `sanitize()`, and the permission question. A status
@@ -133,8 +136,7 @@ The modules, in dependency order (each imports only from those above it):
 - `cli.py`: `main()`.
 
 Dependencies are passed in through constructors (`Agent(config, client=None, tools=(),
-server_notes=None)`, `Repl(agent, commands, session=None, console=None, servers=(),
-hub=None)`); there is no global config lookup.
+server_notes=None)`, `Repl(agent, commands, session=None, console=None, hub=None)`); there is no global config lookup.
 Every setting is read where it is used, so `/model` and `/effort` take effect at once.
 
 What must stay true:

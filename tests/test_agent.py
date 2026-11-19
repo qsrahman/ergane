@@ -22,8 +22,9 @@ from fake_api import (
 )
 from helpers import make_config, make_context, tool_with
 from muagent.agent import Agent
-from muagent.context import DROPPED_OUTPUT, IMAGE_REFUSED, estimate_tokens
+from muagent.context import estimate_tokens
 from muagent.errors import TurnError, describe_error
+from muagent.outputs import DROPPED_OUTPUT, IMAGE_REFUSED
 from muagent.prompts import SERVER_NOTES, SYSTEM_PROMPT, SYSTEM_PROMPT_NO_TOOLS
 from muagent.responses import STREAM_RETRIES, response_problem
 from muagent.tools import MAX_OUTPUT_CHARS, Image, Tool, ToolOutput
@@ -518,8 +519,20 @@ class TestAgentToolLoop:
         assert types(fake_server.requests[3]) == [None] * 5
 
     def test_two_tools_with_the_same_name_are_an_error(self, make_agent, streaming):
-        with pytest.raises(ValueError, match="unique"):
+        with pytest.raises(ValueError, match="unique: read_file"):
             make_agent(tools=[READ_FILE, READ_FILE], STREAMING=streaming)
+
+    def test_add_tools_keeps_the_first_of_a_name_and_names_the_others(
+        self, make_agent, streaming
+    ):
+        agent = make_agent(STREAMING=streaming)
+        clash = Tool.from_function(read_file)
+
+        skipped = agent.add_tools([READ_FILE, Tool.from_function(other), clash])
+
+        assert skipped == ["read_file"]
+        assert agent.tools["read_file"] is READ_FILE
+        assert list(agent.tools) == ["read_file", "other"]
 
     def test_the_tools_are_offered_in_every_request(
         self, make_agent, fake_server, streaming

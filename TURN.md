@@ -415,7 +415,8 @@ the model still answered.
 | history, summary, trimming, saving    | `Context` in [`context.py`](src/muagent/context.py)          |
 | summarizing                           | `Compactor` in [`compaction.py`](src/muagent/compaction.py) |
 | the too-long retry                    | `_shrink` in [`agent.py`](src/muagent/agent.py) |
-| pruning, transcript, summary check    | `drop_outputs`, `transcript`, `extract_summary` in [`context.py`](src/muagent/context.py) |
+| pruning results                       | `drop_outputs`, `drop_images` in [`outputs.py`](src/muagent/outputs.py) |
+| transcript, summary check             | `transcript`, `extract_summary` in [`compaction.py`](src/muagent/compaction.py) |
 | errors and how they are worded        | [`errors.py`](src/muagent/errors.py)                         |
 | everything printed                    | `Console` in [`console.py`](src/muagent/console.py)          |
 | MCP servers                           | [`mcp_client.py`](src/muagent/mcp_client.py) (one) and [`mcp_hub.py`](src/muagent/mcp_hub.py) (all of them), their config in [`config.py`](src/muagent/config.py) |

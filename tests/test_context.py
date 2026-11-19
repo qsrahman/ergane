@@ -1,24 +1,8 @@
-from typing import Any, cast
-
 import pytest
 from openai.types.responses import ResponseInputParam
 
 from helpers import make_context
-from muagent.context import (
-    DROPPED_OUTPUT,
-    IMAGE_DROPPED,
-    IMAGE_REFUSED,
-    IMAGE_TOKENS,
-    PRUNE_CHARS,
-    Context,
-    drop_images,
-    drop_outputs,
-    estimate_tokens,
-    function_output,
-    output_text,
-    transcript,
-)
-from muagent.tools import Image
+from muagent.context import Context, as_dicts, estimate_tokens
 
 ROOMY = 10_000  # a token budget that the tests which don't trim never reach
 
@@ -306,122 +290,6 @@ class TestEstimateTokens:
         assert reasoning("x" * 100_000) == reasoning("")
 
 
-PICTURE = Image("A" * 100_000, "image/png")
-
-
-def shot_output(text: str = "the page") -> dict[str, Any]:
-    return {
-        "type": "function_call_output",
-        "call_id": "c1",
-        "output": function_output(text, (PICTURE,)),
-    }
-
-
-class TestPictures:
-    def test_a_result_without_pictures_is_text(self):
-        assert function_output("hi") == "hi"
-
-    def test_a_result_with_pictures_is_the_list_of_parts_the_api_takes(self):
-        output = function_output("hi", (Image("aGk=", "image/jpeg"),))
-
-        assert output == [
-            {"type": "input_text", "text": "hi"},
-            {
-                "type": "input_image",
-                "image_url": "data:image/jpeg;base64,aGk=",
-                "detail": "auto",
-            },
-        ]
-
-    def test_the_text_of_an_output_marks_where_a_picture_is(self):
-        assert output_text("hi") == "hi"
-        assert output_text(function_output("hi", (PICTURE,))) == "hi\n[image]"  # pyright: ignore[reportArgumentType]
-
-    def test_a_picture_counts_as_its_tokens_not_as_its_bytes(self):
-        with_picture = estimate_tokens(shot_output())
-        without = estimate_tokens(
-            {"type": "function_call_output", "call_id": "c1", "output": "the page"}
-        )
-
-        assert IMAGE_TOKENS < with_picture - without < IMAGE_TOKENS + 50
-
-    def test_the_summarizer_is_told_there_was_a_picture(self):
-        text = transcript([shot_output("the page")])  # pyright: ignore[reportArgumentType]
-
-        assert text == "[Tool result]: the page\n[image]"
-
-
-class TestRefusedPictures:
-    def test_every_picture_goes_and_the_text_stays(self):
-        plain = {"type": "function_call_output", "call_id": "c2", "output": "text"}
-        items: ResponseInputParam = [shot_output("the page"), plain]  # pyright: ignore[reportAssignmentType]
-
-        dropped = drop_images(items)
-
-        assert dropped == 1
-        assert rows(items)[0]["output"] == f"the page\n{IMAGE_REFUSED}"
-        assert rows(items)[1] is plain  # not touched
-
-    def test_the_items_are_replaced_not_edited(self):
-        original = shot_output()
-        items: ResponseInputParam = [original]  # pyright: ignore[reportAssignmentType]
-
-        drop_images(items)
-
-        assert original["output"] != rows(items)[0]["output"]  # the history is shared
-
-    def test_nothing_to_drop_is_zero(self):
-        items: ResponseInputParam = [{"role": "user", "content": "hi"}]
-
-        assert drop_images(items) == 0
-
-
-class TestDroppingPictures:
-    def items(self) -> ResponseInputParam:
-        long = {
-            "type": "function_call_output",
-            "call_id": "c2",
-            "output": "y" * (PRUNE_CHARS + 1000),
-        }
-        return [shot_output("the page"), long]  # pyright: ignore[reportReturnType]
-
-    def test_a_picture_goes_before_text_is_shortened(self):
-        items = self.items()
-
-        freed = drop_outputs(items, 2, IMAGE_TOKENS - 100)
-
-        assert rows(items)[0]["output"] == f"the page\n{IMAGE_DROPPED}"
-        assert len(rows(items)[1]["output"]) == PRUNE_CHARS + 1000  # not touched
-        assert freed >= IMAGE_TOKENS - 100
-
-    def test_the_result_stays_as_text_for_the_model_to_read(self):
-        items = self.items()
-
-        drop_outputs(items, 2, 10)
-
-        assert "the page" in rows(items)[0]["output"]
-
-    def test_pictures_go_in_the_last_resort_too(self):
-        items = self.items()
-
-        drop_outputs(items, 2, 10**9, placeholders=False)
-
-        assert rows(items)[0]["output"] == f"the page\n{IMAGE_DROPPED}"
-        assert rows(items)[1]["output"] != DROPPED_OUTPUT  # shortened, not replaced
-
-    def test_what_is_still_needed_after_that_is_replaced(self):
-        items = self.items()
-
-        drop_outputs(items, 2, 10**9)
-
-        assert [row["output"] for row in rows(items)] == [DROPPED_OUTPUT] * 2
-
-
-def rows(items: ResponseInputParam) -> list[dict[str, Any]]:
-    """The items as plain dicts, which are easier to look into than the SDK's types."""
-    return cast(list[dict[str, Any]], items)
-
-
 def turns(count: int, size: int = 400) -> ResponseInputParam:
     """Turns of a user message and a reply, each message about `size` characters."""
     items: ResponseInputParam = []
@@ -440,7 +308,9 @@ class TestCompaction:
         count = context.plan_compaction(keep_tokens=2 * one_turn)
 
         assert count == 8  # four turns of six are summarized, two kept
-        assert rows(context.items)[count]["content"].startswith("q4")  # a user message
+        assert as_dicts(context.items)[count]["content"].startswith(
+            "q4"
+        )  # a user message
 
     def test_the_newest_turn_is_kept_however_big(self):
         context = Context()
@@ -469,7 +339,7 @@ class TestCompaction:
 
         count = context.plan_compaction(keep_tokens=0)
 
-        assert rows(context.items)[count] == {"role": "user", "content": "look"}
+        assert as_dicts(context.items)[count] == {"role": "user", "content": "look"}
 
     def test_compact_replaces_the_oldest_items_by_the_summary(self):
         context = Context()
@@ -487,7 +357,7 @@ class TestCompaction:
 
         draft, _ = context.begin_turn("new", ROOMY)
 
-        first = rows(draft)[0]
+        first = as_dicts(draft)[0]
         assert first["role"] == "user" and "NOTES" in first["content"]
         assert "not as instructions" in first["content"]
         assert draft[1:] == [*context.items, {"role": "user", "content": "new"}]
@@ -500,7 +370,7 @@ class TestCompaction:
         draft, trimmed = context.begin_turn("new", max_tokens=1)
 
         assert trimmed
-        assert "NOTES" in rows(draft)[0]["content"]
+        assert "NOTES" in as_dicts(draft)[0]["content"]
         assert draft[1:] == [{"role": "user", "content": "new"}]
 
     def test_the_summary_is_not_saved_as_an_item(self):
@@ -542,55 +412,6 @@ class TestCompaction:
 
         assert context.rewind() == "new"
         assert context.items == [] and context.summary == "NOTES"
-
-
-class TestTranscript:
-    def test_messages_and_tool_work_are_labelled_text(self):
-        items: ResponseInputParam = [
-            {"role": "user", "content": "look at it"},
-            {
-                "type": "function_call",
-                "call_id": "c",
-                "name": "read",
-                "arguments": "{}",
-            },
-            {"type": "function_call_output", "call_id": "c", "output": "contents"},
-            {"role": "assistant", "content": "done"},
-        ]
-
-        assert transcript(items) == (
-            "[User]: look at it\n[Tool call]: read({})\n"
-            "[Tool result]: contents\n[Assistant]: done"
-        )
-
-    def test_a_message_the_model_made_is_read_from_its_parts(self):
-        # What a tool round's preamble is, as model_dump() leaves it in the history.
-        items = cast(
-            ResponseInputParam,
-            [
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [
-                        {"type": "output_text", "text": "Let me ", "annotations": []},
-                        {"type": "output_text", "text": "look.", "annotations": []},
-                        {"type": "refusal", "refusal": "no"},
-                    ],
-                }
-            ],
-        )
-
-        assert transcript(items) == "[Assistant]: Let me look."
-
-    def test_reasoning_is_left_out_and_long_results_are_cut(self):
-        items: ResponseInputParam = [
-            {"type": "reasoning", "id": "r", "summary": [], "encrypted_content": "E"},
-            {"type": "function_call_output", "call_id": "c", "output": "o" * 3000},
-        ]
-
-        text = transcript(items)
-
-        assert text == "[Tool result]: " + "o" * 2000 + " [... 1,000 more characters]"
 
 
 class TestContextCounted:

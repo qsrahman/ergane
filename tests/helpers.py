@@ -5,7 +5,7 @@ import socket
 import subprocess
 import sys
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -14,7 +14,7 @@ from openai.types.responses import ResponseInputParam
 from muagent.agent import Agent
 from muagent.commands import COMMANDS
 from muagent.config import Config, LocalMcpServer
-from muagent.mcp_hub import McpHub, ServerStatus
+from muagent.mcp_hub import McpHub
 from muagent.repl import Repl
 from muagent.tools import Tool
 
@@ -37,7 +37,6 @@ def run_repl(
     monkeypatch: pytest.MonkeyPatch,
     agent: Agent,
     inputs: list,
-    servers: Sequence[ServerStatus] = (),
     hub: McpHub | None = None,
 ) -> None:
     """Run a Repl over scripted input.
@@ -53,7 +52,7 @@ def run_repl(
         return line
 
     monkeypatch.setattr("builtins.input", fake_input)
-    Repl(agent, COMMANDS, servers=servers, hub=hub).run()
+    Repl(agent, COMMANDS, hub=hub).run()
 
 
 def anchor(agent: Agent, tokens: int) -> None:

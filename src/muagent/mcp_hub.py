@@ -150,10 +150,12 @@ class _Startup:
         configs: Mapping[str, McpServerConfig],
         log_dir: Path,
         environ: Mapping[str, str],
+        all_off: str | None,
     ) -> None:
         self.configs = configs
         self.log_dir = log_dir
         self.environ = environ
+        self.all_off = all_off
         # Each server, or why it cannot be started, in the order of the file.
         self.entries: list[tuple[str, McpClient | str]] = []
         self.off: dict[str, ServerStatus] = {}
@@ -163,8 +165,9 @@ class _Startup:
     def begin(self) -> None:
         """Launch the servers that are on, and start connecting to them."""
         for name, config in self.configs.items():
-            if not config.enabled:
-                self.off[name] = ServerStatus(name, "off", "enabled is false")
+            if self.all_off or not config.enabled:
+                reason = self.all_off or "enabled is false"
+                self.off[name] = ServerStatus(name, "off", reason)
                 continue
             try:
                 server = McpClient(
@@ -277,10 +280,21 @@ class McpHub:
         log_dir: Path,
         *,
         environ: Mapping[str, str] = os.environ,
+        all_off: str | None = None,
     ) -> None:
+        """Describe the servers; `start` or `begin` starts them.
+
+        Args:
+            configs: The servers of the file, by name.
+            log_dir: Where a program's stderr goes, as `NAME.log`.
+            environ: What `${NAME}` placeholders are filled in from.
+            all_off: Why none is to be started (`--no-mcp`), which `/servers` shows
+                for each; they are all off. None: the ones that are enabled start.
+        """
         self.configs = configs
         self.log_dir = log_dir
         self.environ = environ
+        self.all_off = all_off
         # In the order of the file, kept in place.
         self.statuses: list[ServerStatus] = []
         self.servers: dict[str, McpClient] = {}  # the ones that run
@@ -315,7 +329,7 @@ class McpHub:
     def begin(self) -> None:
         """Start the servers without waiting for them: they connect while the caller
         goes on. `take` collects them, and `starting` says whether they are done."""
-        self._startup = _Startup(self.configs, self.log_dir, self.environ)
+        self._startup = _Startup(self.configs, self.log_dir, self.environ, self.all_off)
         try:
             self._startup.begin()
         except BaseException:

@@ -268,19 +268,6 @@ def tools_in(
     return list(found.values())
 
 
-def unique_tools(tools: Iterable[Tool], on_notice: Callable[[str], None]) -> list[Tool]:
-    """The tools with each name once: a second tool of a name is left out, with a notice.
-
-    `Agent` refuses two tools of one name, which would stop muagent from starting.
-
-    Args:
-        tools: The tools, the ones to keep first.
-        on_notice: Called with a line for each tool that is left out.
-    """
-    kept: dict[str, Tool] = {}
-    for tool in tools:
-        if tool.name in kept:
-            on_notice(f"Tool {tool.name} is defined twice; only the first is offered")
-        else:
-            kept[tool.name] = tool
-    return list(kept.values())
+def tool_clash(name: str) -> str:
+    """The notice for a tool that is left out because another tool has its name."""
+    return f"Tool {name} is defined twice; only the first is offered"

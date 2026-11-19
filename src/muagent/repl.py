@@ -30,7 +30,8 @@ from muagent.agent import Agent
 from muagent.commands import Command
 from muagent.console import Console
 from muagent.errors import TurnError, describe_error
-from muagent.mcp_hub import McpHub, ServerStatus, ServerUpdate
+from muagent.mcp_hub import McpHub, ServerUpdate
+from muagent.tools import tool_clash
 
 # A terminal asked for Shift-Enter (kitty's keyboard protocol, or xterm's
 # modifyOtherKeys) sends one of these, which prompt_toolkit does not know. They are
@@ -245,7 +246,6 @@ class Repl:
         commands: Mapping[str, Command],
         session: PromptSession[str] | None = None,
         console: Console | None = None,
-        servers: Sequence[ServerStatus] = (),
         hub: McpHub | None = None,
     ) -> None:
         """Create a REPL for an agent.
@@ -257,9 +257,8 @@ class Repl:
                 `terminal_session`); without one, `input()` does.
             console: What prints; one that already printed (the start-up notices)
                 keeps the state that separates its output from the next.
-            servers: What became of the MCP servers at start, for `/servers`.
-            hub: The running MCP servers, which `/reconnect` starts again; its
-                statuses are the servers `/servers` lists.
+            hub: The MCP servers, which `/reconnect` starts again and whose statuses
+                `/servers` lists; none if omitted.
         """
         self.agent = agent
         self.console = console or Console()
@@ -270,8 +269,8 @@ class Repl:
             session.bottom_toolbar = self._toolbar
             if isinstance(session.completer, _CommandCompleter):
                 session.completer.repl = self
-        self.hub = hub
-        self.servers = hub.statuses if hub is not None else servers
+        # With no servers the log directory is never used.
+        self.hub = hub if hub is not None else McpHub({}, Path())
         self.running = False
         self.commands = commands
         self.session = session
@@ -297,19 +296,16 @@ class Repl:
         bar: list[tuple[str, str]] = [("class:toolbar.strong", " " + config.model)]
         if config.reasoning_effort:
             bar.append(("", f" · {config.reasoning_effort}"))
-        if self.hub is not None:
-            self.hub.poll()  # servers that have all answered are counted at once
-            if self.hub.starting:
-                bar.append(("", " · starting MCP servers"))
-            else:
-                tools = sum(len(status.tools) for status in self.hub.statuses)
-                failed = sum(status.state == "failed" for status in self.hub.statuses)
-                if tools:
-                    bar.append(("", f" · {tools} tools"))
-                if failed:
-                    bar.append(
-                        ("class:toolbar.bad", f" · {failed} MCP failed: /servers")
-                    )
+        self.hub.poll()  # servers that have all answered are counted at once
+        if self.hub.starting:
+            bar.append(("", " · starting MCP servers"))
+        else:
+            tools = sum(len(status.tools) for status in self.hub.statuses)
+            failed = sum(status.state == "failed" for status in self.hub.statuses)
+            if tools:
+                bar.append(("", f" · {tools} tools"))
+            if failed:
+                bar.append(("class:toolbar.bad", f" · {failed} MCP failed: /servers"))
         bar += [
             ("", "  "),
             (meter, "▰" * lit),
@@ -327,7 +323,7 @@ class Repl:
         self.running = True
         interrupted = False  # the last prompt ended in Ctrl-C or Ctrl-D
         while self.running:
-            if self.session and self.hub is not None:
+            if self.session:
                 # The toolbar is redrawn while servers start, to show when they are up.
                 self.session.refresh_interval = 0.5 if self.hub.starting else 0
             try:
@@ -396,10 +392,7 @@ class Repl:
         if update.message:
             self.console.notice(update.message)
         for tool in skipped:
-            self.console.notice(
-                f"Tool {tool} of server {update.name} is not offered: "
-                "another tool has that name"
-            )
+            self.console.notice(tool_clash(tool))
 
     def attach(self, *, wait: bool) -> None:
         """Give the agent the servers that started in the background, and tell of the
@@ -412,9 +405,8 @@ class Repl:
             wait: Whether to wait for the servers that have not answered yet. A turn
                 waits (it needs the tools); a command does not.
         """
-        if self.hub is not None:
-            for update in self.hub.take(self.console.notice, wait=wait):
-                self.apply(update)
+        for update in self.hub.take(self.console.notice, wait=wait):
+            self.apply(update)
 
     def ask(self, prompt: str) -> None:
         """Run one turn, printing the reply as it arrives and reporting
@@ -426,7 +418,7 @@ class Repl:
         console = self.console
         console.blank()
         try:
-            if self.hub is not None and self.hub.starting:
+            if self.hub.starting:
                 console.notice("Waiting for the MCP servers…")
             self.attach(wait=True)  # the tools are needed now
             self.agent.run_turn(

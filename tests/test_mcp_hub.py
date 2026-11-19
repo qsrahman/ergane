@@ -203,6 +203,21 @@ class TestStart:
         assert notices == []
         assert not (tmp_path / "off.log").exists()
 
+    def test_with_all_off_none_is_started_and_each_says_why(self, tmp_path):
+        configs = {"a": fake_config(), "b": fake_config(enabled=False)}
+        hub = McpHub(configs, tmp_path, all_off="--no-mcp")
+        try:
+            tools = hub.start(lambda notice: None)
+
+            assert tools == [] and hub.servers == {}
+            assert [(s.name, s.state, s.detail) for s in hub.statuses] == [
+                ("a", "off", "--no-mcp"),
+                ("b", "off", "--no-mcp"),
+            ]
+            assert not (tmp_path / "a.log").exists()
+        finally:
+            hub.close()
+
     def test_placeholders_are_filled_in_from_the_environment(self, start_hub):
         configs = {"local": fake_config(env={"GIVEN": "${SOURCE}"})}
 

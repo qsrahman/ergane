@@ -1,7 +1,6 @@
 import importlib
 import inspect
 import re
-from dataclasses import replace
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -15,8 +14,8 @@ from muagent.tools import (
     Tool,
     ToolOutput,
     tool,
+    tool_clash,
     tools_in,
-    unique_tools,
 )
 
 
@@ -444,18 +443,5 @@ class TestToolsIn:
         assert all(re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", n) for n in names)
 
 
-class TestUniqueTools:
-    def test_a_second_tool_of_a_name_is_left_out_with_a_notice(self):
-        first, second = Tool.from_function(add), Tool.from_function(add)
-        other = replace(first, name="other")
-        notices: list[str] = []
-
-        kept = unique_tools([first, other, second], notices.append)
-
-        assert kept == [first, other] and kept[0] is first
-        assert notices == ["Tool add is defined twice; only the first is offered"]
-
-    def test_tools_with_different_names_are_all_kept_in_order(self):
-        tools = [Tool.from_function(add)]
-
-        assert unique_tools(tools, lambda text: None) == tools
+def test_a_tool_left_out_for_its_name_is_reported_by_it():
+    assert tool_clash("add") == "Tool add is defined twice; only the first is offered"

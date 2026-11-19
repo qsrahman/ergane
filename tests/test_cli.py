@@ -92,9 +92,7 @@ class RecordingRepl:
 
     agent = None
 
-    def __init__(
-        self, agent, commands, session=None, console=None, servers=(), hub=None
-    ):
+    def __init__(self, agent, commands, session=None, console=None, hub=None):
         RecordingRepl.agent = agent
 
     def run(self):
@@ -498,10 +496,9 @@ class TestMcpServersInTheBackground:
         seen = {}
 
         class Recording(RecordingRepl):
-            def __init__(self, agent, commands, session=None, console=None, *rest):
-                super().__init__(agent, commands, session, console)
-                self.hub = rest[1]
-                seen["hub"] = self.hub
+            def __init__(self, agent, commands, session=None, console=None, hub=None):
+                super().__init__(agent, commands, session, console, hub)
+                seen["hub"] = hub
                 seen["tools_at_start"] = dict(agent.tools)
 
         monkeypatch.setattr("muagent.cli.Repl", Recording)

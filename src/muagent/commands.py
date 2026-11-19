@@ -230,8 +230,6 @@ def context_(repl: Repl, args: str) -> None:
 
 def _servers_to_start(repl: Repl) -> list[str]:
     """The servers `/reconnect` may start again: the ones that are not switched off."""
-    if repl.hub is None:
-        return []
     return [s.name for s in repl.hub.statuses if s.state != "off"]
 
 
@@ -239,7 +237,7 @@ def _servers_to_start(repl: Repl) -> list[str]:
 def reconnect(repl: Repl, args: str) -> str | None:
     """Start the MCP servers that failed again, or the server NAME if one is given."""
     hub = repl.hub
-    if hub is None:
+    if not hub.configs:
         return "No MCP servers to start"
     repl.attach(wait=True)  # the ones still starting are not "failed" yet
     if args:
@@ -258,12 +256,12 @@ def reconnect(repl: Repl, args: str) -> str | None:
 @command("/servers")
 def servers_(repl: Repl, args: str) -> str | None:
     """List the MCP servers: which run, which failed, and what their tools cost."""
-    if not repl.servers:
+    if not repl.hub.statuses:
         return "No MCP servers"
     tools = repl.agent.tools
     home = str(Path.home())
     rows = []
-    for server in repl.servers:
+    for server in repl.hub.statuses:
         if server.state == "running":
             tokens = sum(
                 estimate_tokens(tools[name].param())

@@ -460,13 +460,19 @@ class TestServersCommand:
             ServerStatus("old", "off", "enabled is false"),
         ]
 
+    @staticmethod
+    def hub_of(tmp_path, statuses) -> McpHub:
+        hub = McpHub({}, tmp_path)
+        hub.statuses[:] = statuses
+        return hub
+
     def test_it_says_when_there_are_none(self, monkeypatch, make_agent, capsys):
         run_repl(monkeypatch, make_agent(), ["/servers", "/exit"])
 
         assert "[No MCP servers]" in capsys.readouterr().out
 
     def test_every_server_gets_a_line_with_what_became_of_it(
-        self, monkeypatch, make_agent, capsys
+        self, monkeypatch, make_agent, capsys, tmp_path
     ):
         def tool(name: str) -> Tool:
             def function() -> str:
@@ -479,7 +485,8 @@ class TestServersCommand:
         names = ("web__a", "web__b", "files__x")
         agent = make_agent(tools=[tool(name) for name in names])
 
-        run_repl(monkeypatch, agent, ["/servers", "/exit"], self.servers())
+        hub = self.hub_of(tmp_path, self.servers())
+        run_repl(monkeypatch, agent, ["/servers", "/exit"], hub=hub)
 
         out = capsys.readouterr().out
         assert '  web    running, 2 tools (3 left out by "tools"), ~' in out
@@ -488,12 +495,13 @@ class TestServersCommand:
         assert "  old    off: enabled is false" in out
 
     def test_the_tokens_are_those_of_the_definitions_the_model_gets(
-        self, monkeypatch, make_agent, capsys
+        self, monkeypatch, make_agent, capsys, tmp_path
     ):
         agent = make_agent(tools=[LOOK])
         status = [ServerStatus("s", "running", tools=("look",))]
 
-        run_repl(monkeypatch, agent, ["/servers", "/exit"], status)
+        hub = self.hub_of(tmp_path, status)
+        run_repl(monkeypatch, agent, ["/servers", "/exit"], hub=hub)
 
         tokens = estimate_tokens(LOOK.param())  # type: ignore[arg-type]
         assert f"~{tokens:,} tokens" in capsys.readouterr().out

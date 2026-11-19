@@ -741,6 +741,6 @@ def test_a_server_tool_whose_name_is_taken_is_reported(capsys):
     repl.apply(ServerUpdate("web", (), [theirs], None, ""))
 
     assert repl.agent.tools["look"] is mine
-    assert "[Tool look of server web is not offered: another tool has that name]" in (
+    assert "[Tool look is defined twice; only the first is offered]" in (
         capsys.readouterr().out
     )
