@@ -6,11 +6,13 @@ import pytest
 
 from ergane.commands import COMMANDS, Command, command
 from ergane.config import LocalMcpServer
-from ergane.context import estimate_tokens
+from ergane.context import as_dicts, estimate_tokens
 from ergane.mcp_hub import McpHub, ServerStatus
+from ergane.repl import Repl
+from ergane.sessions import SessionInfo, SessionStore, ago
 from ergane.tools import Tool
 from fake_api import TEXT
-from helpers import anchor, fake_config, hanging_config, run_repl
+from helpers import anchor, fake_config, hanging_config, make_context, run_repl
 
 
 class TestCommandsWithAgent:
@@ -708,3 +710,171 @@ class TestServersStartingInTheBackground:
         run_repl(monkeypatch, agent, ["/reconnect", "/exit"], hub=hub)
 
         assert "fake__add" in agent.tools
+
+
+class TestSessionsCommand:
+    @pytest.fixture
+    def store(self, tmp_path):
+        return SessionStore(tmp_path / "state" / "sessions", tmp_path)
+
+    def saved(self, store: SessionStore, *prompts: str) -> list[SessionInfo]:
+        """Sessions with one turn each, saved in the order given: the last is newest."""
+        return [
+            store.save(
+                None,
+                None,
+                [
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": f"re: {prompt}"},
+                ],
+                "gpt-4o",
+            )
+            for prompt in prompts
+        ]
+
+    def repl(self, make_agent, store) -> Repl:
+        return Repl(make_agent(STREAMING=False), COMMANDS, store=store)
+
+    def test_it_says_when_sessions_are_not_saved(self, monkeypatch, make_agent, capsys):
+        run_repl(monkeypatch, make_agent(), ["/sessions", "/exit"])
+
+        assert "[Sessions are not saved]" in capsys.readouterr().out
+
+    def test_it_says_when_there_are_none(self, monkeypatch, make_agent, store, capsys):
+        run_repl(monkeypatch, make_agent(), ["/sessions", "/exit"], store=store)
+
+        assert "[No saved sessions for this directory]" in capsys.readouterr().out
+
+    def test_without_a_terminal_it_lists_them_by_number_newest_first(
+        self, make_agent, store, clock, capsys
+    ):
+        older, newer = self.saved(store, "older prompt", "newer prompt")
+
+        self.repl(make_agent, store).handle("/sessions")
+
+        out = capsys.readouterr().out
+        assert f"  1  newer prompt  ·  1 turn  ·  {ago(newer)}  ·  {newer.id}\n" in out
+        assert f"  2  older prompt  ·  1 turn  ·  {ago(older)}  ·  {older.id}\n" in out
+        assert "[Continue one with /sessions NUMBER or /sessions ID]" in out
+
+    def test_a_number_continues_that_session_in_place_of_the_conversation(
+        self, make_agent, store, clock, capsys
+    ):
+        older, _ = self.saved(store, "older prompt", "newer prompt")
+        repl = self.repl(make_agent, store)
+        repl.agent.context.items = make_context(3)
+
+        repl.handle("/sessions 2")
+
+        assert 'Resumed "older prompt": 1 turn, saved ' in capsys.readouterr().out
+        assert [m["content"] for m in as_dicts(repl.agent.context.items)] == [
+            "older prompt",
+            "re: older prompt",
+        ]
+        assert repl.saved == older
+
+    def test_an_id_or_the_start_of_one_continues_that_session(
+        self, make_agent, store, clock
+    ):
+        older, _ = self.saved(store, "older prompt", "newer prompt")
+        repl = self.repl(make_agent, store)
+
+        repl.handle(f"/sessions {older.id}")
+        assert repl.saved == older
+        repl.saved = None
+        repl.handle(f"/sessions {older.id[:-1]}")  # the start of it
+
+        assert repl.saved == older
+
+    def test_an_id_that_names_nothing_is_said_so_and_nothing_changes(
+        self, make_agent, store, clock, capsys
+    ):
+        self.saved(store, "one")
+        repl = self.repl(make_agent, store)
+        repl.agent.context.items = make_context(1)
+
+        repl.handle("/sessions nope")
+        repl.handle("/sessions 9")  # no ninth: it is looked for as an id
+
+        assert capsys.readouterr().out.count("No saved session") == 2
+        assert repl.agent.context.items == make_context(1)
+
+    def test_a_session_that_cannot_be_read_is_said_so(self, make_agent, store, capsys):
+        [info] = self.saved(store, "one")
+        (store.directory / f"{info.id}.jsonl").write_text(
+            (store.directory / f"{info.id}.jsonl").read_text().split("\n")[0] + "\n[]\n"
+        )
+        repl = self.repl(make_agent, store)
+
+        repl.handle("/sessions 1")
+
+        assert f"[The session {info.id} cannot be read" in capsys.readouterr().out
+
+    def test_at_a_terminal_a_menu_offers_the_newest_first_and_marks_the_current(
+        self, make_agent, store, clock
+    ):
+        older, newer = self.saved(store, "older prompt", "newer prompt")
+        repl = self.repl(make_agent, store)
+        repl.saved = older
+        offered = []
+
+        def choose(question, options):
+            offered.extend(options)
+            return "q"
+
+        repl.console.choose = choose
+
+        repl.handle("/sessions")
+
+        assert [key for key, _ in offered] == [newer.id, older.id, "q"]
+        assert offered[0][1].startswith("newer prompt  ·  1 turn  ·  ")
+        assert offered[1][1].endswith(f"{older.id} (current)")
+        assert offered[2] == ("q", "Cancel")
+
+    def test_the_choice_in_the_menu_is_continued_and_saved_over_afterwards(
+        self, make_agent, store, clock, capsys
+    ):
+        older, newer = self.saved(store, "older prompt", "newer prompt")
+        repl = self.repl(make_agent, store)
+        repl.console.choose = lambda question, options: older.id
+
+        repl.handle("/sessions")
+        repl.handle("one more")
+        repl.save_session()
+
+        assert [s.id for s in store.sessions()] == [older.id, newer.id]
+        assert store.load(older.id).info.turns == 2  # the same session, gone on with
+
+    def test_cancelling_changes_nothing(self, make_agent, store, clock, capsys):
+        self.saved(store, "one")
+        repl = self.repl(make_agent, store)
+        repl.agent.context.items = make_context(1)
+        repl.console.choose = lambda question, options: "q"
+
+        repl.handle("/sessions")
+
+        assert repl.agent.context.items == make_context(1) and repl.saved is None
+
+    def test_the_menu_offers_the_newest_ten_and_the_list_all_of_them(
+        self, make_agent, store, clock, capsys
+    ):
+        self.saved(store, *[f"prompt {n:02d}" for n in range(12)])
+        repl = self.repl(make_agent, store)
+        offered = []
+        repl.console.choose = lambda question, options: offered.extend(options) or "q"
+
+        repl.handle("/sessions")
+        repl.console.choose = None
+        repl.handle("/sessions")
+
+        assert len(offered) == 11 and offered[0][1].startswith("prompt 11")
+        assert "  12  prompt 00" in capsys.readouterr().out
+
+    def test_reset_makes_the_next_prompt_a_new_session(self, make_agent, store, clock):
+        [first] = self.saved(store, "one")
+        repl = self.repl(make_agent, store)
+        repl.saved = first
+
+        repl.handle("/reset")
+
+        assert repl.saved is None

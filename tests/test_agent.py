@@ -1702,3 +1702,22 @@ class TestContextEstimate:
         assert before[1] > bare.context_estimate()[1]  # a tool is a definition
         assert before[2] == 0 and after[2] > 0  # the turn is history now
         assert after[:2] == before[:2]
+
+
+def test_a_restored_conversation_is_sent_with_the_next_prompt(make_agent, fake_server):
+    agent = make_agent(STREAMING=False)
+    agent.last_input_tokens = 99
+
+    agent.restore(make_context(2), "NOTES")
+    assert agent.last_input_tokens is None  # what was counted was another request
+    agent.run_turn("next")
+
+    sent = fake_server.requests[-1]["input"]
+    assert "NOTES" in str(sent[0])
+    assert [m["content"] for m in sent[1:]] == [
+        "question 0",
+        "answer 0",
+        "question 1",
+        "answer 1",
+        "next",
+    ]

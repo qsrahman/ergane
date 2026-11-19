@@ -4,6 +4,7 @@ from ergane.agent import Agent
 from ergane.commands import COMMANDS
 from ergane.mcp_hub import ServerUpdate
 from ergane.repl import Repl
+from ergane.sessions import SessionStore
 from ergane.tools import Tool
 from fake_api import REFUSAL, STREAM_ERROR, TEXT
 from helpers import make_config, make_context, run_repl
@@ -303,3 +304,148 @@ def test_a_server_tool_whose_name_is_taken_is_reported(capsys):
     assert "[Tool look is defined twice; only the first is offered]" in (
         capsys.readouterr().out
     )
+
+
+class TestSessions:
+    """The conversation is saved after each prompt, and a saved one can be continued."""
+
+    @pytest.fixture
+    def store(self, tmp_path) -> SessionStore:
+        return SessionStore(tmp_path / "state" / "sessions", tmp_path)
+
+    def test_a_prompt_is_saved_when_it_is_handled(self, monkeypatch, make_agent, store):
+        run_repl(
+            monkeypatch, make_agent(STREAMING=False), ["hello", "/exit"], store=store
+        )
+
+        [info] = store.sessions()
+        assert info.title == "hello" and info.turns == 1
+        assert [m["content"] for m in store.load(info.id).items] == ["hello", TEXT]
+
+    def test_a_conversation_with_nothing_in_it_saves_nothing(
+        self, monkeypatch, make_agent, store
+    ):
+        run_repl(monkeypatch, make_agent(), ["/help", "/exit"], store=store)
+
+        assert store.sessions() == [] and not store.directory.exists()
+
+    def test_a_reset_that_comes_first_does_not_make_an_empty_session(
+        self, monkeypatch, make_agent, store
+    ):
+        run_repl(monkeypatch, make_agent(), ["/reset", "/exit"], store=store)
+
+        assert store.sessions() == []
+
+    def test_without_a_store_nothing_is_written(
+        self, monkeypatch, make_agent, tmp_path
+    ):
+        run_repl(monkeypatch, make_agent(STREAMING=False), ["hello", "/exit"])
+
+        assert not (tmp_path / "state").exists()
+
+    def test_every_prompt_is_saved_over_the_same_session(
+        self, monkeypatch, make_agent, store
+    ):
+        run_repl(
+            monkeypatch,
+            make_agent(STREAMING=False),
+            ["one", "two", "/exit"],
+            store=store,
+        )
+
+        [info] = store.sessions()
+        assert info.title == "one" and info.turns == 2
+
+    def test_a_command_that_changes_the_history_is_saved_too(
+        self, monkeypatch, make_agent, store
+    ):
+        agent = make_agent(STREAMING=False)
+
+        run_repl(monkeypatch, agent, ["one", "two", "/undo", "/exit"], store=store)
+
+        [info] = store.sessions()
+        assert info.turns == 1
+
+    def test_undoing_the_only_turn_leaves_a_session_with_nothing_in_it(
+        self, monkeypatch, make_agent, store
+    ):
+        run_repl(
+            monkeypatch,
+            make_agent(STREAMING=False),
+            ["one", "/undo", "/exit"],
+            store=store,
+        )
+
+        [info] = store.sessions()
+        assert info.turns == 0 and store.load(info.id).items == []
+
+    def test_reset_starts_a_new_session_and_keeps_the_old_one(
+        self, monkeypatch, make_agent, store
+    ):
+        run_repl(
+            monkeypatch,
+            make_agent(STREAMING=False),
+            ["first", "/reset", "second", "/exit"],
+            store=store,
+        )
+
+        assert sorted(s.title for s in store.sessions()) == ["first", "second"]
+
+    def test_a_save_that_fails_is_told_and_the_conversation_goes_on(
+        self, monkeypatch, make_agent, store, capsys
+    ):
+        def fail(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(store, "save", fail)
+
+        run_repl(
+            monkeypatch,
+            make_agent(STREAMING=False),
+            ["one", "two", "/exit"],
+            store=store,
+        )
+
+        out = capsys.readouterr().out
+        assert out.count("[Could not save the session: disk full]") == 2
+        assert out.count(TEXT) == 2
+
+    def test_a_resumed_session_is_the_conversation_and_goes_on_being_saved(
+        self, monkeypatch, make_agent, fake_server, store, capsys
+    ):
+        run_repl(
+            monkeypatch, make_agent(STREAMING=False), ["hello", "/exit"], store=store
+        )
+        saved = store.latest()
+        capsys.readouterr()
+
+        run_repl(
+            monkeypatch,
+            make_agent(STREAMING=False),
+            ["again", "/exit"],
+            store=store,
+            resume=saved,
+        )
+
+        out = capsys.readouterr().out
+        assert 'Resumed "hello": 1 turn, saved just now' in out
+        sent = fake_server.requests[-1]["input"]
+        assert [m["content"] for m in sent] == ["hello", TEXT, "again"]
+        [info] = store.sessions()  # the same session, not another
+        assert info.turns == 2 and info.title == "hello"
+
+    def test_a_resumed_session_that_nothing_is_added_to_is_not_written_again(
+        self, monkeypatch, make_agent, store
+    ):
+        run_repl(
+            monkeypatch, make_agent(STREAMING=False), ["hello", "/exit"], store=store
+        )
+        saved = store.latest()
+        assert saved is not None
+        before = (store.directory / f"{saved.info.id}.jsonl").stat().st_mtime_ns
+
+        run_repl(
+            monkeypatch, make_agent(), ["/help", "/exit"], store=store, resume=saved
+        )
+
+        assert (store.directory / f"{saved.info.id}.jsonl").stat().st_mtime_ns == before

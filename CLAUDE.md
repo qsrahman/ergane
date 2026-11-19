@@ -75,7 +75,7 @@ The keys, their flags and their defaults are the table in
 MCP servers are `mcpServers` in the same file (`Config.mcp_servers`), and only there: a
 server is a program, so neither the environment nor a project's files may define one.
 Each server's stderr goes to `$XDG_STATE_HOME/ergane/NAME.log`; the state directory holds
-the prompt history too and is made `0700`.
+the prompt history and the saved sessions too and is made `0700`.
 
 ## Architecture
 
@@ -106,6 +106,10 @@ The modules, in dependency order (each imports only from those above it):
 - `errors.py`, `prompts.py`: `TurnError`, `StreamCut`, `describe_error`,
   `is_context_overflow`, `is_images_rejected`; the three prompts as text. They import nothing of ergane.
 - `context.py`: `Context` (the history and the summary) and `estimate_tokens()`.
+- `sessions.py`: `SessionStore`: conversations saved to disk, one file each, for a working
+  directory, in the user's state directory (`0700`, files `0600`); the newest 50 are kept.
+  A file is two lines of JSON, the first of which lists it (`SessionInfo`). The format and
+  the reasons are in its docstring.
 - `outputs.py`: the results of tools in the history: their form (`function_output`,
   pictures) and how they are made to fit (`drop_images`, `shorten`, `drop_outputs`,
   `answer_open_calls`).
@@ -128,7 +132,9 @@ The modules, in dependency order (each imports only from those above it):
   completion and key bindings, and their styles), `toolbar` (the line under the prompt)
   and `choose` (the menu of the permission question). Imports `Repl` for type checking
   only.
-- `repl.py`: `Repl`, the input loop.
+- `repl.py`: `Repl`, the input loop: it saves the conversation after each prompt
+  (`save_session`), and continues a saved one (`restore`, for `--resume` and
+  `/sessions`).
 - `cli.py`: `main()`.
 
 Dependencies are passed in through constructors (`Agent(config, client=None, tools=(),
@@ -137,8 +143,10 @@ Every setting is read where it is used, so `/model` and `/effort` take effect at
 
 What must stay true:
 
-- **The history changes in four places only:** `Context.save_turn`, `undo` (which
-  `rewind` uses), `reset` and `compact`. A turn is saved with its reply or not at all,
+- **The history changes in five places only:** `Context.save_turn`, `undo` (which
+  `rewind` uses), `reset`, `compact` and `restore` (a saved session replacing it). Each
+  adds one to `Context.revision`, which `Repl.save_session` compares to know that the
+  conversation changed. A turn is saved with its reply or not at all,
   apart from the exceptions in `agent.py`'s docstring. User and assistant messages
   alternate; the summary is kept apart (`Context.summary`), put first in each request as
   a `user` message framed as notes, never as instructions, since it is written from text
@@ -159,8 +167,10 @@ What must stay true:
   a note and its results dropped, like any turn after a completed round.
 - **The agent prints nothing.** What the user should see goes through `on_text`,
   `on_notice`, `on_call` or `confirm`, and the console prints it through `_emit`.
-- **Credentials and programs come only from the user's own files:** no config, `.env` or
-  server list is read from the working directory.
+- **Credentials, programs and sessions come only from the user's own files:** no config,
+  `.env`, server list or saved session is read from the working directory. A session is
+  played back as the model's own words, so one that a project shipped could give orders
+  in its voice; `sessions.py` reads only the state directory.
 
 ## Conventions
 

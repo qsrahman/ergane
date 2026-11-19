@@ -455,3 +455,34 @@ class TestTerminalSession:
 
         assert answer is True
         assert history.read_text() == ""  # "y" is not a prompt to recall
+
+
+class TestMenuOfSessions:
+    """The menu of /sessions: the options are ids, which are no keys to press."""
+
+    OPTIONS = (
+        ("20261119-1000-aaaa", "newest"),
+        ("20261119-0900-bbbb", "older"),
+        ("q", "Cancel"),
+    )
+
+    def choose(self, tmp_path, keys: str) -> str:
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, tmp_path / "history", input=pipe, output=DummyOutput()
+            )
+            assert session is not None
+            pipe.send_text(keys)
+            return choose(session, "Continue which session?", self.OPTIONS)
+
+    @pytest.mark.parametrize(
+        ("keys", "chosen"),
+        [
+            ("\r", "20261119-1000-aaaa"),  # the newest is the default
+            ("\x1b[B\r", "20261119-0900-bbbb"),
+            ("2\r", "20261119-0900-bbbb"),
+            ("q", "q"),
+        ],
+    )
+    def test_arrows_numbers_and_the_key_of_cancel_choose(self, tmp_path, keys, chosen):
+        assert self.choose(tmp_path, keys) == chosen

@@ -457,3 +457,75 @@ class TestContextCounted:
         change(context)
 
         assert context.counted is None
+
+
+class TestContextRevision:
+    def test_every_change_of_the_history_counts(self):
+        context = Context()
+        seen = [context.revision]
+
+        draft, _ = context.begin_turn("q", ROOMY)
+        seen.append(context.revision)  # begun and not saved: the history is as it was
+        save_reply(context, draft, "a")
+        seen.append(context.revision)
+        context.compact(0, "S")
+        seen.append(context.revision)
+        context.undo()
+        seen.append(context.revision)
+        context.reset()
+        seen.append(context.revision)
+        context.restore(make_context(1), None)
+        seen.append(context.revision)
+
+        assert seen == [0, 0, 1, 2, 3, 4, 5]
+
+    def test_an_undo_that_finds_no_turn_is_no_change(self):
+        context = Context()
+
+        assert context.undo() is False and context.revision == 0
+
+
+class TestContextRestore:
+    def test_it_replaces_the_history_and_the_summary_and_knows_the_last_prompt(self):
+        context = Context()
+        context.items = make_context(1)
+        context.summary = "old notes"
+
+        context.restore(make_context(3), "NOTES")
+
+        assert context.items == make_context(3) and context.summary == "NOTES"
+        assert context.last_prompt == "question 2" and context.last_saved is True
+
+    def test_a_conversation_with_nothing_in_it_has_no_last_prompt(self):
+        context = Context()
+        context.last_prompt = "stale"
+
+        context.restore([], None)
+
+        assert context.last_prompt is None and context.last_saved is False
+
+    def test_it_forgets_what_the_server_counted_of_another_conversation(self):
+        context = Context()
+        context.counted = 1234
+
+        context.restore(make_context(1), None)
+
+        assert context.counted is None
+
+    def test_what_was_restored_can_be_undone_and_made_again(self):
+        context = Context()
+        context.restore(make_context(2), None)
+
+        assert context.rewind() == "question 1"
+        assert context.items == make_context(1)
+
+    def test_the_summary_goes_first_in_the_next_request(self):
+        context = Context()
+        context.restore(make_context(1), "NOTES")
+
+        draft, _ = context.begin_turn("next", ROOMY)
+
+        assert "NOTES" in str(draft[0]) and draft[-1] == {
+            "role": "user",
+            "content": "next",
+        }

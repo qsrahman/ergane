@@ -17,6 +17,7 @@ from ergane.config import EFFORTS, config_file, load_config, private_state_dir
 from ergane.console import Console
 from ergane.mcp_hub import McpHub
 from ergane.repl import Repl
+from ergane.sessions import SessionError, SessionStore
 from ergane.terminal import terminal_session
 from ergane.tools import Tool, tool_clash, tools_in
 
@@ -94,6 +95,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=False,
         help="do not start the MCP servers of config.json",
     )
+    parser.add_argument(
+        "--resume",
+        nargs="?",
+        const="",
+        metavar="ID",
+        help="continue the saved session ID (or the start of its id) of this "
+        "directory, or the last one if there is no ID",
+    )
     return parser.parse_args(argv)
 
 
@@ -135,6 +144,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     flags: dict[str, Any] = vars(parse_args(argv))
     path = flags.pop("config", None)
     no_mcp = flags.pop("no_mcp")
+    resume = flags.pop("resume", None)  # None: not asked for; "": the last one
     if flags.get("reasoning_effort") == "default":
         flags["reasoning_effort"] = None
     try:
@@ -147,6 +157,16 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     console = Console()
     state = private_state_dir()
+    store = SessionStore(state / "sessions", Path.cwd())
+    saved = None
+    if resume is not None:  # before the servers start: a wrong id must not cost them
+        try:
+            saved = store.load(resume) if resume else store.latest()
+        except SessionError as exc:
+            print(exc, file=sys.stderr)
+            raise SystemExit(1) from None
+        if saved is None:
+            console.notice("No saved session for this directory")
     session = terminal_session(COMMANDS, state / "history")
     hub = McpHub(config.mcp_servers, state, all_off="--no-mcp" if no_mcp else None)
     mcp_tools: list[Tool] = []
@@ -166,6 +186,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         agent = Agent(config, server_notes=hub.instructions())
         for name in agent.add_tools([*tools_in(builtin, console.notice), *mcp_tools]):
             console.notice(tool_clash(name))
-        Repl(agent, COMMANDS, session, console, hub).run()
+        Repl(agent, COMMANDS, session, console, hub, store).run(resume=saved)
     finally:
         hub.close()

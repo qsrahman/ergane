@@ -1,8 +1,9 @@
 """The conversation history, and token estimates.
 
 Every request uses `store=False`, so the whole history is resent each turn. It
-changes in four places only: `save_turn`, `undo` (which `rewind` uses), `reset` and
-`compact`; `begin_turn` and the rounds of a turn work on a copy. The history is
+changes in five places only: `save_turn`, `undo` (which `rewind` uses), `reset`,
+`compact` and `restore`; `begin_turn` and the rounds of a turn work on a copy. Each
+adds one to `revision`, which is how whoever saves the history knows it changed. The history is
 user and assistant messages from its first item, apart from the tool work of the
 newest turn, which stays so that a follow-up can refer to what the tools found. What
 is done to the results of tools is `outputs.py`.
@@ -83,6 +84,7 @@ class Context:
         # the last turn left it; None when that is not known or no longer true.
         self.counted: int | None = None
         self.counted_model: str | None = None  # the model that counted it
+        self.revision = 0  # how many times the history has changed
 
     def summary_message(self) -> ResponseInputParam:
         """The summary as the message that goes first in a request, or nothing.
@@ -193,6 +195,7 @@ class Context:
                 estimate_tokens(item) for item in self.items
             )
             self.counted = counted - dropped
+        self.revision += 1
 
     def plan_compaction(self, keep_tokens: int) -> int:
         """Choose how much of the oldest history to summarize.
@@ -233,6 +236,7 @@ class Context:
         self.items = self.items[count:]
         self.summary = summary
         self.counted = None
+        self.revision += 1
 
     def reset(self) -> None:
         """Forget the whole history, the summary too."""
@@ -240,6 +244,29 @@ class Context:
         self.summary = None
         self.last_saved = False
         self.counted = None
+        self.revision += 1
+
+    def restore(self, items: ResponseInputParam, summary: str | None) -> None:
+        """Replace the whole conversation by one that was saved.
+
+        The items are the history as `save_turn` left it, so every turn has its reply,
+        and `/retry` and `/undo` work on it as on one that was just made.
+
+        Args:
+            items: The history, as `items` was when it was saved.
+            summary: The summary that stood for the turns before them, if any.
+        """
+        self.items = list(items)
+        self.summary = summary
+        prompts = [
+            item["content"]
+            for item in as_dicts(self.items)
+            if _is_user_message(item) and isinstance(item["content"], str)
+        ]
+        self.last_prompt = prompts[-1] if prompts else None
+        self.last_saved = self.last_prompt is not None
+        self.counted = None  # the server counted another conversation
+        self.revision += 1
 
     def rewind(self) -> str | None:
         """Get ready to send the last prompt again: drop its turn if it was saved.
@@ -263,5 +290,6 @@ class Context:
                 self.items = self.items[:i]
                 self.last_saved = False
                 self.counted = None
+                self.revision += 1
                 return True
         return False

@@ -67,7 +67,7 @@ Each setting comes from the first of these that sets it: **its command-line flag
 | `max_turns`          | `--max-turns N`          | `25`                  | Most model calls for one prompt: the cap on the tool loop. |
 | `mcpServers`         | `--no-mcp` (start none)  | none                  | The [MCP servers](#mcp-servers). |
 
-Two more flags: `--config FILE` reads another file (there is no variable for it, so that a project's environment cannot point ergane at a file of its own), `--version` prints the version, and `--help` lists them all. A file you name that does not exist is an error; the default one may be missing, if the environment and flags give the key.
+Two more flags: `--config FILE` reads another file (there is no variable for it, so that a project's environment cannot point ergane at a file of its own), `--resume [ID]` continues a [saved session](#sessions), `--version` prints the version, and `--help` lists them all. A file you name that does not exist is an error; the default one may be missing, if the environment and flags give the key.
 
 ## Usage
 
@@ -77,7 +77,7 @@ ergane
 
 From a checkout that is not installed as a command: `uv run ergane` (or `uv run python -m ergane`).
 
-Type a prompt at `❯` and press Enter. Up and Down recall earlier prompts, which are kept in `~/.local/state/ergane/history` (or `$XDG_STATE_HOME/ergane/history`) in plain text; delete the file to forget them. The directory (which also holds the server logs) is made readable by you only (`0700`, the file `0600`), since a prompt can hold whatever you pasted. Paste several lines and they stay one prompt; press Enter to send it. To add a line by hand, press Alt-Enter (Esc, then Enter) or Ctrl-J (the new lines start with `· `); Shift-Enter does it too in a terminal that sends it as its own key (kitty's keyboard protocol, or xterm's modifyOtherKeys), but most send a plain Enter for it, and then it sends the prompt. Commands are completed with a line saying what they do. The line under the prompt shows the model, the effort and how full the context is, as a meter that turns yellow and then red (`~` while it is an estimate). Colours are your terminal's own, and `NO_COLOR` turns them off. Ctrl-R searches the earlier prompts, Ctrl-X Ctrl-E edits the prompt in `$EDITOR` and sends it when the editor closes, and Ctrl-Z suspends ergane. The question before a tool runs is a menu of its own (see below), which is not kept in the history. When input or output is redirected (`echo hi | ergane`), plain `input()` reads the prompts instead. To quit, use `/exit`, `/quit`, Ctrl-D, or Ctrl-C twice on an empty prompt. The conversation lives only in memory, so one stray Ctrl-C must not end it, and once there is a conversation Ctrl-D must be pressed twice too (it quits at once when there is none, or when input is redirected). A single Ctrl-C clears what you have typed, or, on an empty line, asks you to press it again. `/help` lists the keys as well as the commands.
+Type a prompt at `❯` and press Enter. Up and Down recall earlier prompts, which are kept in `~/.local/state/ergane/history` (or `$XDG_STATE_HOME/ergane/history`) in plain text; delete the file to forget them. The directory (which also holds the server logs) is made readable by you only (`0700`, the file `0600`), since a prompt can hold whatever you pasted. Paste several lines and they stay one prompt; press Enter to send it. To add a line by hand, press Alt-Enter (Esc, then Enter) or Ctrl-J (the new lines start with `· `); Shift-Enter does it too in a terminal that sends it as its own key (kitty's keyboard protocol, or xterm's modifyOtherKeys), but most send a plain Enter for it, and then it sends the prompt. Commands are completed with a line saying what they do. The line under the prompt shows the model, the effort and how full the context is, as a meter that turns yellow and then red (`~` while it is an estimate). Colours are your terminal's own, and `NO_COLOR` turns them off. Ctrl-R searches the earlier prompts, Ctrl-X Ctrl-E edits the prompt in `$EDITOR` and sends it when the editor closes, and Ctrl-Z suspends ergane. The question before a tool runs is a menu of its own (see below), which is not kept in the history. When input or output is redirected (`echo hi | ergane`), plain `input()` reads the prompts instead. To quit, use `/exit`, `/quit`, Ctrl-D, or Ctrl-C twice on an empty prompt. A stray Ctrl-C must not end a conversation, so on an empty line it takes two, and once there is a conversation Ctrl-D must be pressed twice too (it quits at once when there is none, or when input is redirected). The conversation is [saved](#sessions) after each prompt, so quitting loses nothing. A single Ctrl-C clears what you have typed, or, on an empty line, asks you to press it again. `/help` lists the keys as well as the commands.
 
 | Command           | Effect                                                                           |
 | ----------------- | -------------------------------------------------------------------------------- |
@@ -92,11 +92,23 @@ Type a prompt at `❯` and press Enter. Up and Down recall earlier prompts, whic
 | `/context`        | Show how much of the context budget the next request would use: the instructions, the tool definitions and the history (estimates), the total (the server's count of the last turn while the history is as it was), and the count the server gave for the last request |
 | `/model [NAME]`   | Show the model, or switch to `NAME` for the rest of the session                  |
 | `/effort [LEVEL]` | Show the reasoning effort, or set it (`none` … `max`, or `default` to leave it out) |
-| `/reset`          | Clear the conversation history and start fresh                                   |
+| `/reset`          | Clear the conversation history and start fresh (the old one stays saved)         |
+| `/sessions [N or ID]` | Continue a [saved session](#sessions) of this directory: choose one from the list, or give its number or id |
 | `/clear`          | Clear the terminal screen; the history is kept                                   |
 | `/exit`, `/quit`  | Quit                                                                             |
 
 Command names are case-insensitive. A mistyped command such as `/rest` is reported instead of being sent to the model. Pressing Ctrl-C while a response is generating cancels only that turn; if tools had already run, the turn is kept with a note saying you stopped it, so the model knows what was done.
+
+## Sessions
+
+The conversation is saved after each prompt, in a file of its own, for the directory you run `ergane` in. Nothing is asked and there is no setting: it is how a conversation survives quitting.
+
+- `ergane --resume` continues the session saved last in this directory. `ergane --resume ID` continues the one with that id, or whose id starts with it. With no session saved it says so and starts a new one; an id that names none is an error.
+- `/sessions` lists the sessions of this directory, newest first, with what the first prompt was, how many turns, when it was saved and its id. At a terminal it is a menu (arrows and Enter; `q` cancels) of the ten newest; choosing one puts it in place of the conversation you are in, which is saved already, so nothing is lost. Anywhere else it prints the list, and `/sessions 2` or `/sessions ID` continues one. `/reset` starts a new session and leaves the old one in the list.
+- A resumed session is the conversation as it was: the history, the summary of the turns before it, and the pictures of tool results if you had `images` on. It goes on being saved as the same session. What is not saved is what you allowed for the session (ergane asks again), and the tools, which are the ones configured now.
+- The files are in `~/.local/state/ergane/sessions/` (or `$XDG_STATE_HOME/ergane/sessions/`), a directory for each working directory, readable by you only. Only the newest 50 sessions of a directory are kept. **They hold everything you typed or pasted and every result of a tool.** To forget one, delete its file (`<id>.jsonl`); to forget them all, delete the `sessions` directory.
+- Sessions are read only from there, never from the project you are in: a session is played back to the model as what it said and what its tools returned, so a file a project shipped could give orders in its voice.
+- Two `ergane`s that resume the same session overwrite each other; the last to save wins.
 
 ## Tools
 

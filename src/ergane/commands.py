@@ -13,6 +13,7 @@ from pydantic import TypeAdapter, ValidationError
 from ergane.config import EFFORTS
 from ergane.context import estimate_tokens
 from ergane.errors import TurnError, describe_error
+from ergane.sessions import SessionError, SessionInfo, ago
 
 if TYPE_CHECKING:
     from ergane.repl import Repl
@@ -111,7 +112,49 @@ def help_(repl: Repl, args: str) -> None:
 def reset(repl: Repl, args: str) -> str:
     """Clear the conversation history."""
     repl.agent.reset()
+    repl.saved = None  # what follows is a new session; the old one stays saved
     return "History reset"
+
+
+# How many sessions the menu of /sessions offers: the newest. /sessions ID reaches the rest.
+_MENU_SESSIONS = 10
+
+
+def _described(info: SessionInfo, current: SessionInfo | None) -> str:
+    """A session in one line: what it was about, how long, when, and its id."""
+    turns = f"{info.turns} turn{'s' if info.turns != 1 else ''}"
+    mark = " (current)" if current is not None and current.id == info.id else ""
+    return f"{info.title}  ·  {turns}  ·  {ago(info)}  ·  {info.id}{mark}"
+
+
+@command("/sessions")
+def sessions_(repl: Repl, args: str) -> str | None:
+    """Continue a saved session of this directory: choose one, or /sessions ID."""
+    store = repl.store
+    if store is None:
+        return "Sessions are not saved"
+    found = store.sessions()
+    if not found:
+        return "No saved sessions for this directory"
+    if args:
+        number = int(args) if args.isdigit() else 0
+        ref = found[number - 1].id if 1 <= number <= len(found) else args
+    elif repl.console.choose is not None:
+        options = [(i.id, _described(i, repl.saved)) for i in found[:_MENU_SESSIONS]]
+        ref = repl.console.choose(
+            "Continue which session?", [*options, ("q", "Cancel")]
+        )
+        if ref == "q":
+            return None
+    else:
+        repl.console.columns(
+            [(str(n), _described(i, repl.saved)) for n, i in enumerate(found, 1)]
+        )
+        return "Continue one with /sessions NUMBER or /sessions ID"
+    try:
+        return repl.restore(store.load(ref))
+    except SessionError as exc:
+        return str(exc)
 
 
 @command("/clear")

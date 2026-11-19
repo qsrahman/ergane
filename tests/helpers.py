@@ -16,6 +16,7 @@ from ergane.commands import COMMANDS
 from ergane.config import Config, LocalMcpServer
 from ergane.mcp_hub import McpHub
 from ergane.repl import Repl
+from ergane.sessions import SavedSession, SessionStore
 from ergane.tools import Tool
 
 
@@ -38,10 +39,13 @@ def run_repl(
     agent: Agent,
     inputs: list,
     hub: McpHub | None = None,
+    store: SessionStore | None = None,
+    resume: SavedSession | None = None,
 ) -> None:
     """Run a Repl over scripted input.
 
-    Each entry is either a line of input or an exception that input() raises.
+    Each entry is either a line of input or an exception that input() raises. With a
+    store the conversation is saved, and `resume` is a session to continue.
     """
     lines = iter(inputs)
 
@@ -52,7 +56,7 @@ def run_repl(
         return line
 
     monkeypatch.setattr("builtins.input", fake_input)
-    Repl(agent, COMMANDS, hub=hub).run()
+    Repl(agent, COMMANDS, hub=hub, store=store).run(resume=resume)
 
 
 def anchor(agent: Agent, tokens: int) -> None:

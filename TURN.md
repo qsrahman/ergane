@@ -279,6 +279,22 @@ every turn but the newest are removed**, leaving the messages. The newest turn k
 them, so you can ask a follow-up about what the tools found; the turn after that sees
 only the replies. Calls and outputs are removed together, for the same reason as above.
 
+### Saved to disk
+
+Each of the five places the history changes (`save_turn`, `undo`, `reset`, `compact`,
+`restore`) adds one to `Context.revision`. After `Repl.handle` has run a prompt or a
+command, `Repl.save_session` compares it with what it last saved, and writes the
+conversation (`SessionStore.save`, in `sessions.py`) when it differs: so a turn, a
+Ctrl-C that kept a turn, `/undo`, `/retry` and `/compact` are all saved, and
+a prompt that changed nothing is not. A conversation with nothing in it is not saved,
+unless it was before, so that the file does not go on saying what was undone.
+`/reset` forgets which session the conversation is, so the next save is a new one.
+
+`--resume` and `/sessions` go the other way: `Repl.restore` hands the saved items and
+summary to `Context.restore`, which leaves the history as `save_turn` would have, with
+the last prompt known, so `/retry` and `/undo` work on it. What the server counted
+of the earlier conversation is forgotten, and what the user allowed is not saved.
+
 ## 8. How a turn can end
 
 | Ending                                                | Saved?                  | You see                                                       |
@@ -352,7 +368,8 @@ their text is printed when output is redirected or `NO_COLOR` is set.
 |-----------|-------------------------------------------------------------------------------------------|
 | `/retry`  | `Context.rewind()` drops the last turn if it was saved, then `ask` sends its prompt again  |
 | `/undo`   | drops the last turn: the last user message and everything after it                         |
-| `/reset`  | forgets the whole history, the summary too                                                 |
+| `/reset`  | forgets the whole history, the summary too; the next save is a new session                 |
+| `/sessions [N or ID]` | `Repl.restore` puts a saved session in place of the history (see §7)           |
 | `/compact [focus]` | summarizes the oldest turns now (§2a); the focus says what the summary must keep |
 | `/summary` | shows the summary                                                                          |
 | `/model`, `/effort` | change the config; the next request reads it                                     |
@@ -410,6 +427,7 @@ the model still answered.
 |---------------------------------------|--------------------------------------------------------------|
 | reading input, commands, `ask`           | `Repl` in [`repl.py`](src/ergane/repl.py), [`commands.py`](src/ergane/commands.py) |
 | the prompt, the toolbar, the permission menu | [`terminal.py`](src/ergane/terminal.py) |
+| saved sessions                        | `SessionStore` in [`sessions.py`](src/ergane/sessions.py); `Repl.save_session` and `restore` |
 | the turn, the rounds, the stops       | `Agent.run_turn`, `_ask`, `_run_round` in [`agent.py`](src/ergane/agent.py) |
 | the request and the stream            | `Responder` in [`responses.py`](src/ergane/responses.py)    |
 | calls and permissions                 | `Agent._run_tools`, `Tool` in [`tools.py`](src/ergane/tools.py) |

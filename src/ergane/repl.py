@@ -13,8 +13,10 @@ from prompt_toolkit import PromptSession
 from ergane.agent import Agent
 from ergane.commands import Command
 from ergane.console import Console
+from ergane.context import as_dicts
 from ergane.errors import TurnError, describe_error
 from ergane.mcp_hub import McpHub, ServerUpdate
+from ergane.sessions import SavedSession, SessionInfo, SessionStore, ago
 from ergane.terminal import PROMPT, CommandCompleter, choose, toolbar
 from ergane.tools import tool_clash
 
@@ -29,6 +31,7 @@ class Repl:
         session: PromptSession[str] | None = None,
         console: Console | None = None,
         hub: McpHub | None = None,
+        store: SessionStore | None = None,
     ) -> None:
         """Create a REPL for an agent.
 
@@ -41,6 +44,8 @@ class Repl:
                 keeps the state that separates its output from the next.
             hub: The MCP servers, which `/reconnect` starts again and whose statuses
                 `/servers` lists; none if omitted.
+            store: Where the conversation is saved, after each prompt, and where
+                `/sessions` finds the ones to continue; it is not saved if omitted.
         """
         self.agent = agent
         self.console = console or Console()
@@ -56,12 +61,24 @@ class Repl:
         self.running = False
         self.commands = commands
         self.session = session
+        self.store = store
+        # What the conversation is saved as, once it is; None before, and after /reset.
+        self.saved: SessionInfo | None = None
+        self._saved_revision = agent.context.revision
 
-    def run(self) -> None:
-        """Read and handle prompts until the user quits."""
+    def run(self, resume: SavedSession | None = None) -> None:
+        """Read and handle prompts until the user quits.
+
+        Args:
+            resume: A saved session to continue, which is what the conversation is
+                from the start.
+        """
         self.console.write(
             f"ergane · {self.agent.config.model} · /help for commands\n\n"
         )
+        if resume is not None:
+            self.console.notice(self.restore(resume))
+            self.console.blank()
 
         self.running = True
         interrupted = False  # the last prompt ended in Ctrl-C or Ctrl-D
@@ -75,15 +92,14 @@ class Repl:
                 ).strip()
             except EOFError:
                 # Redirected input ends here. At a terminal a stray Ctrl-D must not
-                # end a conversation that lives only in memory.
+                # end a conversation.
                 if interrupted or not self.session or not self.agent.has_conversation:
                     break
                 interrupted = True
                 self.console.notice("Press Ctrl-D again, or type /exit, to quit")
                 continue
             except KeyboardInterrupt:
-                # The conversation lives only in memory: one stray Ctrl-C must not
-                # end it.
+                # One stray Ctrl-C must not end a conversation.
                 if interrupted:
                     break
                 interrupted = True
@@ -92,7 +108,42 @@ class Repl:
             interrupted = False
             if prompt:
                 self.handle(prompt)
+                self.save_session()
         self.console.write("Bye.\n")
+
+    def save_session(self) -> None:
+        """Save the conversation if it changed since it was saved. A conversation
+        with nothing in it is saved only if it was before: the file must not go on
+        saying what was undone."""
+        context = self.agent.context
+        if self.store is None or context.revision == self._saved_revision:
+            return
+        self._saved_revision = context.revision
+        if not context.items and context.summary is None and self.saved is None:
+            return
+        try:
+            self.saved = self.store.save(
+                self.saved,
+                context.summary,
+                as_dicts(context.items),
+                self.agent.config.model,
+            )
+        except OSError as exc:
+            self.console.notice(f"Could not save the session: {exc}")
+
+    def restore(self, saved: SavedSession) -> str:
+        """Continue a saved session in place of the conversation there is. That one
+        was saved after its last prompt, so nothing is lost.
+
+        Returns:
+            A line that says what was restored, for the user.
+        """
+        self.agent.restore(saved.items, saved.summary)
+        self.saved = saved.info
+        self._saved_revision = self.agent.context.revision  # it is what is on disk
+        info = saved.info
+        turns = f"{info.turns} turn{'s' if info.turns != 1 else ''}"
+        return f'Resumed "{info.title}": {turns}, saved {ago(info)}'
 
     def handle(self, prompt: str) -> None:
         """Run a slash command, or send the prompt to the agent.

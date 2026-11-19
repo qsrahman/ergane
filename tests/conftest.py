@@ -1,3 +1,4 @@
+import itertools
 import sys
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -45,6 +46,16 @@ def fake_server() -> Iterator[ThreadingHTTPServer]:
     yield server
     server.shutdown()
     server.server_close()
+
+
+@pytest.fixture
+def clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every session saved is stamped a minute after the one before, so that their
+    order is known."""
+    minutes = itertools.count()
+    monkeypatch.setattr(
+        "ergane.sessions.now", lambda: f"2026-11-19T10:{next(minutes):02d}:00+00:00"
+    )
 
 
 @pytest.fixture

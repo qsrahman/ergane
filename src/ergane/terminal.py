@@ -120,7 +120,8 @@ def choose(
 ) -> str:
     """Ask a question on the session's terminal with a menu, and give the key of the
     option chosen. The first option is the default; arrows and Enter, the option's
-    number or its key choose. Ctrl-C raises KeyboardInterrupt, as at the prompt.
+    number or its key (when the key is one character) choose. Ctrl-C raises
+    KeyboardInterrupt, as at the prompt.
 
     Args:
         session: The line editor, whose input and output the menu uses.
@@ -129,7 +130,8 @@ def choose(
     """
     keys = KeyBindings()
     for key, _ in options:
-        keys.add(key)(_exit_with(key))
+        if len(key) == 1:  # a longer key, such as a session's id, is no key to press
+            keys.add(key)(_exit_with(key))
     with create_app_session(input=session.app.input, output=session.app.output):
         return _Menu(
             message=message,

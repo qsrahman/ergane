@@ -24,7 +24,7 @@ import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from openai import OpenAI
 from openai.types.responses import (
@@ -566,6 +566,11 @@ class Agent:
     def reset(self) -> None:
         """Forget the whole conversation, the summary too."""
         self.context.reset()
+
+    def restore(self, items: Sequence[Mapping[str, Any]], summary: str | None) -> None:
+        """Replace the whole conversation by a saved one (see `Context.restore`)."""
+        self.context.restore(cast(ResponseInputParam, items), summary)
+        self.last_input_tokens = None  # what the server counted was another request
 
     def undo(self) -> bool:
         """Drop the last turn; whether there was one."""

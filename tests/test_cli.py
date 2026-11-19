@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from ergane.cli import main, parse_args
+from ergane.config import private_state_dir
+from ergane.sessions import SessionInfo, SessionStore
 
 
 def test_main_wires_config_agent_and_repl(monkeypatch: pytest.MonkeyPatch, capsys):
@@ -91,12 +93,18 @@ class RecordingRepl:
     """Stands in for Repl so a test can see which Agent main([]) built."""
 
     agent = None
+    store = None
+    resumed = None
 
-    def __init__(self, agent, commands, session=None, console=None, hub=None):
+    def __init__(
+        self, agent, commands, session=None, console=None, hub=None, store=None
+    ):
         RecordingRepl.agent = agent
+        RecordingRepl.store = store
+        RecordingRepl.resumed = None
 
-    def run(self):
-        pass
+    def run(self, resume=None):
+        RecordingRepl.resumed = resume
 
 
 def test_a_built_in_tool_is_offered_without_being_listed(
@@ -235,7 +243,7 @@ class TestMcpServers:
         class CallingRepl(RecordingRepl):
             key = None
 
-            def run(self):  # the servers are only running while the REPL does
+            def run(self, resume=None):  # the servers run only while the REPL does
                 agent = RecordingRepl.agent
                 assert agent is not None
                 CallingRepl.key = agent.tools["on__getenv"].call('{"name": "KEY"}')
@@ -277,7 +285,7 @@ class TestMcpServers:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ):
         class FailingRepl(RecordingRepl):
-            def run(self):
+            def run(self, resume=None):
                 assert "mcp-fake" in threads()
                 raise RuntimeError("repl failed")
 
@@ -494,8 +502,10 @@ class TestMcpServersInTheBackground:
         seen = {}
 
         class Recording(RecordingRepl):
-            def __init__(self, agent, commands, session=None, console=None, hub=None):
-                super().__init__(agent, commands, session, console, hub)
+            def __init__(
+                self, agent, commands, session=None, console=None, hub=None, store=None
+            ):
+                super().__init__(agent, commands, session, console, hub, store)
                 seen["hub"] = hub
                 seen["tools_at_start"] = dict(agent.tools)
 
@@ -525,3 +535,96 @@ class TestMcpServersInTheBackground:
 
         assert RecordingRepl.agent is not None
         assert "fake__add" in RecordingRepl.agent.tools
+
+
+class TestResume:
+    """`--resume [ID]` continues a saved session of the directory ergane runs in."""
+
+    @pytest.fixture(autouse=True)
+    def repl(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "test")
+        monkeypatch.setattr("ergane.cli.Repl", RecordingRepl)
+
+    @staticmethod
+    def save(prompt: str) -> SessionInfo:
+        """A session saved where `main` looks for it: the state and working directory."""
+        store = SessionStore(private_state_dir() / "sessions", Path.cwd())
+        conversation = [
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": "hi"},
+        ]
+        return store.save(None, None, conversation, "gpt-4o")
+
+    def test_the_flag_takes_an_id_or_none(self):
+        assert vars(parse_args(["--resume"])) == {"no_mcp": False, "resume": ""}
+        assert vars(parse_args(["--resume", "2026"])) == {
+            "no_mcp": False,
+            "resume": "2026",
+        }
+        assert "resume" not in vars(parse_args([]))
+
+    def test_without_an_id_the_last_session_is_continued(self, clock):
+        self.save("older")
+        newest = self.save("newest")
+
+        main(["--resume"])
+
+        assert RecordingRepl.resumed is not None
+        assert RecordingRepl.resumed.info == newest
+
+    def test_an_id_or_the_start_of_one_names_the_session(self, clock):
+        older = self.save("older")
+        self.save("newest")
+
+        main(["--resume", older.id[:-1]])
+
+        assert RecordingRepl.resumed is not None
+        assert RecordingRepl.resumed.info == older
+
+    def test_without_the_flag_nothing_is_continued(self, clock):
+        self.save("older")
+
+        main([])
+
+        assert RecordingRepl.resumed is None
+
+    def test_the_store_is_the_state_directory_of_the_working_directory(self):
+        main([])
+
+        assert RecordingRepl.store is not None
+        assert RecordingRepl.store.cwd == Path.cwd().resolve()
+        assert RecordingRepl.store.directory.parent == private_state_dir() / "sessions"
+
+    def test_with_nothing_saved_it_says_so_and_starts_a_new_session(self, capsys):
+        main(["--resume"])
+
+        assert RecordingRepl.resumed is None
+        assert "[No saved session for this directory]" in capsys.readouterr().out
+
+    def test_an_id_that_names_nothing_is_an_error_before_anything_starts(
+        self, tmp_path, capsys
+    ):
+        write_config_json(tmp_path, {"fake": FAKE_SERVER})
+        RecordingRepl.agent = None
+        self.save("one")
+
+        with pytest.raises(SystemExit) as exit:
+            main(["--resume", "nope"])
+
+        assert exit.value.code == 1
+        assert "No saved session 'nope' for this directory" in capsys.readouterr().err
+        assert RecordingRepl.agent is None  # no agent, and no servers either
+        assert "mcp-fake" not in threads()
+
+    def test_a_session_from_another_directory_is_not_found(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        info = self.save("here")
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+
+        with pytest.raises(SystemExit):
+            main(["--resume", info.id])
+
+        assert "No saved session" in capsys.readouterr().err
