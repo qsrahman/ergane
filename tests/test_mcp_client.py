@@ -254,11 +254,6 @@ class TestServer:
         # garbage collector tidying up: a loop that is not closed keeps three each.
         assert open_descriptors() == before
 
-    @pytest.mark.parametrize("name", ["", "a.b", "a b", "é", "a/b"])
-    def test_a_name_the_api_would_reject_is_refused(self, make_server, name):
-        with pytest.raises(ValueError, match="letters, digits"):
-            make_server(name=name, start=False)
-
 
 class TestStartFailures:
     def test_a_command_that_does_not_exist(self, make_server):

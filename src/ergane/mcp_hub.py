@@ -101,30 +101,6 @@ def _failure_text(name: str, exc: Exception) -> str:
     return f"MCP server {name!r} failed: {type(exc).__name__}: {exc}"
 
 
-def _running_status(
-    name: str, server: McpClient, tools: list[Tool], log: Path | None
-) -> ServerStatus:
-    return ServerStatus(
-        name,
-        "running",
-        tools=tuple(tool.name for tool in tools),
-        hidden=server.hidden,
-        log=log,
-    )
-
-
-def _log_file(config: McpServerConfig, log_dir: Path, name: str) -> Path | None:
-    """The file a program's stderr went to, if there is one to point the user at."""
-    path = log_dir / f"{name}.log"
-    return path if config.type == "local" and path.exists() else None
-
-
-def _failed_status(
-    name: str, message: str, config: McpServerConfig, log_dir: Path
-) -> ServerStatus:
-    return ServerStatus(name, "failed", message, log=_log_file(config, log_dir, name))
-
-
 def close_servers(servers: Iterable[McpClient]) -> None:
     """Close the servers all at once.
 
@@ -151,7 +127,6 @@ class _Startup:
         configs: Mapping[str, McpServerConfig],
         log_dir: Path,
         environ: Mapping[str, str],
-        all_off: str | None,
         *,
         append_log: bool = False,
         taken: Collection[str] = (),
@@ -162,7 +137,6 @@ class _Startup:
             configs: The servers to start, by name and in the order of the file.
             log_dir: Where a program's stderr goes, as `NAME.log`.
             environ: What `${NAME}` placeholders are filled in from.
-            all_off: Why none is to be started, or None.
             append_log: Add to the logs instead of emptying them: the servers replace
                 ones that ran before, and why those stopped is in them.
             taken: The names of tools that others have, which these must not repeat.
@@ -170,22 +144,16 @@ class _Startup:
         self.configs = configs
         self.log_dir = log_dir
         self.environ = environ
-        self.all_off = all_off
         self.append_log = append_log
         self.taken = taken
         # Each server, or why it cannot be started, in the order of the file.
         self.entries: list[tuple[str, McpClient | str]] = []
-        self.off: dict[str, ServerStatus] = {}
         self._futures: dict[str, concurrent.futures.Future[list[ToolDefinition]]] = {}
         self._pool: concurrent.futures.ThreadPoolExecutor | None = None
 
     def begin(self) -> None:
-        """Start the servers that are on, each on a thread of its own."""
+        """Start the servers, each on a thread of its own."""
         for name, config in self.configs.items():
-            if self.all_off or not config.enabled:
-                reason = self.all_off or "enabled is false"
-                self.off[name] = ServerStatus(name, "off", reason)
-                continue
             try:
                 server = McpClient(
                     name,
@@ -229,20 +197,22 @@ class _Startup:
             The servers that run, their tools, and a status for every server in the
             file, each by name and in the order of the file.
         """
-        statuses: dict[str, ServerStatus] = dict(self.off)
+        statuses: dict[str, ServerStatus] = {}
         running: dict[str, McpClient] = {}
         found: dict[str, list[Tool]] = {}
         failed: list[McpClient] = []
         taken = set(self.taken)  # names are unique across the servers too
 
         def log_of(name: str) -> Path | None:
-            return _log_file(self.configs[name], self.log_dir, name)
+            """The file a program's stderr went to, if there is one to point to."""
+            path = self.log_dir / f"{name}.log"
+            return (
+                path if self.configs[name].type == "local" and path.exists() else None
+            )
 
         def failed_with(name: str, message: str) -> None:
             on_notice(message)
-            statuses[name] = _failed_status(
-                name, message, self.configs[name], self.log_dir
-            )
+            statuses[name] = ServerStatus(name, "failed", message, log=log_of(name))
 
         for name, entry in self.entries:
             if isinstance(entry, str):
@@ -256,7 +226,13 @@ class _Startup:
                 continue
             running[name] = entry
             found[name] = tools
-            statuses[name] = _running_status(name, entry, tools, log_of(name))
+            statuses[name] = ServerStatus(
+                name,
+                "running",
+                tools=tuple(tool.name for tool in tools),
+                hidden=entry.hidden,
+                log=log_of(name),
+            )
         if self._pool is not None:
             self._pool.shutdown(wait=False)
         close_servers(failed)
@@ -346,7 +322,9 @@ class McpHub:
     def begin(self) -> None:
         """Start the servers without waiting for them: they connect while the caller
         goes on. `take` collects them, and `starting` says whether they are done."""
-        self._startup = _Startup(self.configs, self.log_dir, self.environ, self.all_off)
+        off = self._off()
+        on = {name: c for name, c in self.configs.items() if name not in off}
+        self._startup = _Startup(on, self.log_dir, self.environ)
         try:
             self._startup.begin()
         except BaseException:
@@ -354,8 +332,16 @@ class McpHub:
             self._startup = None
             raise
         self.statuses = {
-            name: self._startup.off.get(name) or ServerStatus(name, "starting")
+            name: off.get(name) or ServerStatus(name, "starting")
             for name in self.configs
+        }
+
+    def _off(self) -> dict[str, ServerStatus]:
+        """The servers that are not to be started, each with why."""
+        return {
+            name: ServerStatus(name, "off", self.all_off or "enabled is false")
+            for name, config in self.configs.items()
+            if self.all_off or not config.enabled
         }
 
     @property
@@ -406,7 +392,8 @@ class McpHub:
         self._startup = None
         self._notices += notices
         self.servers = running
-        self.statuses = statuses
+        off = self._off()
+        self.statuses = {name: off.get(name) or statuses[name] for name in self.configs}
         notes = self.instructions()
         self._started = [
             ServerUpdate(name, (), found[name], notes.get(name), "") for name in running
@@ -443,7 +430,6 @@ class McpHub:
             {name: self.configs[name]},
             self.log_dir,
             self.environ,
-            None,
             append_log=True,
             taken={
                 tool for n, s in self.statuses.items() if n != name for tool in s.tools

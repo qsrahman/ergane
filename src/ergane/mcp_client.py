@@ -26,7 +26,7 @@ Design notes, for whoever changes this:
   own, which `mcp_hub.py` does. A `start()` that fails has stopped the server already
   (stopping takes seconds: the SDK waits 2 s for a program that ignores its closed
   input), on its own thread, so servers that failed together stop together.
-- A server whose connection ended is started again by the next call (`_submit`), up to
+- A server whose connection is gone is started again by the next call (`_submit`), up to
   `_MAX_RESTARTS` times; the call that found it dead fails and is not repeated. After
   `_IDLE_SECONDS` of silence, or after a call that failed, a call first pings, because
   a program that exits while the task is only waiting is not noticed otherwise (the
@@ -49,7 +49,6 @@ import concurrent.futures
 import importlib.util
 import json
 import math
-import re
 import threading
 import time
 from collections.abc import AsyncIterator, Callable, Coroutine
@@ -74,10 +73,6 @@ from ergane.tools import Tool, ToolOutput
 if TYPE_CHECKING:
     from mcp import ClientSession
     from mcp_types import Tool as ToolDefinition
-
-# The characters a server's name may have (the same rule, for the same reason, as the
-# server names of `config.py`: the name is a prefix of the tools' names).
-_NAME = re.compile(r"[a-zA-Z0-9_-]+")
 
 # How long a remote server may be silent before its response is given up on (the SDK's
 # own value). A call is not waited for longer than this, so a `call_timeout` above it
@@ -160,7 +155,7 @@ class McpClient:
         A McpClient is used once: after `close()` it cannot be started again.
 
         Args:
-            name: Prefixes the names of its tools. Letters, digits, `_` and `-`.
+            name: Prefixes the names of its tools; `config.py` checks it.
             config: What to run or where to connect, and how far to trust it. Its
                 `${NAME}` placeholders must be filled in already (see `_expand`).
             log: For a program, the file for its stderr, so that its log lines do not
@@ -169,14 +164,7 @@ class McpClient:
             append_log: Add to the log instead of emptying it, when the server
                 replaces one that ran before (see `McpHub.reconnect`): why that one
                 stopped is in it.
-
-        Raises:
-            ValueError: If the name has other characters.
         """
-        if not _NAME.fullmatch(name):
-            raise ValueError(
-                f"MCP server name {name!r} must be letters, digits, _ and - only"
-            )
         self.name = name
         self._config = config
         self._log_path = log
@@ -335,11 +323,6 @@ class McpClient:
             with suppress(Exception, BaseExceptionGroup):
                 stack.close()
 
-    def _lost(self) -> bool:
-        """Whether the connection was up, and is gone without `close()`: a restart
-        that failed leaves none."""
-        return self._started and not self._closed and self._session is None
-
     def _restart(self) -> None:
         """Start the server again after its connection was lost.
 
@@ -450,7 +433,7 @@ class McpClient:
         """
         if self._started and not self._closed:
             with self._connection_lock:
-                if self._lost() or self._stale():
+                if self._stale():
                     self._restart()
         return self._run(make, timeout)
 
@@ -502,7 +485,7 @@ class McpClient:
         is not noticed by the connection's task, which is only waiting; asking is the
         way to know, and it cannot do any harm (a ping changes nothing). A server too
         busy to answer is not gone, so only an answer that says the connection is
-        closed counts.
+        closed counts. A restart that failed left no connection, and says so.
         """
         if time.monotonic() - self._active < _IDLE_SECONDS:
             return False
