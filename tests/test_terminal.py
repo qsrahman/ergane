@@ -7,18 +7,18 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 from prompt_toolkit.styles import default_ui_style, merge_styles
 
-from helpers import anchor, hanging_config, make_config, make_context
-from muagent.agent import Agent
-from muagent.commands import COMMANDS
-from muagent.mcp_hub import McpHub, ServerStatus
-from muagent.repl import Repl
-from muagent.terminal import (  # pyright: ignore[reportPrivateUsage]
+from ergane.agent import Agent
+from ergane.commands import COMMANDS
+from ergane.mcp_hub import McpHub, ServerStatus
+from ergane.repl import Repl
+from ergane.terminal import (  # pyright: ignore[reportPrivateUsage]
     _Menu,
     choose,
     terminal_session,
     toolbar,
 )
-from muagent.tools import Tool
+from ergane.tools import Tool
+from helpers import anchor, hanging_config, make_config, make_context
 
 
 class TestToolbar:

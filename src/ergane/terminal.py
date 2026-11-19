@@ -26,12 +26,12 @@ from prompt_toolkit.output import Output
 from prompt_toolkit.shortcuts.choice_input import ChoiceInput
 from prompt_toolkit.styles import Style
 
-from muagent.agent import Agent
-from muagent.commands import Command
-from muagent.mcp_hub import McpHub
+from ergane.agent import Agent
+from ergane.commands import Command
+from ergane.mcp_hub import McpHub
 
 if TYPE_CHECKING:
-    from muagent.repl import Repl
+    from ergane.repl import Repl
 
 # A terminal asked for Shift-Enter (kitty's keyboard protocol, or xterm's
 # modifyOtherKeys) sends one of these, which prompt_toolkit does not know. They are
@@ -229,7 +229,7 @@ def terminal_session(
             )
         ],
         # Ctrl-X Ctrl-E edits a long prompt in $EDITOR and sends it when the editor
-        # closes; Ctrl-Z suspends muagent (Ctrl-R, searching the history, is built in).
+        # closes; Ctrl-Z suspends ergane (Ctrl-R, searching the history, is built in).
         enable_open_in_editor=True,
         enable_suspend=True,
         input=input,

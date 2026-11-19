@@ -17,8 +17,8 @@ from openai.types.responses import (
     ResponseInputTextContentParam,
 )
 
-from muagent.context import as_dicts, estimate_tokens
-from muagent.tools import Image
+from ergane.context import as_dicts, estimate_tokens
+from ergane.tools import Image
 
 # What stands in for a tool result that was dropped to make room (see drop_outputs).
 DROPPED_OUTPUT = "[output dropped to fit the context]"

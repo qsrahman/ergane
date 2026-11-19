@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
+from ergane.config import LocalMcpServer, McpServerConfig, RemoteMcpServer
+from ergane.mcp_client import McpClient, McpServerError
+from ergane.mcp_hub import McpHub, ServerStatus, _expand, close_servers
+from ergane.tools import Tool
 from helpers import FAKE, fake_config, hanging_config
-from muagent.config import LocalMcpServer, McpServerConfig, RemoteMcpServer
-from muagent.mcp_client import McpClient, McpServerError
-from muagent.mcp_hub import McpHub, ServerStatus, _expand, close_servers
-from muagent.tools import Tool
 
 
 class TestPlaceholders:
@@ -230,7 +230,7 @@ class TestStart:
         # Only what the file names is passed on, not the variable it came from.
         assert by_name["local__getenv"].call('{"name": "SOURCE"}') == "unset"
 
-    def test_a_program_starts_in_the_directory_muagent_runs_in(
+    def test_a_program_starts_in_the_directory_ergane_runs_in(
         self, start_hub, tmp_path, monkeypatch
     ):
         project = tmp_path / "project"

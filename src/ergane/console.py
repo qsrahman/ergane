@@ -26,7 +26,7 @@ from prompt_toolkit.formatted_text import AnyFormattedText, FormattedText
 from prompt_toolkit.output import Output
 from prompt_toolkit.styles import Style
 
-from muagent.tools import Tool
+from ergane.tools import Tool
 
 # The look of what is not a reply: the colours are the terminal's own (ANSI names).
 _STYLE = Style.from_dict(

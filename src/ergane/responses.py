@@ -13,8 +13,8 @@ from openai import APIConnectionError, OpenAI
 from openai.types.responses import FunctionToolParam, Response, ResponseInputParam
 from openai.types.responses.response_create_params import ResponseCreateParamsBase
 
-from muagent.config import Config
-from muagent.errors import StreamCut, TurnError
+from ergane.config import Config
+from ergane.errors import StreamCut, TurnError
 
 # How many times a round is sent again when its stream breaks before any text of the
 # reply has reached the user. The SDK retries a request that fails to start, but not
@@ -122,7 +122,7 @@ class Responder:
             "model": self.settings.model,
             "instructions": instructions,
             # store=False means the server keeps no history, so reasoning items are
-            # resent by muagent in the input; their encrypted content is requested
+            # resent by ergane in the input; their encrypted content is requested
             # here, otherwise a reasoning model cannot use it (and may fail the
             # request) when turning back to a tool to answer.
             "include": ["reasoning.encrypted_content"],

@@ -10,6 +10,13 @@ import pytest
 from openai import APIConnectionError, BadRequestError, OpenAI
 from openai.types.responses import Response, ResponseInputParam
 
+from ergane.agent import Agent
+from ergane.context import estimate_tokens
+from ergane.errors import TurnError, describe_error
+from ergane.outputs import DROPPED_OUTPUT, IMAGE_REFUSED
+from ergane.prompts import SERVER_NOTES, SYSTEM_PROMPT, SYSTEM_PROMPT_NO_TOOLS
+from ergane.responses import STREAM_RETRIES, response_problem
+from ergane.tools import MAX_OUTPUT_CHARS, Image, Tool, ToolOutput
 from fake_api import (
     FUNCTION_CALL,
     REASONING_ITEM,
@@ -21,13 +28,6 @@ from fake_api import (
     make_response,
 )
 from helpers import make_config, make_context, tool_with
-from muagent.agent import Agent
-from muagent.context import estimate_tokens
-from muagent.errors import TurnError, describe_error
-from muagent.outputs import DROPPED_OUTPUT, IMAGE_REFUSED
-from muagent.prompts import SERVER_NOTES, SYSTEM_PROMPT, SYSTEM_PROMPT_NO_TOOLS
-from muagent.responses import STREAM_RETRIES, response_problem
-from muagent.tools import MAX_OUTPUT_CHARS, Image, Tool, ToolOutput
 
 
 @pytest.mark.parametrize("streaming", [True, False])
@@ -1266,8 +1266,8 @@ def test_the_agent_needs_nothing_of_mcp():
     import sys
 
     code = (
-        "import sys, muagent.agent; "
-        "loaded = [m for m in ('muagent.mcp_client', 'muagent.mcp_hub') "
+        "import sys, ergane.agent; "
+        "loaded = [m for m in ('ergane.mcp_client', 'ergane.mcp_hub') "
         "if m in sys.modules]; "
         "print(loaded)"
     )

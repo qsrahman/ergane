@@ -35,24 +35,24 @@ from openai.types.responses import (
     ResponseInputParam,
 )
 
-from muagent.compaction import SUMMARY_MAX_TOKENS, Compactor
-from muagent.config import Config
-from muagent.context import Context, as_dicts, estimate_tokens
-from muagent.errors import TurnError, is_context_overflow, is_images_rejected
-from muagent.outputs import (
+from ergane.compaction import SUMMARY_MAX_TOKENS, Compactor
+from ergane.config import Config
+from ergane.context import Context, as_dicts, estimate_tokens
+from ergane.errors import TurnError, is_context_overflow, is_images_rejected
+from ergane.outputs import (
     answer_open_calls,
     drop_images,
     drop_outputs,
     function_output,
 )
-from muagent.prompts import (
+from ergane.prompts import (
     COMPACT_PROMPT,
     SERVER_NOTES,
     SYSTEM_PROMPT,
     SYSTEM_PROMPT_NO_TOOLS,
 )
-from muagent.responses import NO_TEXT, Responder, response_problem
-from muagent.tools import Tool, ToolOutput
+from ergane.responses import NO_TEXT, Responder, response_problem
+from ergane.tools import Tool, ToolOutput
 
 # The reason in the note that closes a turn the user stopped.
 INTERRUPTED = "interrupted by the user"
@@ -69,7 +69,7 @@ class _Running:
     """A tool call running on a thread of its own, which ends when the call does.
 
     The thread is a daemon: a call that cannot be stopped (a plain function) must not
-    keep muagent from exiting.
+    keep ergane from exiting.
     """
 
     def __init__(

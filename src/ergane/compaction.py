@@ -15,10 +15,10 @@ from collections.abc import Callable
 
 from openai.types.responses import ResponseInputParam
 
-from muagent.config import Config
-from muagent.context import Context, as_dicts
-from muagent.errors import TurnError, describe_error
-from muagent.outputs import output_text
+from ergane.config import Config
+from ergane.context import Context, as_dicts
+from ergane.errors import TurnError, describe_error
+from ergane.outputs import output_text
 
 # The summary of old turns may have this many tokens.
 SUMMARY_MAX_TOKENS = 8000

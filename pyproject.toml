@@ -1,5 +1,5 @@
 [project]
-name = "muagent"
+name = "ergane"
 version = "0.1.0"
 description = "Minimal terminal chat agent built on the OpenAI Responses API"
 readme = "README.md"
@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-muagent = "muagent.cli:main"
+ergane = "ergane.cli:main"
 
 [project.optional-dependencies]
 mcp = [
@@ -43,7 +43,7 @@ wheel-exclude = ["**/.DS_Store"]
 testpaths = ["tests"]
 
 [tool.ruff]
-# src/ and tests/ hold first-party modules (muagent, fake_api) for import sorting.
+# src/ and tests/ hold first-party modules (ergane, fake_api) for import sorting.
 src = ["src", "tests"]
 
 [tool.ruff.lint]

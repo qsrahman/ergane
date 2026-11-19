@@ -1,6 +1,6 @@
 """A stdio MCP server for the tests, with one tool for each case a client must handle.
 
-The tests start it as a subprocess, the way muagent starts a real server, so they go
+The tests start it as a subprocess, the way ergane starts a real server, so they go
 through the real SDK client and the real transport: over stdio for `python
 fake_mcp_server.py`, or over streamable HTTP on a port for `python fake_mcp_server.py
 PORT`.

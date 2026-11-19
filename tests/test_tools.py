@@ -7,8 +7,8 @@ from typing import Annotated, Any
 import pytest
 from pydantic import Field
 
-from muagent import builtin
-from muagent.tools import (
+from ergane import builtin
+from ergane.tools import (
     MAX_OUTPUT_CHARS,
     Image,
     Tool,
@@ -371,7 +371,7 @@ class TestToolsIn:
             f'\n{decorator}\ndef {n}() -> str:\n    """Do {n}."""\n    return "{n}"\n'
             for n in names
         )
-        return "from muagent.tools import tool\n" + body
+        return "from ergane.tools import tool\n" + body
 
     def test_a_tool_in_a_module_is_offered(self, package):
         found = tools_in(package({"files": self.defining("look")}))

@@ -10,12 +10,12 @@ from typing import TYPE_CHECKING
 from openai.types.shared import ReasoningEffort
 from pydantic import TypeAdapter, ValidationError
 
-from muagent.config import EFFORTS
-from muagent.context import estimate_tokens
-from muagent.errors import TurnError, describe_error
+from ergane.config import EFFORTS
+from ergane.context import estimate_tokens
+from ergane.errors import TurnError, describe_error
 
 if TYPE_CHECKING:
-    from muagent.repl import Repl
+    from ergane.repl import Repl
 
 # A command handler gets the REPL and the text after the command name (or ""). It
 # returns a short status message for the REPL to show, or None.
@@ -123,7 +123,7 @@ def clear(repl: Repl, args: str) -> None:
 @command("/exit")
 @command("/quit")
 def stop(repl: Repl, args: str) -> None:
-    """Quit muagent."""
+    """Quit ergane."""
     repl.running = False
 
 

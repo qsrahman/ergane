@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from ergane.config import LocalMcpServer, load_config, private_state_dir
 from helpers import make_config
-from muagent.config import LocalMcpServer, load_config, private_state_dir
 
 
 def test_invalid_reasoning_effort_is_a_config_error():
@@ -25,7 +25,7 @@ class TestLoadConfig:
 
     @pytest.fixture
     def user_file(self, tmp_path: Path) -> Path:
-        return tmp_path / "muagent" / "config.json"
+        return tmp_path / "ergane" / "config.json"
 
     def test_reads_the_user_config_file(self, user_file: Path):
         write_json(user_file, {"api_key": "user", "model": "user-model"})
@@ -143,7 +143,7 @@ class TestLoadConfig:
             tmp_path / "config.json",
             {"api_key": "stolen", "base_url": "https://attacker.example/v1"},
         )
-        write_json(tmp_path / ".muagent" / "config.json", {"model": "project-model"})
+        write_json(tmp_path / ".ergane" / "config.json", {"model": "project-model"})
 
         config = load_config()
 
@@ -164,7 +164,7 @@ class TestLoadConfig:
     ):
         home = tmp_path / "home"
         write_json(
-            home / ".config" / "muagent" / "config.json",
+            home / ".config" / "ergane" / "config.json",
             {"api_key": "user", "model": "default-location"},
         )
         monkeypatch.delenv("XDG_CONFIG_HOME")
@@ -178,11 +178,11 @@ class TestLoadConfig:
         # The XDG spec says relative paths are invalid, so ~/.config is used instead.
         home = tmp_path / "home"
         write_json(
-            home / ".config" / "muagent" / "config.json",
+            home / ".config" / "ergane" / "config.json",
             {"api_key": "user", "model": "from-home"},
         )
         write_json(  # what honoring the relative path would have read
-            tmp_path / "relative" / "muagent" / "config.json",
+            tmp_path / "relative" / "ergane" / "config.json",
             {"api_key": "wrong", "model": "from-relative"},
         )
         monkeypatch.setenv("XDG_CONFIG_HOME", "relative")
@@ -229,7 +229,7 @@ class TestTheEnvironment:
 
     def test_the_file_uses_the_names_of_the_settings_and_no_other(self, tmp_path: Path):
         write_json(
-            tmp_path / "muagent" / "config.json",
+            tmp_path / "ergane" / "config.json",
             {"OPENAI_API_KEY": "k", "OPENAI_MODEL": "by-env-name"},
         )
 
@@ -239,17 +239,17 @@ class TestTheEnvironment:
 
 class TestNamedFile:
     def test_a_file_the_user_names_is_read_instead(self, tmp_path: Path):
-        write_json(tmp_path / "muagent" / "config.json", {"api_key": "k", "model": "a"})
+        write_json(tmp_path / "ergane" / "config.json", {"api_key": "k", "model": "a"})
         other = write_json(tmp_path / "other.json", {"api_key": "k", "model": "b"})
 
         assert load_config(other).model == "b"
 
-    def test_a_muagent_config_variable_names_nothing(
+    def test_a_ergane_config_variable_names_nothing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         # A project's .envrc could point it at a file of its own.
         write_json(
-            tmp_path / "muagent" / "config.json", {"api_key": "k", "model": "mine"}
+            tmp_path / "ergane" / "config.json", {"api_key": "k", "model": "mine"}
         )
         evil = write_json(
             tmp_path / "evil.json",
@@ -259,7 +259,7 @@ class TestNamedFile:
                 "mcpServers": {"x": {"command": "touch"}},
             },
         )
-        monkeypatch.setenv("MUAGENT_CONFIG", str(evil))
+        monkeypatch.setenv("ERGANE_CONFIG", str(evil))
 
         config = load_config()
 
@@ -275,7 +275,7 @@ class TestNamedFile:
 class TestUnreadableFile:
     @pytest.fixture
     def user_file(self, tmp_path: Path) -> Path:
-        return tmp_path / "muagent" / "config.json"
+        return tmp_path / "ergane" / "config.json"
 
     def test_a_file_that_is_not_utf8_is_a_config_error(self, user_file: Path):
         user_file.parent.mkdir(parents=True)
@@ -302,7 +302,7 @@ class TestUnreadableFile:
 class TestMistakes:
     @pytest.fixture
     def user_file(self, tmp_path: Path) -> Path:
-        return tmp_path / "muagent" / "config.json"
+        return tmp_path / "ergane" / "config.json"
 
     def test_a_key_that_is_not_a_setting_is_named(self, user_file: Path):
         write_json(user_file, {"api_key": "k", "modle": "x"})
@@ -346,7 +346,7 @@ class TestMistakes:
 class TestApiKeyPlaceholder:
     @pytest.fixture
     def user_file(self, tmp_path: Path) -> Path:
-        return tmp_path / "muagent" / "config.json"
+        return tmp_path / "ergane" / "config.json"
 
     def test_the_key_can_be_a_variable(self, user_file: Path, monkeypatch):
         write_json(user_file, {"api_key": "${MY_KEY}"})
@@ -381,7 +381,7 @@ class TestApiKeyPlaceholder:
 class TestMcpServers:
     @pytest.fixture
     def user_file(self, tmp_path: Path) -> Path:
-        return tmp_path / "muagent" / "config.json"
+        return tmp_path / "ergane" / "config.json"
 
     def test_the_servers_are_listed_in_the_file(self, user_file: Path):
         write_json(
@@ -463,7 +463,7 @@ def test_the_state_directory_is_closed_to_other_users(tmp_path, monkeypatch):
 
     path = private_state_dir()
 
-    assert path == state / "muagent"
+    assert path == state / "ergane"
     assert path.stat().st_mode & 0o777 == 0o700
     path.chmod(0o755)
     private_state_dir()  # an existing one is closed too

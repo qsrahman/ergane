@@ -8,13 +8,13 @@ import pytest
 from openai import OpenAI
 from pydantic import TypeAdapter
 
+from ergane.agent import Agent
+from ergane.config import McpServerConfig
+from ergane.mcp_client import McpClient
+from ergane.mcp_hub import McpHub
+from ergane.tools import Tool
 from fake_api import FakeResponsesHandler
 from helpers import FAKE, fake_config, make_config, serve_http
-from muagent.agent import Agent
-from muagent.config import McpServerConfig
-from muagent.mcp_client import McpClient
-from muagent.mcp_hub import McpHub
-from muagent.tools import Tool
 
 
 @pytest.fixture(autouse=True)
@@ -28,7 +28,7 @@ def isolate_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
-    # The one variable muagent reads (see config._Environment).
+    # The one variable ergane reads (see config._Environment).
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
 

@@ -4,13 +4,13 @@ from pathlib import Path
 
 import pytest
 
+from ergane.commands import COMMANDS, Command, command
+from ergane.config import LocalMcpServer
+from ergane.context import estimate_tokens
+from ergane.mcp_hub import McpHub, ServerStatus
+from ergane.tools import Tool
 from fake_api import TEXT
 from helpers import anchor, fake_config, hanging_config, run_repl
-from muagent.commands import COMMANDS, Command, command
-from muagent.config import LocalMcpServer
-from muagent.context import estimate_tokens
-from muagent.mcp_hub import McpHub, ServerStatus
-from muagent.tools import Tool
 
 
 class TestCommandsWithAgent:
@@ -274,7 +274,7 @@ class TestCommandDefinition:
 
     def test_a_handler_needs_a_docstring(self, monkeypatch):
         registry: dict = {}
-        monkeypatch.setattr("muagent.commands.COMMANDS", registry)
+        monkeypatch.setattr("ergane.commands.COMMANDS", registry)
 
         with pytest.raises(ValueError, match="Command /probe needs a docstring"):
             command("/probe")(lambda repl, args: None)
@@ -283,7 +283,7 @@ class TestCommandDefinition:
 
     def test_the_description_is_the_first_line_of_the_docstring(self, monkeypatch):
         registry: dict = {}
-        monkeypatch.setattr("muagent.commands.COMMANDS", registry)
+        monkeypatch.setattr("ergane.commands.COMMANDS", registry)
 
         @command("/probe")
         def probe(repl, args):

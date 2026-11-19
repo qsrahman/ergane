@@ -7,11 +7,11 @@ from prompt_toolkit.data_structures import Size
 from prompt_toolkit.formatted_text import fragment_list_to_text, to_formatted_text
 from prompt_toolkit.output.vt100 import Vt100_Output
 
+from ergane.agent import Agent
+from ergane.console import Console, _room, sanitize  # pyright: ignore[reportPrivateUsage]
+from ergane.errors import TurnError
+from ergane.tools import Tool
 from helpers import make_config, run_repl
-from muagent.agent import Agent
-from muagent.console import Console, _room, sanitize  # pyright: ignore[reportPrivateUsage]
-from muagent.errors import TurnError
-from muagent.tools import Tool
 
 
 class TestSanitize:

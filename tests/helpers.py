@@ -11,12 +11,12 @@ from pathlib import Path
 import pytest
 from openai.types.responses import ResponseInputParam
 
-from muagent.agent import Agent
-from muagent.commands import COMMANDS
-from muagent.config import Config, LocalMcpServer
-from muagent.mcp_hub import McpHub
-from muagent.repl import Repl
-from muagent.tools import Tool
+from ergane.agent import Agent
+from ergane.commands import COMMANDS
+from ergane.config import Config, LocalMcpServer
+from ergane.mcp_hub import McpHub
+from ergane.repl import Repl
+from ergane.tools import Tool
 
 
 def make_context(turns: int) -> ResponseInputParam:

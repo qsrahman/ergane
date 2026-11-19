@@ -6,24 +6,24 @@ from typing import cast
 import pytest
 from openai.types.responses import ResponseInputParam
 
-from fake_api import TEXT
-from helpers import anchor, make_config, tool_with
-from muagent.compaction import (
+from ergane.compaction import (
     COMPACT_FAILURES,
     SUMMARY_MAX_TOKENS,
     Compactor,
     transcript,
 )
-from muagent.context import Context
-from muagent.errors import (
+from ergane.context import Context
+from ergane.errors import (
     TurnError,
     describe_error,
     is_context_overflow,
     is_images_rejected,
 )
-from muagent.outputs import PRUNE_CHARS, function_output
-from muagent.prompts import COMPACT_PROMPT
-from muagent.tools import Image
+from ergane.outputs import PRUNE_CHARS, function_output
+from ergane.prompts import COMPACT_PROMPT
+from ergane.tools import Image
+from fake_api import TEXT
+from helpers import anchor, make_config, tool_with
 
 
 def old_turns(count: int = 10, marker: str = "") -> list:
@@ -576,8 +576,8 @@ class TestCompactor:
         import sys
 
         code = (
-            "import sys, muagent.compaction; "
-            "print([m for m in ('muagent.agent',) if m in sys.modules])"
+            "import sys, ergane.compaction; "
+            "print([m for m in ('ergane.agent',) if m in sys.modules])"
         )
         result = subprocess.run(
             [sys.executable, "-c", code], capture_output=True, text=True, check=True

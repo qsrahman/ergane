@@ -6,9 +6,9 @@ turn through the code; this file keeps what a change must not break.
 
 ## Overview
 
-`muagent` is a minimal interactive terminal chat agent on the OpenAI **Responses API**
-(`src/muagent/`, `src` layout). Its tools come from MCP servers listed in
-`config.json` and from the Python functions in `src/muagent/builtin/` (none yet); with
+`ergane` is a minimal interactive terminal chat agent on the OpenAI **Responses API**
+(`src/ergane/`, `src` layout). Its tools come from MCP servers listed in
+`config.json` and from the Python functions in `src/ergane/builtin/` (none yet); with
 no tool at all it is a plain chat.
 
 ## Commands
@@ -18,16 +18,16 @@ Uses `uv` with Python 3.14 (`.python-version`, `requires-python >= 3.14`).
 ```bash
 uv sync              # install dependencies (including pytest and mcp) into .venv
 uv sync --extra mcp  # what a user needs for MCP servers; `mcp` is an optional extra
-uv run muagent       # start the REPL; same as `uv run python -m muagent`
+uv run ergane       # start the REPL; same as `uv run python -m ergane`
 uv run pytest        # run the tests
 uv run pytest tests/test_repl.py::TestRepl::test_strips_input_and_skips_blank_lines  # one test
 uv run ruff check . && uv run ruff format --check .   # lint and format check
 uv run pyright src tests   # type check
 ```
 
-The package is built with `uv_build` (needs `src/muagent/__init__.py`); `uv sync` installs
-it editable; the script is `muagent.cli:main`. Tests import modules directly
-(`from muagent.agent import Agent`).
+The package is built with `uv_build` (needs `src/ergane/__init__.py`); `uv sync` installs
+it editable; the script is `ergane.cli:main`. Tests import modules directly
+(`from ergane.agent import Agent`).
 
 ## Tests
 
@@ -41,7 +41,7 @@ it editable; the script is `muagent.cli:main`. Tests import modules directly
   `test_mcp_hub.py` start it as a subprocess (`FAKE`, `serve_http` in `helpers.py`; the
   `make_server`, `http_url` and `tools` fixtures in `conftest.py`).
 - The autouse `isolate_config` fixture runs each test in an empty `tmp_path` that is
-  also `XDG_CONFIG_HOME`, and clears `OPENAI_API_KEY`, the one variable muagent reads.
+  also `XDG_CONFIG_HOME`, and clears `OPENAI_API_KEY`, the one variable ergane reads.
 - Test files mirror the modules (`test_mcp_config.py` tests the server models of `config.py`), plus `test_compaction.py` (summaries, shortened
   results, the too-long retry) and `test_fake_api.py`. Helpers (`make_config`,
   `make_context`, `run_repl`, `tool_with`) are in `tests/helpers.py`; the `client` and
@@ -59,7 +59,7 @@ it editable; the script is `muagent.cli:main`. Tests import modules directly
 ## Configuration
 
 Highest first: the command-line flags, the user's
-`$XDG_CONFIG_HOME/muagent/config.json` (default `~/.config/muagent/`), the defaults.
+`$XDG_CONFIG_HOME/ergane/config.json` (default `~/.config/ergane/`), the defaults.
 The environment has one variable, `OPENAI_API_KEY`, which beats `api_key` in the file;
 there is none for any other setting (a variable for `base_url` would let a project's
 environment send the key and every prompt elsewhere, one for the servers would start a
@@ -74,7 +74,7 @@ The keys, their flags and their defaults are the table in
 
 MCP servers are `mcpServers` in the same file (`Config.mcp_servers`), and only there: a
 server is a program, so neither the environment nor a project's files may define one.
-Each server's stderr goes to `$XDG_STATE_HOME/muagent/NAME.log`; the state directory holds
+Each server's stderr goes to `$XDG_STATE_HOME/ergane/NAME.log`; the state directory holds
 the prompt history too and is made `0700`.
 
 ## Architecture
@@ -101,7 +101,7 @@ The modules, in dependency order (each imports only from those above it):
   `ServerStatus` per server (`McpHub.statuses`, by name), which records what became of it
   for `/servers`; `reconnect` starts a server again through the same `_Startup`.
 - `errors.py`, `prompts.py`: `TurnError`, `StreamCut`, `describe_error`,
-  `is_context_overflow`, `is_images_rejected`; the three prompts as text. They import nothing of muagent.
+  `is_context_overflow`, `is_images_rejected`; the three prompts as text. They import nothing of ergane.
 - `context.py`: `Context` (the history and the summary) and `estimate_tokens()`.
 - `outputs.py`: the results of tools in the history: their form (`function_output`,
   pictures) and how they are made to fit (`drop_images`, `shorten`, `drop_outputs`,
@@ -187,7 +187,7 @@ What must stay true:
   the program behaves: the user sees each tool call but not its result, a denied call
   comes back as `The user denied this call.`, tool results are untrusted text, and a
   scratch script goes in the system's temporary location and is deleted afterwards
-  (a request, not a guarantee: muagent tracks no files). If one of these changes in the
+  (a request, not a guarantee: ergane tracks no files). If one of these changes in the
   code, change the prompt; `test_the_prompt_*` points at the words. The with-tools
   section is absent from `SYSTEM_PROMPT_NO_TOOLS`, which never mentions calls.
 - **Test a prompt change against the models, not by reading it.** A harmless-looking

@@ -1,8 +1,8 @@
 import pytest
 from openai.types.responses import ResponseInputParam
 
+from ergane.context import Context, as_dicts, estimate_tokens
 from helpers import make_context
-from muagent.context import Context, as_dicts, estimate_tokens
 
 ROOMY = 10_000  # a token budget that the tests which don't trim never reach
 

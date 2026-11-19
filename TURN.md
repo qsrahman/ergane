@@ -6,7 +6,7 @@ model keeps asking for tool calls until it answers with text.
 
 This page follows one turn through the code: what is sent, what is kept, what you
 see, and every way a turn can end. Functions are named rather than numbered by
-line, because lines move. Everything is in [`src/muagent/`](src/muagent/).
+line, because lines move. Everything is in [`src/ergane/`](src/ergane/).
 
 ## At a glance
 
@@ -49,7 +49,7 @@ that `Repl.ask` hands it, which are methods of `Console`:
 
 - `Repl.run` reads a prompt with the prompt_toolkit session (plain `input("> ")` when input or
   output is redirected) and strips it. A pasted block arrives as one prompt, newlines
-  included, and so does a prompt with lines added by hand (Alt-Enter, Ctrl-J). A blank line is skipped. End of input (Ctrl-D) ends muagent, but at a terminal, once there is a conversation, it asks for a second Ctrl-D first (`[Press Ctrl-D again, or type /exit, to quit]`, counted together with Ctrl-C). Ctrl-C clears the line being typed; on an empty line it
+  included, and so does a prompt with lines added by hand (Alt-Enter, Ctrl-J). A blank line is skipped. End of input (Ctrl-D) ends ergane, but at a terminal, once there is a conversation, it asks for a second Ctrl-D first (`[Press Ctrl-D again, or type /exit, to quit]`, counted together with Ctrl-C). Ctrl-C clears the line being typed; on an empty line it
   asks for a second Ctrl-C in a row (`[Press Ctrl-C again, or type /exit, to quit]`), and any prompt
   in between starts the count again.
 - `Repl.handle` lowercases the first word and looks it up among the slash commands.
@@ -148,7 +148,7 @@ both modes the text is shown **before** the status is checked, so a partial repl
 never hidden.
 
 Two layers retry a request. The SDK retries one that fails to start (connection
-errors, 408, 409, 429 and 5xx, twice), but not one that breaks halfway. muagent does
+errors, 408, 409, 429 and 5xx, twice), but not one that breaks halfway. ergane does
 that: if a stream **ends with no final event and no `error` event**, or **loses its
 connection after it began**, and **no reply text has been shown yet**, the same
 request is sent again, up to twice, with a notice such as `[Stream ended without a
@@ -197,7 +197,7 @@ with input or output redirected it is the typed line `Allow name {args}? [y/N/a]
   way: it shows the arguments in full if they fit the terminal, otherwise with the middle
   of long values left out, and then offers to print everything and ask again (`?`: the
   menu's fourth option, "Show full arguments", or `[y/N/a/?]` typed). `a` allows the
-  call and every later call to that tool until muagent ends (`Agent.always_allowed`, by
+  call and every later call to that tool until ergane ends (`Agent.always_allowed`, by
   tool name). At a terminal the question is a menu (`Console.choose`, which `Repl`
   supplies as `choose`, in `terminal.py`; Deny is first, so Enter denies); typed, anything but `y` and
   `a` is a no, and so is the end of input. Ctrl-C stops the turn (§8).
@@ -376,7 +376,7 @@ This is real output, from three MCP servers that are copies of the test server
 (14 tools each, so 42). `docs` is marked `read_only`; `files` and `notes` are not:
 
 ```
-muagent · gemma4:cloud · /help for commands
+ergane · gemma4:cloud · /help for commands
 
 ❯ What is 1 plus 2? Use the docs__add tool. Answer in one short sentence.
 
@@ -398,7 +398,7 @@ The tool call was denied, but 5 plus 6 is 11.
 ```
 
 The first turn took two rounds. In round one the model answered with a call to
-`docs__add`; muagent ran it at once (the tool is read-only), printed the line, and
+`docs__add`; ergane ran it at once (the tool is read-only), printed the line, and
 sent the call and its result `3` back. In round two the model answered with text, the
 turn ended, and it was saved. The second turn is the same with a question in the
 middle. In the third, the output of the call was `The user denied this call.`, and
@@ -408,18 +408,18 @@ the model still answered.
 
 | What                                  | Where                                                        |
 |---------------------------------------|--------------------------------------------------------------|
-| reading input, commands, `ask`           | `Repl` in [`repl.py`](src/muagent/repl.py), [`commands.py`](src/muagent/commands.py) |
-| the prompt, the toolbar, the permission menu | [`terminal.py`](src/muagent/terminal.py) |
-| the turn, the rounds, the stops       | `Agent.run_turn`, `_ask`, `_run_round` in [`agent.py`](src/muagent/agent.py) |
-| the request and the stream            | `Responder` in [`responses.py`](src/muagent/responses.py)    |
-| calls and permissions                 | `Agent._run_tools`, `Tool` in [`tools.py`](src/muagent/tools.py) |
-| history, summary, trimming, saving    | `Context` in [`context.py`](src/muagent/context.py)          |
-| summarizing                           | `Compactor` in [`compaction.py`](src/muagent/compaction.py) |
-| the too-long retry                    | `_shrink` in [`agent.py`](src/muagent/agent.py) |
-| pruning results                       | `drop_outputs`, `drop_images` in [`outputs.py`](src/muagent/outputs.py) |
-| transcript, summary check             | `transcript`, `extract_summary` in [`compaction.py`](src/muagent/compaction.py) |
-| errors and how they are worded        | [`errors.py`](src/muagent/errors.py)                         |
-| everything printed                    | `Console` in [`console.py`](src/muagent/console.py)          |
-| MCP servers                           | [`mcp_client.py`](src/muagent/mcp_client.py) (one) and [`mcp_hub.py`](src/muagent/mcp_hub.py) (all of them), their config in [`config.py`](src/muagent/config.py) |
-| the prompts                           | [`prompts.py`](src/muagent/prompts.py)                       |
+| reading input, commands, `ask`           | `Repl` in [`repl.py`](src/ergane/repl.py), [`commands.py`](src/ergane/commands.py) |
+| the prompt, the toolbar, the permission menu | [`terminal.py`](src/ergane/terminal.py) |
+| the turn, the rounds, the stops       | `Agent.run_turn`, `_ask`, `_run_round` in [`agent.py`](src/ergane/agent.py) |
+| the request and the stream            | `Responder` in [`responses.py`](src/ergane/responses.py)    |
+| calls and permissions                 | `Agent._run_tools`, `Tool` in [`tools.py`](src/ergane/tools.py) |
+| history, summary, trimming, saving    | `Context` in [`context.py`](src/ergane/context.py)          |
+| summarizing                           | `Compactor` in [`compaction.py`](src/ergane/compaction.py) |
+| the too-long retry                    | `_shrink` in [`agent.py`](src/ergane/agent.py) |
+| pruning results                       | `drop_outputs`, `drop_images` in [`outputs.py`](src/ergane/outputs.py) |
+| transcript, summary check             | `transcript`, `extract_summary` in [`compaction.py`](src/ergane/compaction.py) |
+| errors and how they are worded        | [`errors.py`](src/ergane/errors.py)                         |
+| everything printed                    | `Console` in [`console.py`](src/ergane/console.py)          |
+| MCP servers                           | [`mcp_client.py`](src/ergane/mcp_client.py) (one) and [`mcp_hub.py`](src/ergane/mcp_hub.py) (all of them), their config in [`config.py`](src/ergane/config.py) |
+| the prompts                           | [`prompts.py`](src/ergane/prompts.py)                       |
 | the layout of an exchange, pinned     | `TestReplRendering` in [`tests/test_repl.py`](tests/test_repl.py) |

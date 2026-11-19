@@ -2,8 +2,8 @@ from typing import Any
 
 from openai.types.responses import ResponseInputParam
 
-from muagent.context import IMAGE_TOKENS, as_dicts, estimate_tokens
-from muagent.outputs import (
+from ergane.context import IMAGE_TOKENS, as_dicts, estimate_tokens
+from ergane.outputs import (
     DROPPED_OUTPUT,
     IMAGE_DROPPED,
     IMAGE_REFUSED,
@@ -13,7 +13,7 @@ from muagent.outputs import (
     function_output,
     output_text,
 )
-from muagent.tools import Image
+from ergane.tools import Image
 
 PICTURE = Image("A" * 100_000, "image/png")
 

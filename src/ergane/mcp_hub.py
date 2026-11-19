@@ -1,4 +1,4 @@
-"""The MCP servers while muagent runs: start them, keep them, start one again.
+"""The MCP servers while ergane runs: start them, keep them, start one again.
 
 One server is `mcp_client.py`. This is what a program does with all of them: start them
 (`McpHub.start`, or `begin` and `take` in the background), report what became
@@ -37,9 +37,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from muagent.config import McpServerConfig, UnsetVariableError, fill_placeholders
-from muagent.mcp_client import McpClient, McpServerError
-from muagent.tools import Tool
+from ergane.config import McpServerConfig, UnsetVariableError, fill_placeholders
+from ergane.mcp_client import McpClient, McpServerError
+from ergane.tools import Tool
 
 if TYPE_CHECKING:
     from mcp_types import Tool as ToolDefinition
@@ -283,11 +283,11 @@ class ServerUpdate:
 
 
 class McpHub:
-    """The servers while muagent runs.
+    """The servers while ergane runs.
 
     `start` (or `begin` and `take`) starts them once. The hub keeps them after that,
     and so can start one again (`reconnect`: a server that failed to start, or hangs, costs a restart
-    of muagent otherwise, and the conversation with it). That does not touch the
+    of ergane otherwise, and the conversation with it). That does not touch the
     agent: it returns what to change, and the caller applies it, so that the tools do
     not change in the middle of a turn.
     """
@@ -323,7 +323,7 @@ class McpHub:
     def start(self, on_notice: Callable[[str], None]) -> list[Tool]:
         """Start the servers, all at once, wait for them, and return their tools.
 
-        A server that fails is reported and left out: it must not stop muagent. One
+        A server that fails is reported and left out: it must not stop ergane. One
         that is switched off (`enabled` false) is left out without a word, and so is
         one that starts: the banner counts its tools. Servers that never answer delay
         the start by the longest startup timeout, not by the sum (see `_Startup`).

@@ -10,13 +10,13 @@ from pathlib import Path
 
 from prompt_toolkit import PromptSession
 
-from muagent.agent import Agent
-from muagent.commands import Command
-from muagent.console import Console
-from muagent.errors import TurnError, describe_error
-from muagent.mcp_hub import McpHub, ServerUpdate
-from muagent.terminal import PROMPT, CommandCompleter, choose, toolbar
-from muagent.tools import tool_clash
+from ergane.agent import Agent
+from ergane.commands import Command
+from ergane.console import Console
+from ergane.errors import TurnError, describe_error
+from ergane.mcp_hub import McpHub, ServerUpdate
+from ergane.terminal import PROMPT, CommandCompleter, choose, toolbar
+from ergane.tools import tool_clash
 
 
 class Repl:
@@ -60,7 +60,7 @@ class Repl:
     def run(self) -> None:
         """Read and handle prompts until the user quits."""
         self.console.write(
-            f"muagent · {self.agent.config.model} · /help for commands\n\n"
+            f"ergane · {self.agent.config.model} · /help for commands\n\n"
         )
 
         self.running = True

@@ -14,11 +14,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from ergane.config import LocalMcpServer, RemoteMcpServer
+from ergane.mcp_client import McpClient, McpServerError, _list_tools
+from ergane.tools import MAX_OUTPUT_CHARS, Tool
 from fake_api import TEXT
 from helpers import FAKE, fake_config, serve_http
-from muagent.config import LocalMcpServer, RemoteMcpServer
-from muagent.mcp_client import McpClient, McpServerError, _list_tools
-from muagent.tools import MAX_OUTPUT_CHARS, Tool
 
 
 class TestTools:
@@ -125,11 +125,11 @@ class TestServer:
         assert getenv.call('{"name": "ASKED_FOR"}') == "unset"
         assert getenv.call('{"name": "GIVEN"}') == "yes"
 
-    def test_the_server_is_told_the_client_is_muagent(self, make_server):
+    def test_the_server_is_told_the_client_is_ergane(self, make_server):
         server = make_server()
         by_name = {tool.name: tool for tool in server.tools()}
 
-        assert by_name["fake__client"].call("{}") == f"muagent {version('muagent')}"
+        assert by_name["fake__client"].call("{}") == f"ergane {version('ergane')}"
 
     def test_its_stderr_goes_to_the_log_not_the_terminal(
         self, make_server, tmp_path, capfd
@@ -314,7 +314,7 @@ class TestHttp:
         self, make_server, http_url, monkeypatch
     ):
         # The server says nothing for 1.5 s; the read timeout alone would end the call.
-        monkeypatch.setattr("muagent.mcp_client._HTTP_READ_SECONDS", 0.5)
+        monkeypatch.setattr("ergane.mcp_client._HTTP_READ_SECONDS", 0.5)
         server = self.make(make_server, http_url, call_timeout=10)
         by_name = {tool.name: tool for tool in server.tools()}
 
@@ -479,7 +479,7 @@ class TestPictures:
     def test_only_the_kinds_of_picture_the_api_takes(self):
         import mcp_types
 
-        from muagent.mcp_client import _images
+        from ergane.mcp_client import _images
 
         def block(mime: str):
             return mcp_types.ImageContent(type="image", data="aGk=", mime_type=mime)
@@ -491,9 +491,9 @@ class TestPictures:
     def test_a_picture_too_large_is_left_out(self, monkeypatch):
         import mcp_types
 
-        from muagent.mcp_client import _images
+        from ergane.mcp_client import _images
 
-        monkeypatch.setattr("muagent.mcp_client._MAX_IMAGE_CHARS", 4)
+        monkeypatch.setattr("ergane.mcp_client._MAX_IMAGE_CHARS", 4)
         big = mcp_types.ImageContent(type="image", data="x" * 5, mime_type="image/png")
         small = mcp_types.ImageContent(
             type="image", data="x" * 4, mime_type="image/png"
@@ -506,7 +506,7 @@ class TestResultText:
     def test_a_text_file_the_server_embedded_is_text(self):
         import mcp_types
 
-        from muagent.mcp_client import _text
+        from ergane.mcp_client import _text
 
         file = mcp_types.EmbeddedResource(
             type="resource",
@@ -520,7 +520,7 @@ class TestResultText:
     def test_a_binary_one_and_a_link_are_named(self):
         import mcp_types
 
-        from muagent.mcp_client import _text
+        from ergane.mcp_client import _text
 
         blob = mcp_types.EmbeddedResource(
             type="resource",
@@ -533,14 +533,14 @@ class TestResultText:
         )
 
     def test_a_result_with_only_structured_content_is_that_as_json(self):
-        from muagent.mcp_client import _text
+        from ergane.mcp_client import _text
 
         assert _text(block_result(structured={"sum": 3})) == '{"sum": 3}'
 
     def test_structured_content_next_to_text_is_not_repeated(self):
         import mcp_types
 
-        from muagent.mcp_client import _text
+        from ergane.mcp_client import _text
 
         text = mcp_types.TextContent(type="text", text="3")
 
@@ -549,7 +549,7 @@ class TestResultText:
     def test_an_error_is_marked(self):
         import mcp_types
 
-        from muagent.mcp_client import _text
+        from ergane.mcp_client import _text
 
         text = mcp_types.TextContent(type="text", text="bad")
 
@@ -562,7 +562,7 @@ class TestConnectionLost:
     @pytest.fixture(autouse=True)
     def always_ask_first(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Not after 10 s of silence, as in use: no test waits that long.
-        monkeypatch.setattr("muagent.mcp_client._IDLE_SECONDS", 0)
+        monkeypatch.setattr("ergane.mcp_client._IDLE_SECONDS", 0)
 
     def kill(self, server: McpClient, tool: Tool) -> None:
         import signal
@@ -706,6 +706,6 @@ class TestInstructions:
         assert make_server().instructions == "Dates are YYYY-MM-DD."
 
     def test_long_instructions_are_cut(self, make_server, monkeypatch):
-        monkeypatch.setattr("muagent.mcp_client._MAX_INSTRUCTION_CHARS", 5)
+        monkeypatch.setattr("ergane.mcp_client._MAX_INSTRUCTION_CHARS", 5)
 
         assert make_server().instructions == "Dates…"

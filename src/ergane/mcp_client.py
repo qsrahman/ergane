@@ -1,12 +1,12 @@
 """One MCP server as tools: connect to it and offer its tools to the agent.
 
-A server is a program muagent runs and talks to over stdio, or a server it connects
+A server is a program ergane runs and talks to over stdio, or a server it connects
 to over streamable HTTP. Starting several of them, keeping them, and starting one
 again is `mcp_hub.py`.
 
-The MCP SDK is async and the rest of muagent is not, so each server runs on a
+The MCP SDK is async and the rest of ergane is not, so each server runs on a
 background thread with its own event loop, and a call blocks until the loop answers.
-The `mcp` package is imported only when a server starts, so muagent works without it
+The `mcp` package is imported only when a server starts, so ergane works without it
 as long as no server is configured.
 
 Design notes, for whoever changes this:
@@ -35,7 +35,7 @@ Design notes, for whoever changes this:
   stricter than servers, which accept `"4"` for an integer, and the server's own errors
   come back as text for the model.
 - A program does not inherit the environment, only the SDK's short allow-list plus its
-  `env`, so it never sees `OPENAI_API_KEY`; it starts in muagent's directory (there is
+  `env`, so it never sees `OPENAI_API_KEY`; it starts in ergane's directory (there is
   no `cwd` setting); its stderr goes to a log file, or it would land in the terminal.
   A url must be https unless it is loopback, and may not hold credentials; the SDK
   follows redirects only within the url's origin, so the headers go nowhere else.
@@ -58,8 +58,8 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
-from muagent.config import McpServerConfig
-from muagent.tools import Image, Tool, ToolOutput, invalid_arguments
+from ergane.config import McpServerConfig
+from ergane.tools import Image, Tool, ToolOutput, invalid_arguments
 
 if TYPE_CHECKING:
     from mcp import ClientSession
@@ -107,7 +107,7 @@ def _tool_name(server: str, tool: str, taken: set[str]) -> str:
     """Name a server's tool for the model, unique among `taken` (which it extends).
 
     The server's name is a prefix, so servers cannot clash with each other or with
-    muagent's own tools; characters the API rejects become underscores, and names
+    ergane's own tools; characters the API rejects become underscores, and names
     that collide after that get a number.
     """
     base = _DISALLOWED.sub("_", f"{server}__{tool}")[:_MAX_NAME_CHARS]
@@ -311,7 +311,7 @@ class McpClient:
         if importlib.util.find_spec("mcp") is None:
             raise McpServerError(
                 f"MCP server {self.name!r} needs the mcp package: "
-                "install muagent with its mcp extra"
+                "install ergane with its mcp extra"
             )
         log = None
         if self._config.type == "local":
@@ -321,7 +321,7 @@ class McpClient:
                 append = self._append_log or self._restarts
                 self._log = log = self._log_path.open("a" if append else "w")
                 # Server logs can hold tool arguments and other sensitive text; keep
-                # them to the user who started muagent.
+                # them to the user who started ergane.
                 with suppress(OSError):
                     self._log_path.chmod(0o600)
             except OSError as exc:
@@ -443,7 +443,7 @@ class McpClient:
                         read,
                         write,
                         client_info=Implementation(
-                            name="muagent", version=version("muagent")
+                            name="ergane", version=version("ergane")
                         ),
                     )
                 )

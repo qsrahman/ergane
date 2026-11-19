@@ -2,16 +2,16 @@
 
 A tool is a Python function the model can call. This is everything you need to write
 one, from the five-line version to what happens around a call. The code is in
-[`tools.py`](src/muagent/tools.py); [TURN.md](TURN.md) walks a whole turn.
+[`tools.py`](src/ergane/tools.py); [TURN.md](TURN.md) walks a whole turn.
 
 ## The short version
 
-Make a file in [`src/muagent/builtin/`](src/muagent/builtin/) with a function that has a
+Make a file in [`src/ergane/builtin/`](src/ergane/builtin/) with a function that has a
 docstring, type hints and `@tool`:
 
 ```python
-# src/muagent/builtin/arithmetic.py
-from muagent.tools import tool
+# src/ergane/builtin/arithmetic.py
+from ergane.tools import tool
 
 
 @tool
@@ -20,8 +20,8 @@ def add(a: int, b: int) -> str:
     return str(a + b)
 ```
 
-Start `muagent`: the tool is offered (`/tools` lists it). Nothing registers it: every
-`Tool` at the top level of a module in `builtin/` is found when `muagent` starts
+Start `ergane`: the tool is offered (`/tools` lists it). Nothing registers it: every
+`Tool` at the top level of a module in `builtin/` is found when `ergane` starts
 (`tools_in`, in `tools.py`). The order is the modules' names, then the order they are
 defined in.
 
@@ -43,7 +43,7 @@ keep it as short as that allows.
 
 The name must be letters, digits, `_` and `-` (the API refuses a request with any other),
 and unique among the tools: when two tools have one name, the first is offered and
-`muagent` says `[Tool NAME is defined twice; only the first is offered]`. Names of MCP
+`ergane` says `[Tool NAME is defined twice; only the first is offered]`. Names of MCP
 tools are `server__tool`, so a built-in name with `__` in it could clash with one; the
 built-in is kept, and a notice says which tool was not offered.
 
@@ -126,7 +126,7 @@ the network with a side effect.
 A `Tool` is called with the JSON text the model would send, and never raises:
 
 ```python
-from muagent.builtin.arithmetic import add
+from ergane.builtin.arithmetic import add
 
 assert add.call('{"a": 1, "b": 2}') == "3"
 assert add.check('{"a": "x"}') is not None  # what is wrong, without running it
@@ -142,7 +142,7 @@ for. Put the tests for a built-in tool in `tests/`, and break the code to see on
 ## What is checked when it is made
 
 `@tool` refuses a function that cannot be a tool, when the module is imported, so
-`muagent` does not start with one:
+`ergane` does not start with one:
 
 | Mistake | Error |
 |---|---|
@@ -159,5 +159,5 @@ load.
 ## Keep it light
 
 A module of `builtin/` is imported at every start. Import a heavy dependency inside the
-function that needs it, not at the top, so that starting `muagent` does not pay for it. A module whose name starts with `_` (`_helpers.py`) is skipped, for code that is not a
+function that needs it, not at the top, so that starting `ergane` does not pay for it. A module whose name starts with `_` (`_helpers.py`) is skipped, for code that is not a
 tool.

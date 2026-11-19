@@ -214,7 +214,7 @@ class Config(BaseModel):
 
 
 def _xdg_dir(variable: str, default: str) -> Path:
-    """Return the muagent directory under an XDG base directory.
+    """Return the ergane directory under an XDG base directory.
 
     An unset, empty or relative variable is ignored, as the XDG spec says, and the
     default under the home directory is used instead.
@@ -222,11 +222,11 @@ def _xdg_dir(variable: str, default: str) -> Path:
     base = Path(os.environ.get(variable, ""))
     if not base.is_absolute():
         base = Path.home() / default
-    return base / "muagent"
+    return base / "ergane"
 
 
 def private_state_dir() -> Path:
-    """Return `$XDG_STATE_HOME/muagent`, made if needed and closed to other users.
+    """Return `$XDG_STATE_HOME/ergane`, made if needed and closed to other users.
 
     It holds the prompt history and the server logs, which can contain whatever was
     pasted or logged. A directory that cannot be made or changed is left as it is:
@@ -241,14 +241,14 @@ def private_state_dir() -> Path:
 
 def config_file(path: Path | None = None) -> Path:
     """The config file in use: the one the user named, or `config.json` in
-    `$XDG_CONFIG_HOME/muagent`, which may not exist."""
+    `$XDG_CONFIG_HOME/ergane`, which may not exist."""
     return path or _xdg_dir("XDG_CONFIG_HOME", ".config") / "config.json"
 
 
 def load_config(path: Path | None = None, **flags: object) -> Config:
     """Load the settings: the flags, then the environment, then the file.
 
-    The file is `path` (`--config`), or `config.json` in `$XDG_CONFIG_HOME/muagent`, which
+    The file is `path` (`--config`), or `config.json` in `$XDG_CONFIG_HOME/ergane`, which
     may be missing; see the module docstring for why no variable or directory names it.
 
     Args:

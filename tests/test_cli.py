@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from muagent.cli import main, parse_args
+from ergane.cli import main, parse_args
 
 
 def test_main_wires_config_agent_and_repl(monkeypatch: pytest.MonkeyPatch, capsys):
@@ -16,7 +16,7 @@ def test_main_wires_config_agent_and_repl(monkeypatch: pytest.MonkeyPatch, capsy
     main(["--model", "wired-model"])
 
     out = capsys.readouterr().out
-    assert "muagent · wired-model" in out
+    assert "ergane · wired-model" in out
     assert out.endswith("Bye.\n")
 
 
@@ -34,7 +34,7 @@ def test_a_missing_key_says_where_to_put_it(tmp_path, capsys):
 
     err = capsys.readouterr().err
     assert "  - api_key: Field required" in err
-    assert f'No API key. Put "api_key" in {tmp_path / "muagent" / "config.json"}' in err
+    assert f'No API key. Put "api_key" in {tmp_path / "ergane" / "config.json"}' in err
     assert "or set the OPENAI_API_KEY environment variable" in err
 
 
@@ -106,13 +106,13 @@ def test_a_built_in_tool_is_offered_without_being_listed(
     package.mkdir()
     (package / "__init__.py").write_text("")
     (package / "look.py").write_text(
-        "from muagent.tools import tool\n\n@tool\ndef look() -> str:\n"
+        "from ergane.tools import tool\n\n@tool\ndef look() -> str:\n"
         '    """Look."""\n    return "seen"\n'
     )
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "test")
-    monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
-    monkeypatch.setattr("muagent.cli.builtin", importlib.import_module("fake_builtin"))
+    monkeypatch.setattr("ergane.cli.Repl", RecordingRepl)
+    monkeypatch.setattr("ergane.cli.builtin", importlib.import_module("fake_builtin"))
 
     main([])
 
@@ -128,15 +128,13 @@ def test_a_built_in_module_that_fails_to_load_is_reported_and_the_rest_start(
     (package / "__init__.py").write_text("")
     (package / "a_broken.py").write_text("import not_installed_anywhere\n")
     (package / "look.py").write_text(
-        "from muagent.tools import tool\n\n@tool\ndef look() -> str:\n"
+        "from ergane.tools import tool\n\n@tool\ndef look() -> str:\n"
         '    """Look."""\n    return "seen"\n'
     )
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "test")
-    monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
-    monkeypatch.setattr(
-        "muagent.cli.builtin", importlib.import_module("broken_builtin")
-    )
+    monkeypatch.setattr("ergane.cli.Repl", RecordingRepl)
+    monkeypatch.setattr("ergane.cli.builtin", importlib.import_module("broken_builtin"))
 
     main([])
 
@@ -155,13 +153,13 @@ def test_two_built_in_tools_of_one_name_are_reported_and_the_first_is_offered(
     (package / "__init__.py").write_text("")
     for module, text in (("a", "first"), ("b", "second")):
         (package / f"{module}.py").write_text(
-            "from muagent.tools import tool\n\n@tool\ndef look() -> str:\n"
+            "from ergane.tools import tool\n\n@tool\ndef look() -> str:\n"
             f'    """Look."""\n    return "{text}"\n'
         )
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "test")
-    monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
-    monkeypatch.setattr("muagent.cli.builtin", importlib.import_module("twice_builtin"))
+    monkeypatch.setattr("ergane.cli.Repl", RecordingRepl)
+    monkeypatch.setattr("ergane.cli.builtin", importlib.import_module("twice_builtin"))
 
     main([])
 
@@ -172,7 +170,7 @@ def test_two_built_in_tools_of_one_name_are_reported_and_the_first_is_offered(
 
 def test_without_an_mcp_json_the_agent_has_no_tools(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test")
-    monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
+    monkeypatch.setattr("ergane.cli.Repl", RecordingRepl)
 
     main([])
 
@@ -187,7 +185,7 @@ FAKE_SERVER = {
 
 
 def write_config_json(config_home: Path, servers: dict) -> None:
-    path = config_home / "muagent" / "config.json"
+    path = config_home / "ergane" / "config.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"mcpServers": servers}))
 
@@ -205,7 +203,7 @@ class TestMcpServers:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ):
         write_config_json(tmp_path, {"fake": FAKE_SERVER})
-        monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
+        monkeypatch.setattr("ergane.cli.Repl", RecordingRepl)
 
         main([])
 
@@ -213,14 +211,14 @@ class TestMcpServers:
         names = list(RecordingRepl.agent.tools)
         assert len(names) == 18  # the fake server's
         assert "fake__add" in names
-        assert (tmp_path / "muagent" / "fake.log").exists()
+        assert (tmp_path / "ergane" / "fake.log").exists()
 
     def test_a_server_at_a_url_in_mcp_json_gives_the_agent_its_tools(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ):
         from helpers import serve_http
 
-        monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
+        monkeypatch.setattr("ergane.cli.Repl", RecordingRepl)
         with serve_http() as url:
             write_config_json(tmp_path, {"web": {"url": url}})
 
@@ -242,7 +240,7 @@ class TestMcpServers:
                 assert agent is not None
                 CallingRepl.key = agent.tools["on__getenv"].call('{"name": "KEY"}')
 
-        monkeypatch.setattr("muagent.cli.Repl", CallingRepl)
+        monkeypatch.setattr("ergane.cli.Repl", CallingRepl)
         write_config_json(
             tmp_path,
             {
@@ -265,11 +263,11 @@ class TestMcpServers:
         assert not any(name.startswith(("off__", "unset__")) for name in tools)
         assert CallingRepl.key == "the-key"
 
-    def test_the_servers_are_stopped_when_muagent_ends(
+    def test_the_servers_are_stopped_when_ergane_ends(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ):
         write_config_json(tmp_path, {"fake": FAKE_SERVER})
-        monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
+        monkeypatch.setattr("ergane.cli.Repl", RecordingRepl)
 
         main([])
 
@@ -284,7 +282,7 @@ class TestMcpServers:
                 raise RuntimeError("repl failed")
 
         write_config_json(tmp_path, {"fake": FAKE_SERVER})
-        monkeypatch.setattr("muagent.cli.Repl", FailingRepl)
+        monkeypatch.setattr("ergane.cli.Repl", FailingRepl)
 
         with pytest.raises(RuntimeError):
             main([])
@@ -301,9 +299,9 @@ class TestMcpServers:
 
         # The banner is the first line: nothing was said of the server.
         first_line = capsys.readouterr().out.splitlines()[0]
-        assert first_line == "muagent · banner-model · /help for commands"
+        assert first_line == "ergane · banner-model · /help for commands"
 
-    def test_a_server_that_fails_does_not_stop_muagent(
+    def test_a_server_that_fails_does_not_stop_ergane(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
     ):
         write_config_json(tmp_path, {"broken": {"command": "/no/such/server"}})
@@ -315,7 +313,7 @@ class TestMcpServers:
         assert out.startswith("[MCP server 'broken' failed to start: FileNotFoundError")
         # A blank line sets the failure apart from the banner under it.
         _failure, blank, banner = out.splitlines()[:3]
-        assert blank == "" and banner.startswith("muagent · ")
+        assert blank == "" and banner.startswith("ergane · ")
         assert out.endswith("Bye.\n")
 
     def test_servers_tells_again_what_became_of_a_server_that_failed(
@@ -352,7 +350,7 @@ class TestMcpServers:
 
         assert "  fake  off: --no-mcp" in capsys.readouterr().out
 
-    def test_a_mistake_in_mcp_json_is_reported_and_muagent_exits(
+    def test_a_mistake_in_mcp_json_is_reported_and_ergane_exits(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ):
         write_config_json(tmp_path, {"fake": {"command": "x", "arg": []}})
@@ -371,7 +369,7 @@ class TestMcpServers:
         def interrupted(*args, **kwargs):
             raise KeyboardInterrupt
 
-        monkeypatch.setattr("muagent.cli.McpHub.start", interrupted)
+        monkeypatch.setattr("ergane.cli.McpHub.start", interrupted)
 
         with pytest.raises(SystemExit) as exc:
             main([])
@@ -386,14 +384,14 @@ def test_version_prints_the_version_of_the_package_and_exits(capsys):
         main(["--version"])
 
     assert exc.value.code == 0
-    assert capsys.readouterr().out == f"muagent {version('muagent')}\n"
+    assert capsys.readouterr().out == f"ergane {version('ergane')}\n"
 
 
 class TestFlags:
     @pytest.fixture(autouse=True)
     def api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("OPENAI_API_KEY", "test")
-        monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
+        monkeypatch.setattr("ergane.cli.Repl", RecordingRepl)
 
     def test_a_flag_that_is_not_given_is_not_in_the_result(self):
         assert vars(parse_args([])) == {"no_mcp": False}
@@ -425,8 +423,8 @@ class TestFlags:
         assert exc.value.code == 2
 
     def test_a_flag_wins_over_the_file(self, tmp_path: Path):
-        (tmp_path / "muagent").mkdir()
-        (tmp_path / "muagent" / "config.json").write_text(
+        (tmp_path / "ergane").mkdir()
+        (tmp_path / "ergane" / "config.json").write_text(
             json.dumps({"model": "file-model", "max_turns": 5})
         )
 
@@ -438,8 +436,8 @@ class TestFlags:
         assert agent.config.max_turns == 5  # the file, with no flag
 
     def test_default_as_the_effort_sends_none_over_the_file(self, tmp_path: Path):
-        (tmp_path / "muagent").mkdir()
-        (tmp_path / "muagent" / "config.json").write_text(
+        (tmp_path / "ergane").mkdir()
+        (tmp_path / "ergane" / "config.json").write_text(
             json.dumps({"reasoning_effort": "high"})
         )
 
@@ -487,7 +485,7 @@ class TestMcpServersInTheBackground:
     @pytest.fixture(autouse=True)
     def terminal(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setenv("OPENAI_API_KEY", "test")
-        monkeypatch.setattr("muagent.cli.terminal_session", lambda *a, **k: object())
+        monkeypatch.setattr("ergane.cli.terminal_session", lambda *a, **k: object())
         write_config_json(tmp_path, {"fake": FAKE_SERVER})
 
     def test_the_agent_starts_without_tools_and_the_hub_has_them_coming(
@@ -501,17 +499,17 @@ class TestMcpServersInTheBackground:
                 seen["hub"] = hub
                 seen["tools_at_start"] = dict(agent.tools)
 
-        monkeypatch.setattr("muagent.cli.Repl", Recording)
+        monkeypatch.setattr("ergane.cli.Repl", Recording)
 
         main([])
 
         assert seen["tools_at_start"] == {}
         assert seen["hub"] is not None
 
-    def test_the_servers_are_stopped_when_muagent_ends(
+    def test_the_servers_are_stopped_when_ergane_ends(
         self, monkeypatch: pytest.MonkeyPatch
     ):
-        monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
+        monkeypatch.setattr("ergane.cli.Repl", RecordingRepl)
 
         main([])
 
@@ -520,8 +518,8 @@ class TestMcpServersInTheBackground:
     def test_without_a_terminal_the_start_waits_for_the_servers(
         self, monkeypatch: pytest.MonkeyPatch
     ):
-        monkeypatch.setattr("muagent.cli.terminal_session", lambda *a, **k: None)
-        monkeypatch.setattr("muagent.cli.Repl", RecordingRepl)
+        monkeypatch.setattr("ergane.cli.terminal_session", lambda *a, **k: None)
+        monkeypatch.setattr("ergane.cli.Repl", RecordingRepl)
 
         main([])
 

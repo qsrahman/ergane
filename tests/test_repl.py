@@ -1,12 +1,12 @@
 import pytest
 
+from ergane.agent import Agent
+from ergane.commands import COMMANDS
+from ergane.mcp_hub import ServerUpdate
+from ergane.repl import Repl
+from ergane.tools import Tool
 from fake_api import REFUSAL, STREAM_ERROR, TEXT
 from helpers import make_config, make_context, run_repl
-from muagent.agent import Agent
-from muagent.commands import COMMANDS
-from muagent.mcp_hub import ServerUpdate
-from muagent.repl import Repl
-from muagent.tools import Tool
 
 
 class TestRepl:
@@ -203,7 +203,7 @@ class TestReplRendering:
         self.run(agent)
 
         assert capsys.readouterr().out.startswith(
-            "muagent · gpt-4o · /help for commands\n\n> /exit\n"
+            "ergane · gpt-4o · /help for commands\n\n> /exit\n"
         )
 
     def test_an_api_error_is_one_line_with_what_to_check(

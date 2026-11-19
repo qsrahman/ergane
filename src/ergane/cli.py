@@ -10,15 +10,15 @@ from typing import Any, NoReturn
 
 from pydantic import ValidationError
 
-from muagent import builtin
-from muagent.agent import Agent
-from muagent.commands import COMMANDS
-from muagent.config import EFFORTS, config_file, load_config, private_state_dir
-from muagent.console import Console
-from muagent.mcp_hub import McpHub
-from muagent.repl import Repl
-from muagent.terminal import terminal_session
-from muagent.tools import Tool, tool_clash, tools_in
+from ergane import builtin
+from ergane.agent import Agent
+from ergane.commands import COMMANDS
+from ergane.config import EFFORTS, config_file, load_config, private_state_dir
+from ergane.console import Console
+from ergane.mcp_hub import McpHub
+from ergane.repl import Repl
+from ergane.terminal import terminal_session
+from ergane.tools import Tool, tool_clash, tools_in
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -29,7 +29,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         argv: The arguments after the program name; `sys.argv[1:]` if omitted.
     """
     parser = argparse.ArgumentParser(
-        prog="muagent",
+        prog="ergane",
         argument_default=argparse.SUPPRESS,  # a flag not given is not in the result
         description="A minimal terminal chat agent on the OpenAI Responses API.",
         epilog="Each setting comes from the first of: its flag, config.json, its "
@@ -39,7 +39,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "list.",
     )
     parser.add_argument(
-        "--version", action="version", version=f"muagent {version('muagent')}"
+        "--version", action="version", version=f"ergane {version('ergane')}"
     )
     parser.add_argument(
         "--config", type=Path, metavar="FILE", help="the config file to use"

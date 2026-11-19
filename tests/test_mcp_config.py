@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from muagent.config import (
+from ergane.config import (
     LocalMcpServer,
     McpServerConfig,
     RemoteMcpServer,
@@ -181,7 +181,7 @@ class TestMcpJsonKeys:
         ids=["program", "url"],
     )
     def test_there_is_no_working_directory_setting(self, tmp_path, entry):
-        # A server starts where muagent does; a file that still has the key is
+        # A server starts where ergane does; a file that still has the key is
         # refused, and the message names it.
         with pytest.raises(
             ValidationError, match=r"mcpServers\.s\.(local|remote)\.cwd"

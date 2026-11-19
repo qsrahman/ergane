@@ -208,7 +208,7 @@ def tool(
 
     The decorated name becomes the Tool, so a test calls `add.call('{"a": 1}')` and a
     list of tools is `[add, look]`. Nothing is registered by the decorator: a tool in a
-    module of `muagent.builtin` is found by `tools_in`, and any other is listed by
+    module of `ergane.builtin` is found by `tools_in`, and any other is listed by
     whoever builds the agent.
 
     Args:
@@ -240,7 +240,7 @@ def tools_in(
     the order of definition, so a request lists the tools the same way every time.
 
     Args:
-        package: A package (`muagent.builtin`, say), not a plain module.
+        package: A package (`ergane.builtin`, say), not a plain module.
         on_notice: Called with a line about a module that cannot be imported, which is
             then left out so that the others still load. Without it the error is
             raised.

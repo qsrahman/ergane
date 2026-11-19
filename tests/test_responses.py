@@ -2,10 +2,10 @@
 
 import pytest
 
+from ergane.errors import StreamCut, TurnError
+from ergane.responses import STREAM_RETRIES, Responder, response_problem
 from fake_api import TEXT
 from helpers import make_config
-from muagent.errors import StreamCut, TurnError
-from muagent.responses import STREAM_RETRIES, Responder, response_problem
 
 DRAFT = [{"role": "user", "content": "hi"}]
 TOOL = {
@@ -132,8 +132,8 @@ def test_it_needs_nothing_of_the_agent_or_the_history():
     import sys
 
     code = (
-        "import sys, muagent.responses; "
-        "print([m for m in ('muagent.agent', 'muagent.context') "
+        "import sys, ergane.responses; "
+        "print([m for m in ('ergane.agent', 'ergane.context') "
         "if m in sys.modules])"
     )
     result = subprocess.run(
