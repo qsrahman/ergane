@@ -188,7 +188,7 @@ class Config(BaseModel):
     base_url: str | None = None
     max_context_tokens: int = Field(default=64 * 1024, gt=0)
     streaming: bool = True
-    max_turns: int = Field(default=25, gt=0)
+    max_turns: int = Field(default=32, gt=0)
     # When the history (with the instructions and the tools) passes compact_at of
     # max_context_tokens, the oldest turns are summarized, keeping about
     # keep_recent_tokens of the newest verbatim.

@@ -259,7 +259,7 @@ After each round with tool calls the loop checks, in this order:
    one-word prompt is about 9 tokens of history and about 600 to the server with no
    tools, and the 42 small tools of the example below add about 3,000 more (by the
    estimate); real servers describe their tools at more length.
-2. **The cap.** After `max_turns` rounds (25 by default) that all ended in tool calls,
+2. **The cap.** After `max_turns` rounds (32 by default) that all ended in tool calls,
    the turn is saved with a closing assistant note and ends with
    `Stopped after N model calls without a final answer`.
 

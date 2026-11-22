@@ -44,7 +44,7 @@ Put your settings in `~/.config/ergane/config.json` (or `$XDG_CONFIG_HOME/ergane
   "streaming": true,
   "max_context_tokens": 65536,
   "reasoning_effort": "low",
-  "max_turns": 25,
+  "max_turns": 32,
   "mcpServers": {}
 }
 ```
@@ -64,7 +64,7 @@ Each setting comes from the first of these that sets it: **its command-line flag
 | `auto_compact`       | `--auto-compact`, `--no-auto-compact` | `true`   | Summarize the oldest turns when the history gets long (see [Long conversations](#long-conversations)). |
 | `compact_at`         | `--compact-at SHARE`     | `0.75`                | Share of `max_context_tokens` at which to summarize. |
 | `keep_recent_tokens` | `--keep-recent-tokens N` | `15000`               | About how many tokens of the newest turns stay as they are (at most half of where summarizing starts). |
-| `max_turns`          | `--max-turns N`          | `25`                  | Most model calls for one prompt: the cap on the tool loop. |
+| `max_turns`          | `--max-turns N`          | `32`                  | Most model calls for one prompt: the cap on the tool loop. |
 | `mcpServers`         | `--no-mcp` (start none)  | none                  | The [MCP servers](#mcp-servers). |
 
 Two more flags: `--config FILE` reads another file (there is no variable for it, so that a project's environment cannot point ergane at a file of its own), `--resume [ID]` continues a [saved session](#sessions), `--version` prints the version, and `--help` lists them all. A file you name that does not exist is an error; the default one may be missing, if the environment and flags give the key.
