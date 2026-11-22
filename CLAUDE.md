@@ -172,7 +172,8 @@ What must stay true:
   outlives the turn; more than 5 stops the turn, kept with a closing note. The notice is in
   the instructions, not in a tool result, which the prompt calls data. The budget does not
   bound a turn (it drops old results so the turn can go on), so a test that loops without
-  the guard never ends: use a scenario the guard stops, or `tool_loop_N`.
+  the guard would never end: pytest's `timeout` (60 s, `pytest-timeout`) fails it instead.
+  Use a scenario the guard stops, or `tool_loop_N`.
 - **Trimming never drops the summary or the newest user message.** The budget is for the
   whole request; the in-turn check uses the server's `usage.input_tokens` plus an
   estimate of what was added, shortens old tool results before dropping them, then the

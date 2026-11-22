@@ -183,7 +183,7 @@ class TestAgentWithTodos:
         agent = make_agent(tools=[tool_with(read_file)])
         agent.add_tools([Tool.from_function(todo)])
 
-        assert agent._offered()["todo"].description == "Their own."
+        assert agent.offered()["todo"].description == "Their own."
 
 
 class TestTodoCommand:

@@ -262,7 +262,7 @@ def context_(repl: Repl, args: str) -> None:
     budget = agent.config.max_context_tokens
     rows = [
         ("instructions", f"~{instructions:,}"),
-        (f"tools ({len(agent.tools)})", f"~{tools:,}"),
+        (f"tools ({len(agent.offered())})", f"~{tools:,}"),
         ("history", f"~{history:,}"),
         (
             "total",
@@ -343,8 +343,9 @@ def servers_(repl: Repl, args: str) -> str | None:
 def tools_(repl: Repl, args: str) -> str | None:
     """List the tools offered to the model."""
     agent = repl.agent
-    free = [name for name, tool in agent.tools.items() if tool.read_only]
-    asking = [name for name, tool in agent.tools.items() if not tool.read_only]
+    offered = agent.offered()
+    free = [name for name, tool in offered.items() if tool.read_only]
+    asking = [name for name, tool in offered.items() if not tool.read_only]
     allowed = [name for name in asking if name in agent.always_allowed]
     asks = [name for name in asking if name not in agent.always_allowed]
     if not (free or allowed or asks):

@@ -129,9 +129,9 @@ Every request is built the same way, and is the only place the API is called:
 | Field          | Value                                                                                                  |
 |----------------|--------------------------------------------------------------------------------------------------------|
 | `model`        | the `model` setting                                                                                    |
-| `instructions` | the system prompt (`SYSTEM_PROMPT` if the agent has tools, else `SYSTEM_PROMPT_NO_TOOLS`), then the OS and the date |
+| `instructions` | the system prompt (`SYSTEM_PROMPT` if the agent has tools, else `SYSTEM_PROMPT_NO_TOOLS`), then the OS and the date, then the todo list while steps are open (`TodoList.notes`), then the notice to a model that repeats itself (§6) |
 | `input`        | **all** the items: the history, this prompt, and everything this turn has produced so far              |
-| `tools`        | the schema of every tool, if there are any                                                             |
+| `tools`        | the schema of every tool, if there are any, and the `todo` tool with them (`Agent.offered`)            |
 | `reasoning`    | `{"effort": …}`, only if `reasoning_effort` is set                                                      |
 | `store`        | `false`                                                                                                |
 
@@ -375,6 +375,7 @@ their text is printed when output is redirected or `NO_COLOR` is set.
 | `/sessions [N or ID]` | `Repl.restore` puts a saved session in place of the history (see §7)           |
 | `/compact [focus]` | summarizes the oldest turns now (§2a); the focus says what the summary must keep |
 | `/summary` | shows the summary                                                                          |
+| `/todo`   | shows the model's todo list, which `/reset` and a restored session clear                   |
 | `/model`, `/effort` | change the config; the next request reads it                                     |
 
 ## 11. What must stay true

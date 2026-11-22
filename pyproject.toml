@@ -33,6 +33,7 @@ dev = [
     "mcp>=2.3,<3",
     "pyright>=1.1.414",
     "pytest>=9.1.1",
+    "pytest-timeout>=2.4.0",
     "ruff>=0.17.1",
 ]
 
@@ -42,6 +43,9 @@ wheel-exclude = ["**/.DS_Store"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# A turn has no cap on its model calls, so a test that loops without the guard would
+# never end: it fails after this many seconds instead.
+timeout = 60
 
 [tool.ruff]
 # src/ and tests/ hold first-party modules (ergane, fake_api) for import sorting.

@@ -570,7 +570,7 @@ class Agent:
         self.context.counted = None
         return skipped
 
-    def _offered(self) -> dict[str, Tool]:
+    def offered(self) -> dict[str, Tool]:
         """The tools of a request: the ones the agent was given, and the todo tool
         with them. With no other tool there is none, so that a chat without tools
         stays a plain chat. A given tool named `todo` takes the place of ours."""
@@ -580,7 +580,7 @@ class Agent:
 
     def _tool_params(self) -> list[FunctionToolParam]:
         """The definitions of the tools, as the request carries them."""
-        return [tool.param() for tool in self._offered().values()]
+        return [tool.param() for tool in self.offered().values()]
 
     def _instructions(self, loop_note: str = "") -> str:
         """What every request carries as `instructions`: the system prompt, what the
@@ -717,7 +717,7 @@ class Agent:
                 items.append(_output_item(call, running.result))
             together.clear()
 
-        offered = self._offered()
+        offered = self.offered()
         for call in calls:
             tool = offered.get(call.name)
             problem = tool.check(call.arguments) if tool else None
@@ -755,7 +755,7 @@ class Agent:
         if not asks:
             io.on_call(call.name, call.arguments)
         if tool is None:
-            known = ", ".join(self._offered()) or "none"
+            known = ", ".join(self.offered()) or "none"
             return ToolOutput(f"Unknown tool: {call.name}. Available tools: {known}.")
         if problem:
             # A call that would be rejected is not worth asking the user about.

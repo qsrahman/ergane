@@ -326,7 +326,8 @@ class TestContextCommand:
 
         out = capsys.readouterr().out
         assert f"  instructions   ~{instructions:,}\n" in out
-        assert f"  tools (2)      ~{tools:,}\n" in out
+        # The todo tool is offered with the others, so it is counted (and costs tokens).
+        assert f"  tools (3)      ~{tools:,}\n" in out
         assert f"  history        ~{history:,}\n" in out
         assert (
             f"  total          ~{total:,} of 10,000 ({total * 100 // 10000}%)\n" in out
@@ -518,13 +519,13 @@ class TestToolsCommand:
         run_repl(monkeypatch, agent, ["/tools", "/exit"])
 
         out = capsys.readouterr().out
-        assert "  run without asking  look\n  ask first           save\n\n" in out
+        assert "  run without asking  todo, look\n  ask first           save\n\n" in out
 
     def test_a_group_with_no_tools_is_left_out(self, monkeypatch, make_agent, capsys):
         run_repl(monkeypatch, make_agent(tools=[LOOK]), ["/tools", "/exit"])
 
         out = capsys.readouterr().out
-        assert "  run without asking  look\n" in out
+        assert "  run without asking  todo, look\n" in out
         assert "ask first" not in out
 
     def test_a_tool_allowed_for_the_session_is_listed_on_its_own(
@@ -536,7 +537,10 @@ class TestToolsCommand:
         run_repl(monkeypatch, agent, ["/tools", "/exit"])
 
         out = capsys.readouterr().out
-        assert "  run without asking    look\n  allowed this session  save\n\n" in out
+        assert (
+            "  run without asking    todo, look\n  allowed this session  save\n\n"
+            in out
+        )
         assert "ask first" not in out
 
     def test_it_says_when_there_are_none(self, monkeypatch, make_agent, capsys):
