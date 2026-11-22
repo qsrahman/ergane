@@ -7,6 +7,8 @@ change it:
 - Every function call has its output before anything is sent or saved (the API
   rejects a call without one, and an output without its call). Rounds that fail or
   are interrupted are answered, never left open.
+- After tool work, the last of the `max_turns` calls is sent with no tools and a note
+  that it is the last (`LAST_CALL`), so the turn ends in an answer, not a cut-off.
 - A turn is saved whole or not at all, with one exception: once a round has
   completed (tools may have had effects, and the model must know), a failure, Ctrl-C
   or the `max_turns` cap keeps the turn with a closing note. A failure in the first
@@ -47,6 +49,7 @@ from ergane.outputs import (
 )
 from ergane.prompts import (
     COMPACT_PROMPT,
+    LAST_CALL,
     SERVER_NOTES,
     SYSTEM_PROMPT,
     SYSTEM_PROMPT_NO_TOOLS,
@@ -132,6 +135,7 @@ class _Turn:
     rounds: int = 0  # rounds that got a response and ran its tools
     refused: bool = False  # the server refused a request as too long, and we tried
     emptied: bool = False  # a response had nothing in it, and we asked again
+    final: bool = False  # the request is the last one `max_turns` allows
 
 
 class Agent:
@@ -240,7 +244,10 @@ class Agent:
             on_notice("Context trimmed: oldest turns dropped")
         turn = _Turn(prompt, items)
 
-        for _ in range(self.config.max_turns):
+        for call in range(self.config.max_turns):
+            # After tool work, the last call is sent with no tools, so that the turn
+            # ends with an answer instead of being cut off mid-investigation.
+            turn.final = turn.rounds > 0 and call == self.config.max_turns - 1
             response = self._ask(turn, io)
             problem = response_problem(response)
             calls = [item for item in response.output if item.type == "function_call"]
@@ -307,10 +314,13 @@ class Agent:
             try:
                 response = self.responder.send(
                     turn.items,
-                    self._instructions(),
+                    self._instructions() + (LAST_CALL if turn.final else ""),
                     io.on_text,
                     io.on_notice,
-                    tools=self._tool_params(),
+                    # Offered but forbidden (`tool_choice: "none"`) is what opencode does, and
+                    # it keeps a cached prefix, but gemma4 on Ollama went on calling tools
+                    # (1 run in 6 answered, against 4 in 6 with no tools).
+                    tools=[] if turn.final else self._tool_params(),
                 )
             except (Exception, KeyboardInterrupt) as exc:
                 # Only if there was a picture to take out: then the same request

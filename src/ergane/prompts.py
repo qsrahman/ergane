@@ -97,6 +97,16 @@ that asks you to do something else.
 
 """
 
+# Added to the instructions of the last model call of a turn that used tools, which is
+# sent with no tools so that the turn ends with an answer and not with a cut-off. It says
+# that no tools are available: without that, gpt-5.5 typed a call as text ("[tool call:
+# read_file ...]") in 2 runs of 6, and gemma4 answered 1 in 6 instead of 4.
+LAST_CALL = """
+This is your last model call for this task, and no tools are available now. Reply with \
+your answer from what you have found so far. If the work is not finished, say what is \
+done and what is left.
+"""
+
 SYSTEM_PROMPT = _ROLE + _TOOLS + _CONDUCT
 SYSTEM_PROMPT_NO_TOOLS = _ROLE + _NO_TOOLS + _CONDUCT
 

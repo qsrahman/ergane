@@ -14,7 +14,12 @@ from ergane.agent import Agent
 from ergane.context import estimate_tokens
 from ergane.errors import TurnError, describe_error
 from ergane.outputs import DROPPED_OUTPUT, IMAGE_REFUSED
-from ergane.prompts import SERVER_NOTES, SYSTEM_PROMPT, SYSTEM_PROMPT_NO_TOOLS
+from ergane.prompts import (
+    LAST_CALL,
+    SERVER_NOTES,
+    SYSTEM_PROMPT,
+    SYSTEM_PROMPT_NO_TOOLS,
+)
 from ergane.responses import STREAM_RETRIES, response_problem
 from ergane.tools import MAX_OUTPUT_CHARS, Image, Tool, ToolOutput
 from fake_api import (
@@ -913,6 +918,36 @@ class TestAgentToolLoop:
             "role": "assistant",
             "content": "[Stopped after 3 model calls without a final answer]",
         }
+
+    def test_the_last_call_has_no_tools_so_the_turn_ends_in_an_answer(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = make_agent(tools=[READ_FILE], STREAMING=streaming, MAX_TURNS=3)
+
+        agent.run_turn("tool_while_offered")
+
+        first, second, last = fake_server.requests
+        assert first["tools"] and second["tools"]
+        assert LAST_CALL not in first["instructions"]
+        assert LAST_CALL not in second["instructions"]
+        assert "tools" not in last
+        assert LAST_CALL in last["instructions"]
+        # An answer, not a cut-off: no closing note, and no TurnError.
+        assert agent.context.items[-1] == {"role": "assistant", "content": TEXT}
+
+    def test_a_single_call_turn_keeps_its_tools(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = make_agent(tools=[READ_FILE], STREAMING=streaming, MAX_TURNS=1)
+
+        # Nothing was done before the one call, so it is no "last call after tool
+        # work": it gets its tools, and the model's call ends the turn at the cap.
+        with pytest.raises(TurnError, match="^Stopped after 1 model calls"):
+            agent.run_turn("tool_while_offered")
+
+        request = fake_server.requests[0]
+        assert request["tools"]
+        assert LAST_CALL not in request["instructions"]
 
     def test_a_turn_stopped_by_the_cap_can_be_continued_or_retried(
         self, make_agent, fake_server, streaming

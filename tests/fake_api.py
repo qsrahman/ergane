@@ -218,7 +218,7 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     replies with text), "tool_call_reasoning" (the same, with a reasoning item
     before each call), "tool_call_parallel" (two calls in one response), "tool_call_mixed" (a call to
     read_file, one to write_file, another to read_file),
-    "tool_loop" (calls a tool every time), "http_error" (a 400 response), "usage" (a reply that carries a token count), "overflow_once" and "overflow" (a request refused as too long, the first time or
+    "tool_loop" (calls a tool every time), "tool_while_offered" (the same, but replies with text to a request that offers no tools), "http_error" (a 400 response), "usage" (a reply that carries a token count), "overflow_once" and "overflow" (a request refused as too long, the first time or
     every time), "status_N" (an error response with
     status N and an OpenAI-style body),
     "picture_error" (a refusal for pictures, whatever the request holds), "novision_X" (scenario X, but a request that carries a picture is refused, as
@@ -240,6 +240,8 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
             scenario = (
                 scenario.removeprefix("tool_then_") if tool_output_sent else "tool_call"
             )
+        if scenario == "tool_while_offered":
+            scenario = "tool_loop" if body.get("tools") else "hello"
         if scenario == "empty_once":
             seen = any(
                 earlier["input"] == body["input"]
