@@ -245,8 +245,7 @@ class Agent:
         turn = _Turn(prompt, items)
 
         for call in range(self.config.max_turns):
-            # After tool work, the last call is sent with no tools, so that the turn
-            # ends with an answer instead of being cut off mid-investigation.
+            # After tool work, the last call has no tools, so that it must answer.
             turn.final = turn.rounds > 0 and call == self.config.max_turns - 1
             response = self._ask(turn, io)
             problem = response_problem(response)
@@ -317,9 +316,7 @@ class Agent:
                     self._instructions() + (LAST_CALL if turn.final else ""),
                     io.on_text,
                     io.on_notice,
-                    # Offered but forbidden (`tool_choice: "none"`) is what opencode does, and
-                    # it keeps a cached prefix, but gemma4 on Ollama went on calling tools
-                    # (1 run in 6 answered, against 4 in 6 with no tools).
+                    # No tools at all: `tool_choice: "none"` did not stop gemma4 (Ollama).
                     tools=[] if turn.final else self._tool_params(),
                 )
             except (Exception, KeyboardInterrupt) as exc:
