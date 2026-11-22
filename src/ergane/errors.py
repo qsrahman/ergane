@@ -9,8 +9,8 @@ class TurnError(Exception):
     """A turn that ended without a normal reply.
 
     History is left untouched, with two exceptions: an incomplete response after
-    some text keeps the partial reply the user has already seen, and hitting the
-    max_turns cap keeps the whole turn plus a closing note.
+    some text keeps the partial reply the user has already seen, and a stop by the
+    loop guard keeps the whole turn plus a closing note.
     """
 
 

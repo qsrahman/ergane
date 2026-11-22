@@ -107,6 +107,8 @@ The modules, in dependency order (each imports only from those above it):
   them, at a terminal in the background, and starts one again for `/reconnect`), and a
   `ServerStatus` per server (`McpHub.statuses`, by name), which records what became of it
   for `/servers`; `reconnect` starts a server again through the same `_Startup`.
+- `loops.py`: the loop guard's pure functions (`step_signature`, `is_looping`, `last_repeats`,
+  `loop_note`). Imports nothing of ergane.
 - `errors.py`, `prompts.py`: `TurnError`, `StreamCut`, `describe_error`,
   `is_context_overflow`, `is_images_rejected`; the three prompts as text. They import nothing of ergane.
 - `context.py`: `Context` (the history and the summary) and `estimate_tokens()`.
@@ -164,6 +166,13 @@ What must stay true:
   runs alone, after the calls before it. The outputs are added in the order of the calls.
   `Console` is used from the main thread only, so a call that asks never asks at the same
   time as another.
+- **A turn has no cap on its model calls; the loop guard ends a stuck one.** The same tool
+  step (calls, arguments and outputs) more than twice in the last 10 puts a notice in the
+  instructions of the next requests, which goes when the model changes course and never
+  outlives the turn; more than 5 stops the turn, kept with a closing note. The notice is in
+  the instructions, not in a tool result, which the prompt calls data. The budget does not
+  bound a turn (it drops old results so the turn can go on), so a test that loops without
+  the guard never ends: use a scenario the guard stops, or `tool_loop_N`.
 - **Trimming never drops the summary or the newest user message.** The budget is for the
   whole request; the in-turn check uses the server's `usage.input_tokens` plus an
   estimate of what was added, shortens old tool results before dropping them, then the

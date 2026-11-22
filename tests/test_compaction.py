@@ -470,10 +470,10 @@ class TestShorteningResults:
 
         agent = make_agent(
             tools=[tool_with(huge)], STREAMING=streaming,
-            MAX_CONTEXT_TOKENS=9000, MAX_TURNS=3, AUTO_COMPACT=False,
+            MAX_CONTEXT_TOKENS=9000, AUTO_COMPACT=False,
         )  # fmt: skip
 
-        with pytest.raises(TurnError, match="^Stopped after 3"):
+        with pytest.raises(TurnError, match="^Stopped: the model keeps repeating"):
             agent.run_turn("tool_loop")
 
         outputs = [

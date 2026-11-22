@@ -7,11 +7,12 @@ change it:
 - Every function call has its output before anything is sent or saved (the API
   rejects a call without one, and an output without its call). Rounds that fail or
   are interrupted are answered, never left open.
-- After tool work, the last of the `max_turns` calls is sent with no tools and a note
-  that it is the last (`LAST_CALL`), so the turn ends in an answer, not a cut-off.
+- A turn has no cap on its model calls. A model that repeats the same tool step is
+  told in the instructions, then stopped (`loops.py`); the context budget bounds each
+  request, and Ctrl-C ends a turn.
 - A turn is saved whole or not at all, with one exception: once a round has
   completed (tools may have had effects, and the model must know), a failure, Ctrl-C
-  or the `max_turns` cap keeps the turn with a closing note. A failure in the first
+  or a stop by the loop guard keeps the turn with a closing note. A failure in the first
   round saves nothing.
 - A stream that breaks before any text is shown is sent again (`STREAM_RETRIES`, in
   `responses.py`): Ollama's cloud proxy lost a connection 100 s into a request and a turn
@@ -24,7 +25,7 @@ change it:
 import platform
 import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Literal, cast
 
@@ -41,6 +42,15 @@ from ergane.compaction import SUMMARY_MAX_TOKENS, Compactor
 from ergane.config import Config
 from ergane.context import Context, as_dicts, estimate_tokens
 from ergane.errors import TurnError, is_context_overflow, is_images_rejected
+from ergane.loops import (
+    MAX_REPEATS,
+    WARN_REPEATS,
+    WINDOW,
+    is_looping,
+    last_repeats,
+    loop_note,
+    step_signature,
+)
 from ergane.outputs import (
     answer_open_calls,
     drop_images,
@@ -49,7 +59,6 @@ from ergane.outputs import (
 )
 from ergane.prompts import (
     COMPACT_PROMPT,
-    LAST_CALL,
     SERVER_NOTES,
     SYSTEM_PROMPT,
     SYSTEM_PROMPT_NO_TOOLS,
@@ -135,7 +144,8 @@ class _Turn:
     rounds: int = 0  # rounds that got a response and ran its tools
     refused: bool = False  # the server refused a request as too long, and we tried
     emptied: bool = False  # a response had nothing in it, and we asked again
-    final: bool = False  # the request is the last one `max_turns` allows
+    steps: list[str] = field(default_factory=list)  # signatures of the tool steps
+    loop_note: str = ""  # what the instructions say while the model repeats itself
 
 
 class Agent:
@@ -196,12 +206,12 @@ class Agent:
         """Send one user message, passing the reply text to on_text.
 
         If the model calls tools, each call is run and answered, and the model is
-        called again, up to max_turns times, until it gives a reply. The whole turn
+        called again until it gives a reply. The whole turn
         (the calls and their outputs included) is added to the conversation if the
         final response completes with text, or ends incomplete after some text,
-        which the user has seen, or if the model hits the max_turns cap (closed with
-        a note saying so), or if a round after the first fails or the user presses
-        Ctrl-C (closed with a note saying why). Ctrl-C during the first model call
+        which the user has seen, or if the loop guard stops a model that repeats
+        itself, or if a round after the first fails or the user presses Ctrl-C
+        (closed with a note saying why). Ctrl-C during the first model call
         saves nothing.
 
         Args:
@@ -224,8 +234,8 @@ class Agent:
         Raises:
             TurnError: If the response is incomplete, failed, refused or has no
                 text, if a stream ends without a final response, if the model
-                is still calling tools after max_turns calls, or if the tool
-                results grow the turn past the context budget.
+                keeps repeating the same tool calls, or if the tool results grow the
+                turn past the context budget.
             Exception: Whatever the API client raises, such as an
                 `openai.APIError`. Once a round has completed, the turn is kept
                 (see above) before any of these is raised, except the budget one.
@@ -244,30 +254,18 @@ class Agent:
             on_notice("Context trimmed: oldest turns dropped")
         turn = _Turn(prompt, items)
 
-        for call in range(self.config.max_turns):
-            # After tool work, the last call has no tools, so that it must answer.
-            turn.final = turn.rounds > 0 and call == self.config.max_turns - 1
+        while True:
             response = self._ask(turn, io)
             problem = response_problem(response)
             calls = [item for item in response.output if item.type == "function_call"]
             if problem or not calls:
                 break
             self._run_round(turn, response, calls, io)
-        else:
-            # Every call has its output, so the turn is coherent. Keep it, closed with
-            # a note, so the model still knows the question and the work already done
-            # (some of it may have had effects) when the user says to carry on.
-            message = (
-                f"Stopped after {self.config.max_turns} model calls without a "
-                "final answer"
-            )
-            self._save_with_note(turn.items, message)
-            raise TurnError(message)
 
         # Keep the turn if it worked, or was cut off after text the user has already
         # seen. A turn whose first response has a problem is dropped: saving a prompt
         # with no reply would leave two user messages in a row. After a completed
-        # round it is kept with a note, like the stop at the cap.
+        # round it is kept with a note, like the stop of the loop guard.
         cut_off = response.status == "incomplete"
         if response.output_text and (problem is None or cut_off):
             reply: ResponseInputParam = [
@@ -299,9 +297,7 @@ class Agent:
         A request the server refuses as too long is shortened, once in a turn, one it
         refuses because the model takes no pictures is sent again without them, and a
         response with nothing in it is asked for again, once in a turn. Each happens a
-        bounded number of times, so this ends, and none of them is one of the calls
-        `max_turns` counts, or the last of those would be announced and never sent.
-        Any other failure ends the turn, and once a round has completed the turn is
+        bounded number of times, so this ends. Any other failure ends the turn, and once a round has completed the turn is
         kept first: every call has its output at this point, so what the earlier
         rounds did (it may have had effects) is known.
 
@@ -313,11 +309,10 @@ class Agent:
             try:
                 response = self.responder.send(
                     turn.items,
-                    self._instructions() + (LAST_CALL if turn.final else ""),
+                    self._instructions(turn.loop_note),
                     io.on_text,
                     io.on_notice,
-                    # No tools at all: `tool_choice: "none"` did not stop gemma4 (Ollama).
-                    tools=[] if turn.final else self._tool_params(),
+                    tools=self._tool_params(),
                 )
             except (Exception, KeyboardInterrupt) as exc:
                 # Only if there was a picture to take out: then the same request
@@ -374,6 +369,7 @@ class Agent:
             self._run_tools(calls, turn.items, io)
             if self.todos.revision != listed:
                 io.on_notice(self.todos.summary())
+            self._watch_loop(turn, calls, io)
         except KeyboardInterrupt:
             # A call that was running, or had not run yet, has no output: say so, or
             # the API rejects the history. The call may have done part of its work,
@@ -413,6 +409,47 @@ class Agent:
                 f"This turn grew past the context budget (about {used} of "
                 f"{budget} tokens). Ask for less, or raise max_context_tokens"
             )
+
+    def _watch_loop(
+        self,
+        turn: _Turn,
+        calls: Sequence[ResponseFunctionToolCall],
+        io: _Callbacks,
+    ) -> None:
+        """Record the round just run; tell a model that repeats its steps (the next
+        requests carry a notice, and the user sees one line), and stop one that goes
+        on.
+
+        Raises:
+            TurnError: If one step fills too much of the recent ones. The turn is kept
+                with a closing note first: every call has its output.
+        """
+        outputs = as_dicts(turn.items)[-len(calls) :]
+        turn.steps.append(
+            step_signature(
+                [
+                    (call.name, call.arguments, str(output["output"]))
+                    for call, output in zip(calls, outputs, strict=True)
+                ]
+            )
+        )
+        if is_looping(turn.steps):
+            self._keep_stopped_turn(
+                turn.items, turn.rounds, "it kept repeating the same tool calls"
+            )
+            raise TurnError(
+                "Stopped: the model keeps repeating the same tool calls (more than "
+                f"{MAX_REPEATS} of its last {WINDOW} steps)"
+            )
+        repeats = last_repeats(turn.steps)
+        if repeats > WARN_REPEATS:
+            if not turn.loop_note:
+                io.on_notice(
+                    "The model is repeating itself; told to try something else"
+                )
+            turn.loop_note = loop_note(repeats)
+        else:
+            turn.loop_note = ""
 
     def _keep_stopped_turn(
         self, items: ResponseInputParam, rounds: int, reason: str
@@ -545,10 +582,11 @@ class Agent:
         """The definitions of the tools, as the request carries them."""
         return [tool.param() for tool in self._offered().values()]
 
-    def _instructions(self) -> str:
+    def _instructions(self, loop_note: str = "") -> str:
         """What every request carries as `instructions`: the system prompt, what the
         servers say, then the environment, so that the part that rarely changes
-        comes first and can be cached."""
+        comes first and can be cached. The todo list and the notice to a model that
+        repeats itself (`loop_note`, of the turn that is running) go last."""
         prompt = SYSTEM_PROMPT if self.tools else SYSTEM_PROMPT_NO_TOOLS
         if self.server_notes and self.tools:
             sections = "\n".join(
@@ -561,6 +599,7 @@ class Agent:
             f"- Operating system: {platform.platform()}\n"
             f"- Current date: {date.today().isoformat()}\n"
             f"{self.todos.notes()}"
+            f"{loop_note}"
         )
 
     def _fixed_estimate(self) -> tuple[int, int]:

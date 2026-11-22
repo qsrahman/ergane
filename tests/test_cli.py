@@ -73,7 +73,7 @@ def test_another_mistake_gets_no_such_help(monkeypatch, capsys):
     monkeypatch.setenv("OPENAI_API_KEY", "test")
 
     with pytest.raises(SystemExit):
-        main(["--max-turns", "0"])
+        main(["--max-context-tokens", "0"])
 
     assert "No API key" not in capsys.readouterr().err
 
@@ -84,9 +84,9 @@ def test_main_names_a_bad_setting_by_its_key(
     monkeypatch.setenv("OPENAI_API_KEY", "test")
 
     with pytest.raises(SystemExit):
-        main(["--max-turns", "0"])
+        main(["--max-context-tokens", "0"])
 
-    assert "  - max_turns:" in capsys.readouterr().err
+    assert "  - max_context_tokens:" in capsys.readouterr().err
 
 
 class RecordingRepl:
@@ -408,7 +408,7 @@ class TestFlags:
         args = parse_args(
             [
                 "--config", "c.json", "--model", "m", "--base-url", "u",
-                "--no-streaming", "--max-context-tokens", "9", "--max-turns", "2",
+                "--no-streaming", "--max-context-tokens", "9",
                 "--reasoning-effort", "low", "--no-mcp",
             ]
         )  # fmt: skip
@@ -419,7 +419,6 @@ class TestFlags:
             "base_url": "u",
             "streaming": False,
             "max_context_tokens": 9,
-            "max_turns": 2,
             "reasoning_effort": "low",
             "no_mcp": True,
         }
@@ -433,7 +432,7 @@ class TestFlags:
     def test_a_flag_wins_over_the_file(self, tmp_path: Path):
         (tmp_path / "ergane").mkdir()
         (tmp_path / "ergane" / "config.json").write_text(
-            json.dumps({"model": "file-model", "max_turns": 5})
+            json.dumps({"model": "file-model", "max_context_tokens": 5000})
         )
 
         main(["--model", "flag-model"])
@@ -441,7 +440,7 @@ class TestFlags:
         agent = RecordingRepl.agent
         assert agent is not None
         assert agent.config.model == "flag-model"  # flag > file
-        assert agent.config.max_turns == 5  # the file, with no flag
+        assert agent.config.max_context_tokens == 5000  # the file, with no flag
 
     def test_default_as_the_effort_sends_none_over_the_file(self, tmp_path: Path):
         (tmp_path / "ergane").mkdir()
@@ -456,10 +455,17 @@ class TestFlags:
 
     def test_a_bad_value_is_reported_by_its_key(self, capsys):
         with pytest.raises(SystemExit) as exc:
-            main(["--max-turns", "0"])
+            main(["--max-context-tokens", "0"])
 
         assert exc.value.code == 1
-        assert "  - max_turns:" in capsys.readouterr().err
+        assert "  - max_context_tokens:" in capsys.readouterr().err
+
+    def test_the_removed_max_turns_flag_is_refused(self, capsys):
+        with pytest.raises(SystemExit) as exc:
+            parse_args(["--max-turns", "5"])
+
+        assert exc.value.code == 2
+        assert "--max-turns" in capsys.readouterr().err
 
     def test_the_config_flag_names_the_file(self, tmp_path: Path):
         other = tmp_path / "other.json"

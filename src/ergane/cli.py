@@ -78,12 +78,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="tokens of the newest turns kept verbatim",
     )
     parser.add_argument(
-        "--max-turns",
-        type=int,
-        metavar="N",
-        help="most model calls for one prompt",
-    )
-    parser.add_argument(
         "--reasoning-effort",
         choices=[*EFFORTS, "default"],
         metavar="LEVEL",

@@ -24,7 +24,7 @@ line, because lines move. Everything is in [`src/ergane/`](src/ergane/).
        Compactor.compact_if_due: summarize if long ◄──────┤   (§2a)
        Context.begin_turn: summary + history + prompt ◄───┤
                                                           │
-                       ┌──────────────────────────────────┤   at most max_turns rounds
+                       ┌──────────────────────────────────┤   until the model answers
                        │  Responder.send    one request; the reply text streams to the screen
                        │  response_problem  failed, incomplete or empty? ──► stop and report it
                        │  tool calls?       none ──► stop: this was the answer
@@ -259,16 +259,19 @@ After each round with tool calls the loop checks, in this order:
    one-word prompt is about 9 tokens of history and about 600 to the server with no
    tools, and the 42 small tools of the example below add about 3,000 more (by the
    estimate); real servers describe their tools at more length.
-2. **The cap.** After `max_turns` rounds (32 by default) that all ended in tool calls,
-   the turn is saved with a closing assistant note and ends with
-   `Stopped after N model calls without a final answer`.
+2. **The loop guard** (`loops.py`). A turn has no cap on its rounds. Each round is
+   identified by its calls and what they returned. When the newest one has appeared more
+   than twice among the last 10, the following requests carry a notice in their
+   instructions (and you see one line) until the model takes a different step; when one
+   step fills more than 5 of the last 10, the turn is saved with a closing assistant note
+   and ends with `Stopped: the model keeps repeating the same tool calls`.
 
 The loop also ends, without those checks, on a response with a problem or with no
 tool calls (the answer).
 
 ## 7. Saving the turn (`Context.save_turn`)
 
-Apart from the cap (§6) and a failure after a completed round (§8), a turn is saved only when its last response has text and
+Apart from the loop guard (§6) and a failure after a completed round (§8), a turn is saved only when its last response has text and
 either nothing is wrong or the response was cut off (`incomplete`, so you saw the
 partial reply it ends with). What is saved is the items, followed by the final reply as a plain
 `{"role": "assistant", "content": text}` message. A turn with no reply is dropped:
@@ -305,7 +308,7 @@ of the earlier conversation is forgotten, and what the user allowed is not saved
 | refused, or no text                                   | no, unless a round already ran | `[Refused: …]`, `[No text in response]`                |
 | the stream breaks before any text: tried again, twice at most | if a try works, as usual | `[… trying again (1 of 2)]`, then the reply |
 | the stream keeps breaking, or breaks after some text, or ends with an `error` event | no, unless a round already ran | `[Stream ended without a final response]`, `[Stream cut off: …]` or `[Stream error: …]` |
-| `max_turns` rounds of tool calls                      | yes, with a closing note| `[Stopped after N model calls without a final answer]`        |
+| the model repeats the same tool step (more than 5 of its last 10) | yes, with a closing note| `[The model is repeating itself; told to try something else]`, then `[Stopped: the model keeps repeating the same tool calls …]` |
 | the turn outgrows `max_context_tokens`                | older, then the latest results are shortened and the turn goes on; if even that does not fit, kept with a note and its results dropped | `[Context full: older tool results dropped]`, `[… this round's tool results shortened]`, or `[This turn grew past the context budget …]` |
 | Ctrl-C                                                | yes after a completed round or while tools run; no in the first model call | `[Cancelled]`                           |
 | the server refuses a request because the model takes no pictures | as usual, if the retry works | `[The model does not take pictures, so they were dropped; set images to false …]`: the pictures of tool results are taken out, the text stays (`[image removed: …]`), and the request is sent again; only if there was a picture to take out |

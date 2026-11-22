@@ -13,9 +13,9 @@ from openai.types.responses import Response, ResponseInputParam
 from ergane.agent import Agent
 from ergane.context import estimate_tokens
 from ergane.errors import TurnError, describe_error
+from ergane.loops import MAX_REPEATS, WARN_REPEATS
 from ergane.outputs import DROPPED_OUTPUT, IMAGE_REFUSED
 from ergane.prompts import (
-    LAST_CALL,
     SERVER_NOTES,
     SYSTEM_PROMPT,
     SYSTEM_PROMPT_NO_TOOLS,
@@ -133,15 +133,17 @@ class TestAgentRunTurn:
     def test_pictures_that_come_later_in_the_turn_are_taken_out_too(
         self, make_agent, fake_server, streaming
     ):
-        agent = make_agent(tools=[self.shot()], STREAMING=streaming, MAX_TURNS=5)
+        agent = make_agent(tools=[self.shot()], STREAMING=streaming)
         notices: list[str] = []
 
-        with pytest.raises(TurnError, match="Stopped after 5 model calls"):
+        with pytest.raises(TurnError, match="^Stopped: the model keeps repeating"):
             agent.run_turn("novision_tool_loop", on_notice=notices.append)
 
-        # Every round got a picture back; the last one's was never sent. Sending a
-        # request again without them is not one of the 5 calls.
-        assert len(notices) == 4
+        # Every round got a picture back; the last one's was never sent.
+        assert notices.count(
+            "The model does not take pictures, so they were dropped; "
+            "set images to false for the server that sent them"
+        ) == (LOOP_ROUNDS - 1)
         assert "input_image" not in str(fake_server.requests[-1]["input"])
 
     def test_an_error_that_is_not_about_pictures_leaves_them_alone(
@@ -255,16 +257,6 @@ class TestAgentRunTurn:
         agent.run_turn("empty_once", on_notice=notices.append)
 
         assert notices == ["The model sent an empty reply; trying again"]
-        assert len(fake_server.requests) == 2
-        assert agent.context.items[-1]["content"] == "Hello world"  # type: ignore[index]
-
-    def test_asking_again_is_not_one_of_the_model_calls_a_turn_may_make(
-        self, make_agent, fake_server, streaming
-    ):
-        agent = make_agent(STREAMING=streaming, MAX_TURNS=1)
-
-        agent.run_turn("empty_once")
-
         assert len(fake_server.requests) == 2
         assert agent.context.items[-1]["content"] == "Hello world"  # type: ignore[index]
 
@@ -469,6 +461,8 @@ def other(path: str) -> str:
 
 
 READ_FILE = Tool.from_function(read_file)
+# The rounds of a model that makes the same step every time, until the guard stops it.
+LOOP_ROUNDS = MAX_REPEATS + 1
 USER_TURN = {"role": "user", "content": "tool_call"}
 FIRST_OUTPUT = {
     "type": "function_call_output",
@@ -814,11 +808,10 @@ class TestAgentToolLoop:
             tools=[tool_with(huge)],
             STREAMING=streaming,
             MAX_CONTEXT_TOKENS=6000,
-            MAX_TURNS=4,
         )
         notices: list[str] = []
 
-        with pytest.raises(TurnError, match="^Stopped after 4 model calls"):
+        with pytest.raises(TurnError, match="^Stopped: the model keeps repeating"):
             agent.run_turn("tool_loop", on_notice=notices.append)
 
         def outputs(request: dict) -> list[str]:
@@ -829,14 +822,17 @@ class TestAgentToolLoop:
             ]
 
         # Each request has the latest result in full and the earlier ones dropped.
-        assert len(fake_server.requests) == 4
-        last = outputs(fake_server.requests[3])
-        assert last[:2] == [DROPPED_OUTPUT, DROPPED_OUTPUT]
-        assert last[2] == "x" * MAX_OUTPUT_CHARS
-        assert notices.count("Context full: older tool results dropped") == 3
+        assert len(fake_server.requests) == LOOP_ROUNDS
+        last = outputs(fake_server.requests[-1])
+        assert last[:-1] == [DROPPED_OUTPUT] * (LOOP_ROUNDS - 2)
+        assert last[-1] == "x" * MAX_OUTPUT_CHARS
+        # Not after the last round: the guard stops the turn before the budget check.
+        assert notices.count("Context full: older tool results dropped") == (
+            LOOP_ROUNDS - 2
+        )
         # Every call still has an output, so the kept turn is valid history.
         kept = [i for i in agent.context.items if i.get("type") == "function_call"]
-        assert len(kept) == len(outputs({"input": agent.context.items})) == 4
+        assert len(kept) == len(outputs({"input": agent.context.items})) == LOOP_ROUNDS
 
     def test_a_result_that_alone_outgrows_the_budget_is_shortened_and_the_turn_goes_on(
         self, make_agent, fake_server, streaming
@@ -850,12 +846,11 @@ class TestAgentToolLoop:
             tools=[tool_with(huge)],
             STREAMING=streaming,
             MAX_CONTEXT_TOKENS=3000,
-            MAX_TURNS=2,
             AUTO_COMPACT=False,
         )
         notices: list[str] = []
 
-        with pytest.raises(TurnError, match="^Stopped after 2 model calls"):
+        with pytest.raises(TurnError, match="^Stopped: the model keeps repeating"):
             agent.run_turn("tool_loop", on_notice=notices.append)
 
         sent = fake_server.requests[1]["input"][-1]["output"]
@@ -896,63 +891,99 @@ class TestAgentToolLoop:
             "[Stopped after 1 model calls: its results passed the context budget]"
         )
 
-    def test_a_model_that_never_stops_calling_tools_is_stopped_and_the_turn_kept(
+    def test_a_model_that_repeats_itself_is_stopped_and_the_turn_kept(
         self, make_agent, fake_server, streaming
     ):
-        agent = make_agent(tools=[READ_FILE], STREAMING=streaming, MAX_TURNS=3)
+        agent = make_agent(tools=[READ_FILE], STREAMING=streaming)
 
-        with pytest.raises(TurnError, match="^Stopped after 3 model calls"):
+        with pytest.raises(TurnError, match="^Stopped: the model keeps repeating"):
             agent.run_turn("tool_loop")
 
-        assert len(fake_server.requests) == 3
+        assert len(fake_server.requests) == LOOP_ROUNDS
         items = agent.context.items
-        # The question, three calls with their outputs, and a closing note: the model
+        # The question, the calls with their outputs, and a closing note: the model
         # still knows what was asked and what was done when the user says to go on.
-        assert len(items) == 8
+        assert len(items) == 2 + 2 * LOOP_ROUNDS
         assert items[0] == {"role": "user", "content": "tool_loop"}
-        assert [i.get("type") for i in items[1:7]] == [
+        assert [i.get("type") for i in items[1:-1]] == [
             "function_call",
             "function_call_output",
-        ] * 3
-        assert items[7] == {
+        ] * LOOP_ROUNDS
+        assert items[-1] == {
             "role": "assistant",
-            "content": "[Stopped after 3 model calls without a final answer]",
+            "content": f"[Stopped after {LOOP_ROUNDS} model calls: "
+            "it kept repeating the same tool calls]",
         }
 
-    def test_the_last_call_has_no_tools_so_the_turn_ends_in_an_answer(
+    def test_it_is_told_in_the_instructions_before_it_is_stopped(
         self, make_agent, fake_server, streaming
     ):
-        agent = make_agent(tools=[READ_FILE], STREAMING=streaming, MAX_TURNS=3)
+        agent = make_agent(tools=[READ_FILE], STREAMING=streaming)
+        notices: list[str] = []
 
-        agent.run_turn("tool_while_offered")
+        with pytest.raises(TurnError):
+            agent.run_turn("tool_loop", on_notice=notices.append)
 
-        first, second, last = fake_server.requests
-        assert first["tools"] and second["tools"]
-        assert LAST_CALL not in first["instructions"]
-        assert LAST_CALL not in second["instructions"]
-        assert "tools" not in last
-        assert LAST_CALL in last["instructions"]
-        # An answer, not a cut-off: no closing note, and no TurnError.
-        assert agent.context.items[-1] == {"role": "assistant", "content": TEXT}
+        for i, request in enumerate(fake_server.requests):
+            # The request after the third identical step is the first with the notice.
+            told = "same tool call with the same result" in request["instructions"]
+            assert told == (i >= WARN_REPEATS + 1), i
+        assert notices == ["The model is repeating itself; told to try something else"]
 
-    def test_a_single_call_turn_keeps_its_tools(
+    def test_a_model_that_changes_course_is_told_no_more(
         self, make_agent, fake_server, streaming
     ):
-        agent = make_agent(tools=[READ_FILE], STREAMING=streaming, MAX_TURNS=1)
+        calls: list[str] = []
 
-        # Nothing was done before the one call, so it is no "last call after tool
-        # work": it gets its tools, and the model's call ends the turn at the cap.
-        with pytest.raises(TurnError, match="^Stopped after 1 model calls"):
-            agent.run_turn("tool_while_offered")
+        def read_file(path: str) -> str:
+            """Read a text file."""
+            calls.append(path)
+            return "stuck" if len(calls) <= 4 else f"new {len(calls)}"
 
-        request = fake_server.requests[0]
-        assert request["tools"]
-        assert LAST_CALL not in request["instructions"]
+        agent = make_agent(tools=[tool_with(read_file)], STREAMING=streaming)
 
-    def test_a_turn_stopped_by_the_cap_can_be_continued_or_retried(
+        agent.run_turn("tool_loop_8")
+
+        told = [
+            "same tool call with the same result" in request["instructions"]
+            for request in fake_server.requests
+        ]
+        # After the third and the fourth identical step, then the steps differ.
+        assert told == [False] * 3 + [True] * 2 + [False] * 4
+        assert agent.context.items[-1]["content"] == "Hello world"  # type: ignore[index]
+
+    def test_the_notice_does_not_outlive_the_turn(
         self, make_agent, fake_server, streaming
     ):
-        agent = make_agent(tools=[READ_FILE], STREAMING=streaming, MAX_TURNS=2)
+        agent = make_agent(tools=[READ_FILE], STREAMING=streaming)
+        with pytest.raises(TurnError):
+            agent.run_turn("tool_loop")
+
+        agent.run_turn("hi")
+
+        assert "same tool call" not in fake_server.requests[-1]["instructions"]
+
+    def test_a_turn_of_many_different_steps_is_not_cut_off(
+        self, make_agent, fake_server, streaming
+    ):
+        calls: list[str] = []
+
+        def read_file(path: str) -> str:
+            """Read a text file."""
+            calls.append(path)
+            return f"result {len(calls)}"
+
+        agent = make_agent(tools=[tool_with(read_file)], STREAMING=streaming)
+
+        agent.run_turn("tool_loop_60")
+
+        assert len(calls) == 60
+        assert agent.context.items[-1]["content"] == "Hello world"  # type: ignore[index]
+
+    def test_a_turn_stopped_by_the_guard_can_be_continued_or_retried(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = make_agent(tools=[READ_FILE], STREAMING=streaming)
         with pytest.raises(TurnError):
             agent.run_turn("tool_loop")
 
@@ -966,7 +997,8 @@ class TestAgentToolLoop:
         assert agent.context.rewind() == "go on"
         assert agent.context.items[-1] == {
             "role": "assistant",
-            "content": "[Stopped after 2 model calls without a final answer]",
+            "content": f"[Stopped after {LOOP_ROUNDS} model calls: "
+            "it kept repeating the same tool calls]",
         }
 
     @pytest.mark.parametrize(
@@ -1617,7 +1649,7 @@ class TestAlwaysAllow:
         self, make_agent, streaming
     ):
         ran: list[str] = []
-        agent = self.agent(make_agent, streaming, ran, MAX_TURNS=3)
+        agent = self.agent(make_agent, streaming, ran)
         asked: list[str] = []
         calls: list[tuple[str, str]] = []
 
@@ -1630,10 +1662,10 @@ class TestAlwaysAllow:
                 "tool_loop", on_call=lambda *call: calls.append(call), confirm=confirm
             )
 
-        assert asked == ["read_file"] and len(ran) == 3
+        assert asked == ["read_file"] and len(ran) == LOOP_ROUNDS
         assert agent.always_allowed == {"read_file"}
         # A call that runs without asking is shown as a line, like a read-only one.
-        assert calls == [("read_file", '{"path": "notes.txt"}')] * 2
+        assert calls == [("read_file", '{"path": "notes.txt"}')] * (LOOP_ROUNDS - 1)
 
     def test_it_lasts_for_the_session_not_just_the_turn(self, make_agent, streaming):
         ran: list[str] = []

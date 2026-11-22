@@ -1,6 +1,7 @@
 """A minimal fake of the OpenAI Responses API for tests."""
 
 import json
+import re
 import socket
 import struct
 import time
@@ -218,7 +219,7 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     replies with text), "tool_call_reasoning" (the same, with a reasoning item
     before each call), "tool_call_parallel" (two calls in one response), "tool_call_mixed" (a call to
     read_file, one to write_file, another to read_file),
-    "tool_loop" (calls a tool every time), "tool_while_offered" (the same, but replies with text to a request that offers no tools), "http_error" (a 400 response), "usage" (a reply that carries a token count), "overflow_once" and "overflow" (a request refused as too long, the first time or
+    "tool_loop" (calls a tool every time), "tool_loop_N" (calls a tool until N outputs are in the input, then replies with text), "http_error" (a 400 response), "usage" (a reply that carries a token count), "overflow_once" and "overflow" (a request refused as too long, the first time or
     every time), "status_N" (an error response with
     status N and an OpenAI-style body),
     "picture_error" (a refusal for pictures, whatever the request holds), "novision_X" (scenario X, but a request that carries a picture is refused, as
@@ -240,8 +241,12 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
             scenario = (
                 scenario.removeprefix("tool_then_") if tool_output_sent else "tool_call"
             )
-        if scenario == "tool_while_offered":
-            scenario = "tool_loop" if body.get("tools") else "hello"
+        if match := re.fullmatch(r"tool_loop_(\d+)", scenario):
+            # A tool call until the input holds that many outputs, then a reply.
+            done = sum(
+                item.get("type") == "function_call_output" for item in body["input"]
+            )
+            scenario = "tool_loop" if done < int(match[1]) else "hello"
         if scenario == "empty_once":
             seen = any(
                 earlier["input"] == body["input"]

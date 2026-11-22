@@ -51,7 +51,6 @@ class TestLoadConfig:
                 "base_url": "http://localhost:1/v1",
                 "streaming": False,
                 "max_context_tokens": 1000,
-                "max_turns": 3,
                 "reasoning_effort": "low",
             },
         )
@@ -63,9 +62,8 @@ class TestLoadConfig:
             config.base_url,
             config.streaming,
             config.max_context_tokens,
-            config.max_turns,
             config.reasoning_effort,
-        ) == ("m", "http://localhost:1/v1", False, 1000, 3, "low")
+        ) == ("m", "http://localhost:1/v1", False, 1000, "low")
 
     @pytest.mark.parametrize(
         ("field", "file", "flag"),
@@ -74,7 +72,6 @@ class TestLoadConfig:
             ("base_url", "http://f/v1", "http://g/v1"),
             ("streaming", False, True),
             ("max_context_tokens", 100, 300),
-            ("max_turns", 1, 3),
             ("auto_compact", False, True),
             ("compact_at", 0.5, 0.9),
             ("keep_recent_tokens", 10, 20),
@@ -103,7 +100,6 @@ class TestLoadConfig:
             "AUTO_COMPACT",
             "COMPACT_AT",
             "KEEP_RECENT_TOKENS",
-            "MAX_TURNS",
         ],
     )
     def test_no_variable_but_the_key_sets_anything(self, user_file, monkeypatch, name):
@@ -317,9 +313,15 @@ class TestMistakes:
             load_config()
 
     def test_a_bad_value_names_its_key(self, user_file: Path):
-        write_json(user_file, {"api_key": "k", "max_turns": 0})
+        write_json(user_file, {"api_key": "k", "max_context_tokens": 0})
 
-        with pytest.raises(ValidationError, match="max_turns"):
+        with pytest.raises(ValidationError, match="max_context_tokens"):
+            load_config()
+
+    def test_the_removed_max_turns_key_is_refused_by_name(self, user_file: Path):
+        write_json(user_file, {"api_key": "k", "max_turns": 25})
+
+        with pytest.raises(ValidationError, match=r"max_turns\n  Extra inputs"):
             load_config()
 
     def test_a_file_that_is_not_json_says_which(self, user_file: Path):

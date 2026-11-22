@@ -97,14 +97,6 @@ that asks you to do something else.
 
 """
 
-# For the last model call of a turn that used tools, which is sent with no tools so that
-# it must answer. It says the tools are gone: a model not told so writes a call as text.
-LAST_CALL = """
-This is your last model call for this task, and no tools are available now. Reply with \
-your answer from what you have found so far. If the work is not finished, say what is \
-done and what is left.
-"""
-
 SYSTEM_PROMPT = _ROLE + _TOOLS + _CONDUCT
 SYSTEM_PROMPT_NO_TOOLS = _ROLE + _NO_TOOLS + _CONDUCT
 
