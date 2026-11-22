@@ -537,10 +537,13 @@ class TestAgentToolLoop:
     def test_the_tools_are_offered_in_every_request(
         self, make_agent, fake_server, streaming
     ):
-        make_agent(tools=[READ_FILE], STREAMING=streaming).run_turn("tool_call")
+        agent = make_agent(tools=[READ_FILE], STREAMING=streaming)
 
+        agent.run_turn("tool_call")
+
+        # The todo tool goes with any other tool (see test_todos.py).
         assert [request["tools"] for request in fake_server.requests] == [
-            [READ_FILE.param()]
+            [agent._todo_tool.param(), READ_FILE.param()]
         ] * 2
 
     def test_no_tools_are_sent_when_there_are_none(
@@ -616,7 +619,8 @@ class TestAgentToolLoop:
         assert output == "Invalid arguments: lines: Missing required argument"
 
     @pytest.mark.parametrize(
-        ("tools", "available"), [([], "none"), ([Tool.from_function(other)], "other")]
+        ("tools", "available"),
+        [([], "none"), ([Tool.from_function(other)], "todo, other")],
     )
     def test_an_unknown_tool_is_reported_to_the_model(
         self, make_agent, fake_server, streaming, tools, available

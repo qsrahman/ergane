@@ -93,6 +93,10 @@ The modules, in dependency order (each imports only from those above it):
   field of the other kind is an error of its own, so there is no check of
   combinations), and what the MCP code shares with it: the rules for a server's name
   and the `${NAME}` placeholders (`fill_placeholders`).
+- `todos.py`: `TodoList` and its `todo` tool (whole-list replace, one `in_progress` at a
+  time, held in memory, not saved with a session). The agent offers it only when it has
+  another tool, shows a change as one notice, and puts a list with open steps into the
+  instructions of each request, since old tool results are dropped from the history.
 - `mcp_tools.py`: what an MCP server's tools and results become for the model: names,
   the text and pictures of a result, the check of a call's arguments. Plain functions.
 - `mcp_client.py`: `McpClient`, one connection used from synchronous code (on anyio's

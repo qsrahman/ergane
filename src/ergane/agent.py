@@ -52,6 +52,7 @@ from ergane.prompts import (
     SYSTEM_PROMPT_NO_TOOLS,
 )
 from ergane.responses import NO_TEXT, Responder, response_problem
+from ergane.todos import TodoList
 from ergane.tools import Tool, ToolOutput
 
 # The reason in the note that closes a turn the user stopped.
@@ -172,6 +173,8 @@ class Agent:
         self.last_input_tokens: int | None = None
         self.compactor = Compactor(self.context, config, self._summarize)
         self.tools: dict[str, Tool] = {}
+        self.todos = TodoList()
+        self._todo_tool = self.todos.tool()
         if clashes := self.add_tools(tools):
             raise ValueError(f"Tool names must be unique: {', '.join(clashes)}")
         self.server_notes = dict(server_notes or {})
@@ -355,12 +358,15 @@ class Agent:
         """
         turn.rounds += 1
         sent = len(turn.items)  # what the response answered
+        listed = self.todos.revision
         try:
             turn.items += cast(
                 ResponseInputParam,
                 [item.model_dump(exclude_none=True) for item in response.output],
             )
             self._run_tools(calls, turn.items, io)
+            if self.todos.revision != listed:
+                io.on_notice(self.todos.summary())
         except KeyboardInterrupt:
             # A call that was running, or had not run yet, has no output: say so, or
             # the API rejects the history. The call may have done part of its work,
@@ -520,9 +526,17 @@ class Agent:
         self.context.counted = None
         return skipped
 
+    def _offered(self) -> dict[str, Tool]:
+        """The tools of a request: the ones the agent was given, and the todo tool
+        with them. With no other tool there is none, so that a chat without tools
+        stays a plain chat. A given tool named `todo` takes the place of ours."""
+        if not self.tools:
+            return {}
+        return {"todo": self._todo_tool, **self.tools}
+
     def _tool_params(self) -> list[FunctionToolParam]:
         """The definitions of the tools, as the request carries them."""
-        return [tool.param() for tool in self.tools.values()]
+        return [tool.param() for tool in self._offered().values()]
 
     def _instructions(self) -> str:
         """What every request carries as `instructions`: the system prompt, what the
@@ -539,6 +553,7 @@ class Agent:
             "Environment:\n"
             f"- Operating system: {platform.platform()}\n"
             f"- Current date: {date.today().isoformat()}\n"
+            f"{self.todos.notes()}"
         )
 
     def _fixed_estimate(self) -> tuple[int, int]:
@@ -566,10 +581,12 @@ class Agent:
     def reset(self) -> None:
         """Forget the whole conversation, the summary too."""
         self.context.reset()
+        self.todos.clear()
 
     def restore(self, items: Sequence[Mapping[str, Any]], summary: str | None) -> None:
         """Replace the whole conversation by a saved one (see `Context.restore`)."""
         self.context.restore(cast(ResponseInputParam, items), summary)
+        self.todos.clear()  # the list is not saved with a session
         self.last_input_tokens = None  # what the server counted was another request
 
     def undo(self) -> bool:
@@ -654,8 +671,9 @@ class Agent:
                 items.append(_output_item(call, running.result))
             together.clear()
 
+        offered = self._offered()
         for call in calls:
-            tool = self.tools.get(call.name)
+            tool = offered.get(call.name)
             problem = tool.check(call.arguments) if tool else None
             if tool is not None and problem is None and tool.read_only:
                 io.on_call(call.name, call.arguments)
@@ -691,7 +709,7 @@ class Agent:
         if not asks:
             io.on_call(call.name, call.arguments)
         if tool is None:
-            known = ", ".join(self.tools) or "none"
+            known = ", ".join(self._offered()) or "none"
             return ToolOutput(f"Unknown tool: {call.name}. Available tools: {known}.")
         if problem:
             # A call that would be rejected is not worth asking the user about.

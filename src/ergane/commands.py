@@ -241,6 +241,17 @@ def summary_(repl: Repl, args: str) -> str | None:
     return None
 
 
+@command("/todo")
+def todo(repl: Repl, args: str) -> str | None:
+    """Show the model's todo list."""
+    todos = repl.agent.todos
+    if not todos.items:
+        return "No todos"
+    repl.console.write(f"{todos.render()}\n")
+    repl.console.blank()
+    return None
+
+
 @command("/context")
 def context_(repl: Repl, args: str) -> None:
     """Show how much of the context budget the next request would use."""
