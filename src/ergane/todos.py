@@ -52,13 +52,14 @@ class TodoList:
         return Tool.from_function(self.todo)
 
     def todo(self, todos: list[TodoItem]) -> str:
-        """Keep a checklist for a task with three or more steps, or when the user gives \
-you several tasks. Skip it for a simple task or a plain question.
+        """Keep a checklist for a task with three or more steps, or when the user gives
+        you several tasks. Skip it for a simple task or a plain question.
 
-        Send the whole list on every call; it replaces the previous one, and an empty \
-list clears it. Mark a step `in_progress` when you start it (only one at a time) and \
-`completed` as soon as it is done; use `cancelled` for a step you drop. Call it only \
-when the list changes. The user sees the list, so do not repeat it in your reply.
+        Send the whole list on every call; it replaces the previous one, and an empty
+        list clears it. Mark a step `in_progress` when you start it (only one at a
+        time) and `completed` as soon as it is done; use `cancelled` for a step you
+        drop. Call it only when the list changes. The user sees the list, so do not
+        repeat it in your reply.
         """
         if any(not item.content.strip() for item in todos):
             raise ValueError("every todo needs a non-empty content")
