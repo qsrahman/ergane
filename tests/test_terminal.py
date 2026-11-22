@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import fragment_list_to_text, to_formatted_text
 from prompt_toolkit.input import create_pipe_input
@@ -12,6 +13,7 @@ from ergane.commands import COMMANDS
 from ergane.mcp_hub import McpHub, ServerStatus
 from ergane.repl import Repl
 from ergane.terminal import (  # pyright: ignore[reportPrivateUsage]
+    CommandCompleter,
     _Menu,
     choose,
     terminal_session,
@@ -486,3 +488,65 @@ class TestMenuOfSessions:
     )
     def test_arrows_numbers_and_the_key_of_cancel_choose(self, tmp_path, keys, chosen):
         assert self.choose(tmp_path, keys) == chosen
+
+
+class TestMenuOfCommands:
+    """The menu of the commands opens when a command is being typed, or Tab asks for it:
+    not when only blanks are, such as the line Alt-Enter adds to an empty prompt."""
+
+    @staticmethod
+    def completions(text: str, *, tab: bool = False) -> list[str]:
+        event = CompleteEvent(completion_requested=tab, text_inserted=not tab)
+        completer = CommandCompleter(COMMANDS)
+        return [c.text for c in completer.get_completions(Document(text), event)]
+
+    @pytest.mark.parametrize("blanks", ["", " ", "\n", "  \n", "\n\n"])
+    def test_blanks_typed_do_not_open_it(self, blanks):
+        assert self.completions(blanks) == []
+
+    @pytest.mark.parametrize("blanks", ["", "\n", "  \n"])
+    def test_tab_on_blanks_lists_every_command(self, blanks):
+        assert self.completions(blanks, tab=True) == sorted(COMMANDS)
+
+    def test_a_slash_opens_it_with_every_command(self):
+        assert self.completions("/") == sorted(COMMANDS)
+
+    def test_what_is_typed_narrows_it(self):
+        assert self.completions("/he") == ["/help"]
+
+    def test_the_arguments_of_a_command_open_it_as_the_space_is_typed(self):
+        assert "low" in self.completions("/effort ")
+
+    def test_a_line_added_after_a_word_has_no_menu(self):
+        assert self.completions("hello\n") == []
+
+    def menu_open(self, tmp_path, keys: str) -> bool:
+        """Type `keys` at the real prompt, and say whether the menu is open after."""
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, tmp_path / "history", input=pipe, output=DummyOutput()
+            )
+            assert session is not None
+            seen: list[bool] = []
+
+            def look() -> None:
+                state = session.default_buffer.complete_state
+                seen.append(state is not None and bool(state.completions))
+                session.app.exit(result="")
+
+            def pre_run() -> None:
+                pipe.send_text(keys)
+                session.app.loop.call_later(0.3, look)  # pyright: ignore[reportOptionalMemberAccess]
+
+            session.prompt(pre_run=pre_run)
+            return seen[0]
+
+    @pytest.mark.parametrize("keys", ["\x1b\r", " ", "\x1b\r\x1b\r"])
+    def test_alt_enter_or_a_space_at_an_empty_prompt_opens_no_menu(
+        self, tmp_path, keys
+    ):
+        assert self.menu_open(tmp_path, keys) is False
+
+    @pytest.mark.parametrize("keys", ["/", "/he", "\t"])
+    def test_a_slash_or_tab_opens_it_at_the_real_prompt(self, tmp_path, keys):
+        assert self.menu_open(tmp_path, keys) is True

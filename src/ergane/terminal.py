@@ -165,6 +165,10 @@ class CommandCompleter(Completer):
     def get_completions(self, document: Document, complete_event: CompleteEvent):
         name, space, rest = document.text_before_cursor.lstrip().partition(" ")
         if not space:
+            if not name and not complete_event.completion_requested:
+                # Nothing typed but blanks: Alt-Enter or a space is no call for the
+                # menu of every command. Tab is.
+                return
             # A command is shown with what it does, so no one has to run /help.
             words = {n: self.commands[n].description for n in sorted(self.commands)}
             typed = name
@@ -227,7 +231,7 @@ def terminal_session(
         placeholder=[
             (
                 "class:placeholder",
-                "Message, or /help for commands. Alt-Enter adds a line.",
+                "Ask anything, or /help for commands. Alt-Enter adds a line.",
             )
         ],
         # Ctrl-X Ctrl-E edits a long prompt in $EDITOR and sends it when the editor
