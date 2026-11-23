@@ -384,8 +384,9 @@ their text is printed when output is redirected or `NO_COLOR` is set.
   with its reply or not at all.
 - **Every call has its output** before anything is sent or saved, and an output never
   outlives its call.
-- **The history changes in four places only:** `save_turn`, `undo` (which `rewind`
-  uses), `reset` and `compact`. `begin_turn` and the rounds work on a copy.
+- **The history changes in five places only:** `save_turn`, `undo` (which `rewind`
+  uses), `reset`, `compact` and `restore` (a saved session, from `--resume` or
+  `/sessions`, replaces the whole history). `begin_turn` and the rounds work on a copy.
 - **The newest user message is never trimmed away,** and neither is the summary.
 - **A summary replaces turns only when it is good:** the history is whole after a failure.
 - **The agent prints nothing.** If a new message is for the user, it goes through one

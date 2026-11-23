@@ -144,7 +144,8 @@ The modules, in dependency order (each imports only from those above it):
 - `cli.py`: `main()`.
 
 Dependencies are passed in through constructors (`Agent(config, client=None, tools=(),
-server_notes=None)`, `Repl(agent, commands, session=None, console=None, hub=None)`); there is no global config lookup.
+server_notes=None)`, `Repl(agent, commands, session=None, console=None, hub=None,
+store=None)`); there is no global config lookup.
 Every setting is read where it is used, so `/model` and `/effort` take effect at once.
 
 What must stay true:

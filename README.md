@@ -218,7 +218,7 @@ The tests run against a local fake of the Responses API. They ignore your `confi
 ## How it works
 
 - Requests are sent with `store=False`, so the server keeps no conversation state. The full history is resent on each turn.
-- A turn, tool calls and their results included, is added to the history once the final response completes with text. An incomplete response keeps the partial reply you already saw; failed or empty responses leave the history unchanged. An empty response (no text, no call) is asked for again once before it is reported.
+- A turn, tool calls and their results included, is added to the history once the final response completes with text. An incomplete response keeps the partial reply you already saw. A failed, refused or empty response in the first round leaves the history unchanged; after a round of tool calls has run (they may have had effects), the turn is kept with a closing note such as `[Stopped after 2 model calls: Response failed: …]`, so the model still knows what was done: say "continue" to go on, or use `/retry` to start the prompt over. An empty response (no text, no call) is asked for again once before it is reported.
 - When the next request would pass `compact_at` of `max_context_tokens` (instructions, tool definitions and history together), the oldest turns are summarized and the newest kept; see [Long conversations](#long-conversations). Turns that still do not fit are dropped, oldest first. Tokens are estimated at about 4 bytes of UTF-8 per token, which works with any backend's tokenizer.
 
 [TURN.md](TURN.md) follows one turn through the code: what is sent, what is kept, what you see, and every way a turn can end.
