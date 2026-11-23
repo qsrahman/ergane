@@ -3,8 +3,9 @@
 Built-in tools in `src/ergane/builtin/`, designed from a reading of four codebases:
 [workshop-mcp](https://github.com/qsrahman/workshop-mcp) (a stdio MCP server with file,
 shell, fetch and search tools), ergane's own `tools` branch (a `fetch_url` port), and the
-tools of opencode, pi and codex. Nothing here is built yet. The decisions at the end are
-open; each has a default.
+tools of opencode, pi and codex. Nothing here is built yet. The decisions at the end were
+settled in a round of questions and answers, and each is recorded there with what follows
+from it.
 
 ## What the other agents do
 
@@ -61,16 +62,25 @@ What this changes in the plan:
 
 | Tool | Parameters | Asks? | Notes |
 |---|---|---|---|
-| `read_file` | `path`, `offset`, `limit` | no | A file as text (UTF-8, no NUL bytes) or, for a directory, a listing (directories first, ending in `/`); an image comes back as a picture; capped at about 16,000 characters with the offset to continue from; a missing path suggests the nearest name |
-| `search_files` | `path`, `name`, `contains`, `limit` | no | `name` is a glob over paths, `contains` a regular expression over file contents; at least one; results are paths, or `path:line: text` |
+| `read_file` | `path`, `offset`, `limit` | no | A file as text (UTF-8, no NUL bytes) or, for a directory, a listing (directories first, ending in `/`); capped at about 16,000 characters with the offset to continue from; a missing path suggests the nearest name. Pictures come later (see Build order) |
+| `search_files` | `path`, `name`, `contains`, `limit` | no | `name` is a glob over paths, `contains` a regular expression over file contents; at least one; results are paths, or `path:line: text`; `.gitignore` is honoured |
 | `write_file` | `path`, `content` | yes | Creates parent directories; refuses a symlink or a non-regular file |
 | `edit_file` | `path`, `old_text`, `new_text`, `replace_all` | yes | `old_text` must match once unless `replace_all`; exact, then normalized; one line back |
 | `run_command` | `command`, `cwd`, `timeout_s` | yes | A fresh process each call, stdin closed, process group killed on timeout, head and tail of the output |
-| `web_fetch` | `url`, `max_length`, `start_index`, `raw` | decision 3 | From the `tools` branch port; its dependencies are an optional extra |
-| `web_search` | `query`, `max_results` | decision 3 | Keyless: DuckDuckGo's HTML endpoint; best effort; the same optional extra |
+| `web_fetch` | `url`, `max_length`, `start_index`, `raw` | yes | From the `tools` branch port, without `robots.txt`; ordinary dependencies |
+| `web_search` | `query`, `max_results` | yes | Keyless: DuckDuckGo's HTML endpoint; best effort |
 
 `list_directory` is not a tool of its own: `read_file` lists a directory (decision 1).
 Parameters are `snake_case`, and each has a description (`Annotated[..., Field(description=...)]`).
+
+### All seven are on, and can be switched off
+
+Every built-in is offered by default. A `builtin_tools` setting in `config.json` takes `false`
+(none) or a list of names (only those, like an MCP server's `tools`), and `--no-builtin`
+turns them all off for one run. With no built-in and no MCP server, ergane is the plain chat
+of `CLAUDE.md`, with `SYSTEM_PROMPT_NO_TOOLS`. `cli.py` does the filtering when it builds the
+list it gives the `Agent`; `tools_in` is unchanged. Definitions cost tokens in every request:
+measure them with `/context` once they exist.
 
 ## Shared pieces
 
@@ -103,10 +113,10 @@ builtin/
   placeholders) are part of the user's own environment and are inherited, as with `pi` and
   `opencode`; the docs say so.
 - **Network.** `web_fetch` keeps the safeguards of the port (address check inside the
-  connection's lookup, every hop checked, body capped after decompression). Its results are
-  labelled untrusted in the description.
+  connection's lookup, every hop checked, body capped after decompression, binary content
+  refused) and drops `robots.txt`. Its results are labelled untrusted in the description.
 - **Exfiltration.** Auto-run read tools plus an auto-run fetch would let an injected page read
-  a file and send it out. That is why decision 3 matters.
+  a file and send it out. That is why both web tools ask on every call (decision 3).
 
 ### Permissions: show the change
 
@@ -187,15 +197,11 @@ running it).
 
 Optional or to reconsider:
 
-- **`pathspec`** (+1 package) matches `.gitignore` rules, so `search_files` could skip ignored
-  files and not only `.git` and `node_modules`.
+- **`pathspec`** (+1 package, a normal dependency) matches `.gitignore` rules, so `search_files`
+  and a recursive listing skip what git ignores. `.git` itself is never entered.
 - **`ripgrep`** (`rg`) is installed on this machine, and `opencode`, `pi` and `codex` all rely
   on it, but none can assume it on another machine. `search_files` is pure Python; using
   `rg` when present is a later optimization.
-- **`protego` may be unnecessary.** The standard `urllib.robotparser` on 3.14 handled the
-  three cases tried: `Disallow: /private/*/secret`, `Disallow: /*.pdf$`, and an `Allow` after
-  a broader `Disallow`, each the same as `protego`. Phase 4 should run the branch's
-  `robots.txt` tests with it swapped in.
 - **`trafilatura`** would replace `beautifulsoup4`, `markdownify` and the page-furniture code,
   but a dry run shows 14 new packages. Extraction quality is untested. Consider it only if
   the branch's output is poor on pages that matter.
@@ -208,24 +214,25 @@ redirect checks, post-decompression body cap). No library was evaluated for it.
 
 ## Build order
 
-Each phase is its own commit, with tests and a mutation check.
+Each phase is its own commit, with tests and a mutation check. Start with phases 0 and 1.
 
 0. `_paths.py` and `_text.py`, with traversal, sibling-prefix, symlink and deny-list cases.
-1. `read_file` (files, directories, images) and `search_files`.
+1. `read_file` (files and directories, text only) and `search_files` (with `pathspec`), and the
+   switch: the `builtin_tools` setting, `--no-builtin`, and the filtering in `cli.py`.
 2. The `Tool.preview` hook and the console change, then `write_file` and `edit_file`.
 3. `run_command`.
 4. `web_fetch`. Rebase the `tools` branch commit (`a7c7aaf`: it still says `muagent`, uses
    `pydantic-settings`, which main dropped, and sits on an old base), rename the tool, and
-   bring its tests and licence notices. Move `beautifulsoup4`, `lxml` and `markdownify` into
-   an optional `web` extra, imported on first use, so that a missing one gives a clear error
-   and not a failed start. Try the standard `urllib.robotparser` in place of `protego`.
-5. `web_search`, with a saved DuckDuckGo page as a test fixture; it joins the `web` extra
-   (`beautifulsoup4` is all it needs).
-6. Docs (README, with a note on using a search MCP server for another provider, `TOOLS.md`,
-   `CLAUDE.md`, `TURN.md`), then a model eval on gpt-5.5 and gemma4: picks the file tools over shell `cat`, reports an ambiguous edit instead of
-   guessing, writes nothing outside the roots, and edits as well with `edit_file` as with a
-   patch. If `gpt-5.5` does clearly worse with `edit_file`, try an `apply_patch` function
-   tool for it, as `opencode` does for GPT-5+ models.
+   bring its tests and licence notices. Remove `robots.txt` (and with it `protego`). Add
+   `beautifulsoup4`, `lxml` and `markdownify` to the dependencies.
+5. `web_search`, with a saved DuckDuckGo page as a test fixture. It needs only
+   `beautifulsoup4`.
+6. Pictures in `read_file`, as a small commit: png, jpeg, webp and gif returned the way MCP
+   pictures are, so a model that takes none has them dropped with the existing notice.
+7. Docs (README, `TOOLS.md`, `CLAUDE.md`: the Overview's "none yet", the plain chat and the
+   invariants; `TURN.md`; a note on using a search MCP server for another provider), then a
+   model eval on gpt-5.5 and gemma4: picks the file tools over shell `cat`, reports an
+   ambiguous edit instead of guessing, and writes nothing outside the roots.
 
 ## Verification
 
@@ -237,30 +244,28 @@ Each phase is its own commit, with tests and a mutation check.
 - `web_search` on a saved results page: ordinary results, an ad, a `uddg` redirect, and no
   results; a fake server answering `202`, `403`, `429` and an empty body each gives the
   "refused" message, not "no results".
-- `web_fetch` and `web_search` without the extra installed: the tool is not offered, or says
-  how to install it, and ergane still starts.
+- `builtin_tools`: `false`, a list, and `--no-builtin` each give the right tools, and with
+  none and no MCP server the request has no tools and `SYSTEM_PROMPT_NO_TOOLS`.
+- `.gitignore`: an ignored file is neither listed nor found; `.git` is never entered.
 
 ## Decisions
 
-1. **`list_directory`.** Fold it into `read_file` (as `opencode` does), or keep it as a tool?
-   *Default: fold*; it removes a tool definition from every request.
-2. **Confinement.** Working directory plus temp only, or unrestricted? *Default: confined*,
-   with an `allowed_dirs` setting only if it is needed.
-3. **Do `web_fetch` and `web_search` ask on each call?** The `tools` branch chose to ask,
-   because a page can tell the model to fetch a URL that carries the user's data.
-   *Default: ask*, with "Always allow" available.
-4. **`web_search`.** A keyless DuckDuckGo built-in (best effort), MCP only, or a built-in
-   Brave tool with a `brave_api_key` in `config.json`? *Default: the DuckDuckGo built-in,
-   with the MCP route documented.*
-5. **`web_fetch`.** Rebase the branch rather than rewrite it, keeping `robots.txt`? `opencode`,
-   `pi` and `codex` do not obey it, so it could go to save code. *Default: rebase and keep it.*
-   Dependencies (`beautifulsoup4`, `lxml`, `markdownify`; `protego` only if the standard
-   parser fails the branch's tests; `web_search` needs only `beautifulsoup4`): normal
-   dependencies, or an optional `web` extra? *Default: optional extra.*
-6. **`edit_file` matching.** Exact only, or exact then normalized (as `opencode` and `pi`
-   do)? *Default: exact then normalized.* (This reverses the earlier default, on the
-   evidence that both ship it.)
-7. **Which tools are on by default.** All, or the core four (`read_file`, `write_file`,
-   `edit_file`, `run_command`) plus `search_files`, with `web_fetch` and `web_search` offered when
-   the extra is installed? Measure the definitions with `/context` first. *Default: core five on,
-   the web tools when installed.*
+Settled in a round of questions and answers. Each line is the choice and what it commits the
+plan to.
+
+| # | Question | Choice | What follows |
+|---|---|---|---|
+| 1 | Finding and listing files | `read_file` lists a directory; one `search_files` with a name glob and a content regex | No `list_directory`; content search is pure Python and never prompts |
+| 2 | Where the file tools reach | The working directory plus the system temp directory | Everything else refused; ergane's config and state directories always refused |
+| 3 | Do the web tools ask | Both ask on every call, "Always allow" available | `read_only` false for `web_fetch` and `web_search` |
+| 4 | `web_search` source | A keyless DuckDuckGo built-in, best effort | About 70 lines; an MCP server is the documented route for another provider |
+| 5 | `web_fetch` | Rebase the branch; drop `robots.txt`; ordinary dependencies | No `protego`; `beautifulsoup4`, `lxml` and `markdownify` join `dependencies`; no `web` extra |
+| 6 | `edit_file` matching | Exact, then normalized | Trailing whitespace, smart quotes, Unicode dashes and spaces, file's own text kept |
+| 7 | Which tools are offered | All seven, always | A `builtin_tools` setting and `--no-builtin` keep the plain chat reachable |
+| 8 | `run_command` timeout | 120 seconds, `timeout_s` to raise it | The process group is killed at the limit |
+| 9 | First phase | 0 and 1: the helpers, `read_file`, `search_files` and the switch | Read-only tools first, before anything writes |
+| 10 | `apply_patch` for GPT models | Never: `edit_file` only | One editing mechanism for every model; no per-model tool choice |
+| 11 | Pictures in `read_file` | Text only first, pictures in a later small commit | Phase 6 |
+| 12 | Ignore rules in `search_files` | Honour `.gitignore` with `pathspec` | One more dependency |
+| 13 | `run_command` environment | Inherit everything except `OPENAI_API_KEY` | Git credentials and toolchains work; variables exported for MCP servers are inherited and the docs say so |
+| 14 | Long command output | Head and tail with a note, no file | Nothing for ergane to track or delete |
