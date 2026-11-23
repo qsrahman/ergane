@@ -19,7 +19,7 @@ from ergane.mcp_hub import McpHub
 from ergane.repl import Repl
 from ergane.sessions import SessionError, SessionStore
 from ergane.terminal import terminal_session
-from ergane.tools import Tool, tool_clash, tools_in
+from ergane.tools import Tool, pick_tools, tool_clash, tools_in
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -82,6 +82,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         choices=[*EFFORTS, "default"],
         metavar="LEVEL",
         help=f"{', '.join(EFFORTS)}, or default to send none",
+    )
+    parser.add_argument(
+        "--no-builtin",
+        action="store_const",
+        const=False,
+        dest="builtin_tools",
+        help="do not offer ergane's own tools (the file tools)",
     )
     parser.add_argument(
         "--no-mcp",
@@ -178,7 +185,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         # The banner is separated from the notices of servers that failed by the
         # console itself, which is why it is the same one.
         agent = Agent(config, server_notes=hub.instructions())
-        for name in agent.add_tools([*tools_in(builtin, console.notice), *mcp_tools]):
+        own, unknown = pick_tools(
+            tools_in(builtin, console.notice), config.builtin_tools
+        )
+        for name in unknown:
+            console.notice(f"builtin_tools: ergane has no built-in tool named {name}")
+        for name in agent.add_tools([*own, *mcp_tools]):
             console.notice(tool_clash(name))
         Repl(agent, COMMANDS, session, console, hub, store).run(resume=saved)
     finally:

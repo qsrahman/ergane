@@ -176,14 +176,95 @@ def test_two_built_in_tools_of_one_name_are_reported_and_the_first_is_offered(
     assert "Tool look is defined twice" in capsys.readouterr().out
 
 
-def test_without_an_mcp_json_the_agent_has_no_tools(monkeypatch: pytest.MonkeyPatch):
+def test_the_agent_offers_the_built_in_tools_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setenv("OPENAI_API_KEY", "test")
     monkeypatch.setattr("ergane.cli.Repl", RecordingRepl)
 
     main([])
 
     assert RecordingRepl.agent is not None
+    assert {
+        "read_file",
+        "list_directory",
+        "search_files",
+        "write_file",
+        "edit_file",
+        "run_command",
+        "web_fetch",
+        "web_search",
+    } <= set(RecordingRepl.agent.tools)
+
+
+def test_no_builtin_leaves_the_agent_with_no_tools(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    monkeypatch.setattr("ergane.cli.Repl", RecordingRepl)
+
+    main(["--no-builtin"])
+
+    assert RecordingRepl.agent is not None
     assert RecordingRepl.agent.tools == {}
+
+
+class TestBuiltinTools:
+    @pytest.fixture(autouse=True)
+    def fake_package(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        package = tmp_path / "pick_builtin"
+        package.mkdir()
+        (package / "__init__.py").write_text("")
+        for name in ("alpha", "beta", "gamma"):
+            (package / f"{name}.py").write_text(
+                "from ergane.tools import tool\n\n@tool\n"
+                f'def {name}() -> str:\n    """Say {name}."""\n    return "{name}"\n'
+            )
+        monkeypatch.syspath_prepend(str(tmp_path))
+        monkeypatch.setenv("OPENAI_API_KEY", "test")
+        monkeypatch.setattr("ergane.cli.Repl", RecordingRepl)
+        monkeypatch.setattr(
+            "ergane.cli.builtin", importlib.import_module("pick_builtin")
+        )
+
+    def test_all_are_offered_unless_the_setting_says_otherwise(self):
+        main([])
+
+        assert RecordingRepl.agent is not None
+        assert list(RecordingRepl.agent.tools) == ["alpha", "beta", "gamma"]
+
+    def test_false_in_the_file_offers_none(self, tmp_path: Path):
+        write_config_json(tmp_path, {}, builtin_tools=False)
+
+        main([])
+
+        assert RecordingRepl.agent is not None
+        assert RecordingRepl.agent.tools == {}
+
+    def test_a_list_in_the_file_offers_only_those(self, tmp_path: Path):
+        write_config_json(tmp_path, {}, builtin_tools=["gamma", "alpha"])
+
+        main([])
+
+        assert RecordingRepl.agent is not None
+        assert list(RecordingRepl.agent.tools) == ["alpha", "gamma"]
+
+    def test_a_name_that_is_not_a_tool_is_reported_and_the_rest_are_offered(
+        self, tmp_path: Path, capsys
+    ):
+        write_config_json(tmp_path, {}, builtin_tools=["alpha", "nope"])
+
+        main([])
+
+        assert RecordingRepl.agent is not None
+        assert list(RecordingRepl.agent.tools) == ["alpha"]
+        assert "no built-in tool named nope" in capsys.readouterr().out
+
+    def test_the_flag_beats_the_file(self, tmp_path: Path):
+        write_config_json(tmp_path, {}, builtin_tools=["alpha"])
+
+        main(["--no-builtin"])
+
+        assert RecordingRepl.agent is not None
+        assert RecordingRepl.agent.tools == {}
 
 
 FAKE_SERVER = {
@@ -192,10 +273,10 @@ FAKE_SERVER = {
 }
 
 
-def write_config_json(config_home: Path, servers: dict) -> None:
+def write_config_json(config_home: Path, servers: dict, **settings: object) -> None:
     path = config_home / "ergane" / "config.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"mcpServers": servers}))
+    path.write_text(json.dumps({"mcpServers": servers, **settings}))
 
 
 def threads() -> list[str]:
@@ -213,7 +294,7 @@ class TestMcpServers:
         write_config_json(tmp_path, {"fake": FAKE_SERVER})
         monkeypatch.setattr("ergane.cli.Repl", RecordingRepl)
 
-        main([])
+        main(["--no-builtin"])
 
         assert RecordingRepl.agent is not None
         names = list(RecordingRepl.agent.tools)
@@ -408,7 +489,7 @@ class TestFlags:
         args = parse_args(
             [
                 "--config", "c.json", "--model", "m", "--base-url", "u",
-                "--no-streaming", "--max-context-tokens", "9",
+                "--no-streaming", "--max-context-tokens", "9", "--no-builtin",
                 "--reasoning-effort", "low", "--no-mcp",
             ]
         )  # fmt: skip
@@ -419,6 +500,7 @@ class TestFlags:
             "base_url": "u",
             "streaming": False,
             "max_context_tokens": 9,
+            "builtin_tools": False,
             "reasoning_effort": "low",
             "no_mcp": True,
         }
@@ -486,7 +568,7 @@ class TestFlags:
     def test_no_mcp_starts_none_of_the_servers(self, tmp_path: Path):
         write_config_json(tmp_path, {"fake": FAKE_SERVER})
 
-        main(["--no-mcp"])
+        main(["--no-mcp", "--no-builtin"])
 
         assert RecordingRepl.agent is not None
         assert RecordingRepl.agent.tools == {}
@@ -517,7 +599,7 @@ class TestMcpServersInTheBackground:
 
         monkeypatch.setattr("ergane.cli.Repl", Recording)
 
-        main([])
+        main(["--no-builtin"])
 
         assert seen["tools_at_start"] == {}
         assert seen["hub"] is not None

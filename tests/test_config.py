@@ -72,6 +72,7 @@ class TestLoadConfig:
             ("base_url", "http://f/v1", "http://g/v1"),
             ("streaming", False, True),
             ("max_context_tokens", 100, 300),
+            ("builtin_tools", ["read_file"], False),
             ("auto_compact", False, True),
             ("compact_at", 0.5, 0.9),
             ("keep_recent_tokens", 10, 20),

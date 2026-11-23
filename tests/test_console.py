@@ -682,3 +682,116 @@ class TestColumns:
         Console().columns([("x", "aaaa, context7__resolve-library-id, bbbb")])
 
         assert "context7__resolve-library-id," in capsys.readouterr().out
+
+
+def save_with_text(path: str, text: str) -> str:
+    """Save text to a file."""
+    return path
+
+
+def show_change(path: str, text: str) -> str:
+    if text == "boom":
+        raise ValueError("cannot read the file")
+    return f"--- {path}\n+++ {path}\n+{text}"
+
+
+SAVE_WITH_PREVIEW = Tool.from_function(
+    save_with_text, read_only=False, preview=show_change
+)
+
+
+class TestConfirmWithAPreview:
+    """A tool that can say what a call would change offers it, in place of the raw
+    arguments, whether or not the arguments fit on the line."""
+
+    ARGUMENTS = '{"path": "notes.txt", "text": "hello"}'
+
+    def test_the_menu_always_offers_to_show_the_change(self):
+        shown: list[list[tuple[str, str]]] = []
+
+        def choose(question, options):
+            shown.append(list(options))
+            return "n"
+
+        console = Console()
+        console.choose = choose
+        console.confirm(SAVE_WITH_PREVIEW, self.ARGUMENTS)
+
+        assert shown == [
+            [
+                ("n", "Deny"),
+                ("y", "Allow once"),
+                ("a", "Always allow save_with_text"),
+                ("?", "Show the change"),
+            ]
+        ]
+
+    def test_asking_for_it_prints_the_change_and_asks_again(self, capsys):
+        answers = iter(["?", "n"])
+        asked = []
+
+        def choose(question, options):
+            asked.append(1)
+            return next(answers)
+
+        console = Console()
+        console.choose = choose
+
+        decision = console.confirm(SAVE_WITH_PREVIEW, self.ARGUMENTS)
+
+        out = capsys.readouterr().out
+        assert decision is False and len(asked) == 2
+        assert "--- notes.txt\n+++ notes.txt\n+hello" in out
+        assert '{\n  "path"' not in out  # the change, not the arguments in full
+
+    def test_a_typed_question_offers_it_too(self, monkeypatch, capsys):
+        prompts: list[str] = []
+        replies = iter(["?", "y"])
+
+        def fake_input(prompt: str) -> str:
+            prompts.append(prompt)
+            return next(replies)
+
+        monkeypatch.setattr("builtins.input", fake_input)
+
+        decision = Console().confirm(SAVE_WITH_PREVIEW, self.ARGUMENTS)
+
+        assert decision is True
+        assert prompts[0].endswith("? [y/N/a/?] ")
+        assert "+hello" in capsys.readouterr().out
+
+    def test_a_preview_that_fails_says_so_and_the_question_stays(self, capsys):
+        answers = iter(["?", "n"])
+        console = Console()
+        console.choose = lambda question, options: next(answers)
+
+        decision = console.confirm(
+            SAVE_WITH_PREVIEW, '{"path": "notes.txt", "text": "boom"}'
+        )
+
+        assert decision is False
+        assert (
+            "Could not show the change: ValueError: cannot read the file"
+            in capsys.readouterr().out
+        )
+
+    def test_the_change_is_made_safe_for_the_terminal(self, capsys):
+        answers = iter(["?", "n"])
+        console = Console()
+        console.choose = lambda question, options: next(answers)
+
+        console.confirm(
+            SAVE_WITH_PREVIEW, '{"path": "a", "text": "x\\u001b]52;c;QQ==\\u0007y"}'
+        )
+
+        out = capsys.readouterr().out
+        assert "\x1b" not in out and "\x07" not in out
+
+    def test_a_tool_without_one_still_shows_its_arguments(self, capsys):
+        answers = iter(["?", "n"])
+        console = Console()
+        console.choose = lambda question, options: next(answers)
+
+        console.confirm(SAVE, json.dumps({"path": "p" * 200}))
+
+        assert "p" * 200 in capsys.readouterr().out

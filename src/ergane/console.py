@@ -272,7 +272,8 @@ class Console:
         (anything else, and the end of input, is a no)."""
         before = f"Allow {tool.name} "
         shown, shortened = _fit(arguments, _room(len(before) + len("? [y/N/a/?] ")))
-        prompt = f"{before}{shown}? [y/N/a{'/?' if shortened else ''}] "
+        more = shortened or tool.preview is not None
+        prompt = f"{before}{shown}? [y/N/a{'/?' if more else ''}] "
         self.at_line_start = False  # the prompt leaves the cursor after it
         try:
             answer = input(sanitize(prompt)).strip().lower()
@@ -298,9 +299,25 @@ class Console:
             ]
         )
         options = [("n", "Deny"), ("y", "Allow once"), ("a", f"Always allow {name}")]
-        if shortened:
+        if tool.preview is not None:
+            options.append(("?", "Show the change"))
+        elif shortened:
             options.append(("?", "Show full arguments"))
         return choose(question, options)
+
+    @staticmethod
+    def _everything(tool: Tool, arguments: str) -> str:
+        """What the user asked to see of a call: the change, if the tool can say what it
+        would be, otherwise the arguments in full."""
+        if tool.preview is not None:
+            try:
+                return tool.preview(arguments)
+            except Exception as exc:  # noqa: BLE001
+                return f"Could not show the change: {type(exc).__name__}: {exc}"
+        try:
+            return json.dumps(json.loads(arguments), indent=2, ensure_ascii=False)
+        except ValueError:
+            return " ".join(arguments.split())
 
     def confirm(self, tool: Tool, arguments: str) -> bool | Literal["always"]:
         """Ask the user whether a tool that is not read-only may run.
@@ -310,7 +327,9 @@ class Console:
         strings left out, which the question says (`?` at the prompt, "Show full
         arguments" in the menu). Asking for them prints the arguments in full and asks
         again, so nothing is hidden for good. The line is the JSON that will be run, on
-        one line: padding between its tokens cannot push the call off the screen.
+        one line: padding between its tokens cannot push the call off the screen. A tool
+        that has a `preview` always offers `?`, "Show the change", which prints what the
+        call would change (a diff) instead of the arguments.
 
         On a terminal the question is a menu with Deny first, which Enter picks; y, a,
         n and ? choose too. When it is answered the menu is gone and a line of the
@@ -333,13 +352,7 @@ class Console:
                 answer = self._ask_typed(tool, arguments)
             if answer != "?":
                 break
-            try:
-                everything = json.dumps(
-                    json.loads(arguments), indent=2, ensure_ascii=False
-                )
-            except ValueError:
-                everything = " ".join(arguments.split())
-            self._emit([("", everything + "\n")], status=True)
+            self._emit([("", self._everything(tool, arguments) + "\n")], status=True)
         # A reply to what was typed stands apart from it, as from a status line.
         self.after_status = True
         if self.choose is not None:

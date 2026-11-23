@@ -26,7 +26,8 @@ What this changes in the plan:
 
 - **Fewer tools.** `pi` ships four and `codex` almost none, because the shell covers the rest.
   Each tool's definition is paid for in every request. `opencode` folds listing a directory
-  into `read`.
+  into `read`; ergane keeps `list_directory` apart, as workshop-mcp does, because one tool
+  that reads files and lists directories was confusing (decision 1).
 - **A write or edit tells the model one line,** not a diff. All three show the diff to the
   user, in the approval prompt. ergane's approval question shows only the arguments, cut in
   the middle, so a change cannot be reviewed before it is approved (see Permissions).
@@ -53,8 +54,9 @@ What this changes in the plan:
 3. **Tools cannot see `Config`.** There is no global config lookup, and a built-in is a
    module-level `@tool`. A tool that needs a setting is built by a factory that `cli.py`
    calls.
-4. **Credentials come only from the user's own files.** `config.json` holds the API key, so a
-   file tool must never be able to read it.
+4. **Credentials come only from the user's own files.** `config.json` holds the API key. The
+   file tools do not refuse it (see Security design), so a user who runs ergane in the home
+   directory is trusting the model with it, as with `run_command`.
 5. **A prompt change must be tested against models** (`CLAUDE.md`). The plan relies on tool
    descriptions and leaves the system prompt alone.
 
@@ -62,18 +64,18 @@ What this changes in the plan:
 
 | Tool | Parameters | Asks? | Notes |
 |---|---|---|---|
-| `read_file` | `path`, `offset`, `limit` | no | A file as text (UTF-8, no NUL bytes) or, for a directory, a listing (directories first, ending in `/`); capped at about 16,000 characters with the offset to continue from; a missing path suggests the nearest name. Pictures come later (see Build order) |
-| `search_files` | `path`, `name`, `contains`, `limit` | no | `name` is a glob over paths, `contains` a regular expression over file contents; at least one; results are paths, or `path:line: text`; `.gitignore` is honoured |
+| `read_file` | `path`, `offset`, `limit` | no | A text file only (UTF-8, no NUL bytes; a directory is an error that names `list_directory`); capped at about 16,000 characters with the offset to continue from; a missing path suggests the nearest name. Pictures come later (see Build order) |
+| `list_directory` | `path` | no | One entry per line, directories first and ending in `/`, symlinks in `@`; what `.gitignore` excludes, and `.git`, are left out and counted; capped, and says when it stopped |
+| `search_files` | `path`, `name`, `contains`, `limit` | no | `name` is a glob over paths, `contains` a regular expression over file contents; at least one; results are paths, or `path:line: text`; `.gitignore` is honoured, repository root down |
 | `write_file` | `path`, `content` | yes | Creates parent directories; refuses a symlink or a non-regular file |
 | `edit_file` | `path`, `old_text`, `new_text`, `replace_all` | yes | `old_text` must match once unless `replace_all`; exact, then normalized; one line back |
 | `run_command` | `command`, `cwd`, `timeout_s` | yes | A fresh process each call, stdin closed, process group killed on timeout, head and tail of the output |
 | `web_fetch` | `url`, `max_length`, `start_index`, `raw` | yes | From the `tools` branch port, without `robots.txt`; ordinary dependencies |
 | `web_search` | `query`, `max_results` | yes | Keyless: DuckDuckGo's HTML endpoint; best effort |
 
-`list_directory` is not a tool of its own: `read_file` lists a directory (decision 1).
 Parameters are `snake_case`, and each has a description (`Annotated[..., Field(description=...)]`).
 
-### All seven are on, and can be switched off
+### All eight are on, and can be switched off
 
 Every built-in is offered by default. A `builtin_tools` setting in `config.json` takes `false`
 (none) or a list of names (only those, like an MCP server's `tools`), and `--no-builtin`
@@ -91,8 +93,9 @@ the tools:
 builtin/
   _paths.py   resolve(path, roots) -> real path, or an error naming the path as written
   _text.py    binary sniff, cap with a footer, head-and-tail cut
-  files.py    read_file, search_files, write_file, edit_file
-  _edit.py    exact and normalized matching, line endings
+  files.py    read_file, list_directory, search_files
+  writes.py   write_file, edit_file, and their previews
+  _edit.py    exact and normalized matching, line endings (pure text)
   shell.py    run_command
   fetch.py    web_fetch (from the tools branch, renamed); heavy imports on first use
   search.py   web_search: the DuckDuckGo form POST, the parser, the block check
@@ -103,9 +106,12 @@ builtin/
 - **Roots.** Files and `run_command`'s `cwd` are confined to the working directory plus the
   system temp directory (the prompt tells the model to put scratch scripts there). Anything
   else is refused, with a message telling the model to ask the user.
-- **Deny list.** ergane's config directory and state directory are refused outright, so the
-  API key, the prompt history and the saved sessions cannot be read even when the working
-  directory is the home directory.
+- **No deny list.** ergane's own configuration and state directories (the API key, the prompt
+  history, the saved sessions) are not refused. `run_command` is not confined and can read
+  them whatever the file tools do, so a deny list would protect only part of the surface.
+  The residual risk: with the working directory at the home directory, `read_file` (which
+  does not ask) can read `config.json`. The roots are the protection; run ergane in a
+  project directory.
 - **Symlinks.** Resolve with `realpath` before the root check. Writes use exclusive create or
   `O_NOFOLLOW`.
 - **`run_command`'s environment.** Remove `OPENAI_API_KEY` from the child's environment: it is
@@ -197,8 +203,11 @@ running it).
 
 Optional or to reconsider:
 
-- **`pathspec`** (+1 package, a normal dependency) matches `.gitignore` rules, so `search_files`
-  and a recursive listing skip what git ignores. `.git` itself is never entered.
+- **`pathspec`** (+1 package, a normal dependency) matches `.gitignore` rules. `search_files`
+  and `list_directory` both leave out what git ignores, using the
+  `.gitignore` files from the root of the repository down to the directory (a deeper file
+  overrides a shallower one), and never show `.git`. A listing says how many entries it
+  left out. A file that is ignored can still be read by its name.
 - **`ripgrep`** (`rg`) is installed on this machine, and `opencode`, `pi` and `codex` all rely
   on it, but none can assume it on another machine. `search_files` is pure Python; using
   `rg` when present is a later optimization.
@@ -216,8 +225,8 @@ redirect checks, post-decompression body cap). No library was evaluated for it.
 
 Each phase is its own commit, with tests and a mutation check. Start with phases 0 and 1.
 
-0. `_paths.py` and `_text.py`, with traversal, sibling-prefix, symlink and deny-list cases.
-1. `read_file` (files and directories, text only) and `search_files` (with `pathspec`), and the
+0. `_paths.py` and `_text.py`, with traversal, sibling-prefix and symlink cases.
+1. `read_file` (text only), `list_directory` and `search_files` (with `pathspec`), and the
    switch: the `builtin_tools` setting, `--no-builtin`, and the filtering in `cli.py`.
 2. The `Tool.preview` hook and the console change, then `write_file` and `edit_file`.
 3. `run_command`.
@@ -246,7 +255,7 @@ Each phase is its own commit, with tests and a mutation check. Start with phases
   "refused" message, not "no results".
 - `builtin_tools`: `false`, a list, and `--no-builtin` each give the right tools, and with
   none and no MCP server the request has no tools and `SYSTEM_PROMPT_NO_TOOLS`.
-- `.gitignore`: an ignored file is neither listed nor found; `.git` is never entered.
+- `.gitignore`: an ignored file is neither listed (by `list_directory` or `search_files`) nor found, a deeper file overrides a shallower one, and `.git` is never shown.
 
 ## Decisions
 
@@ -255,17 +264,17 @@ plan to.
 
 | # | Question | Choice | What follows |
 |---|---|---|---|
-| 1 | Finding and listing files | `read_file` lists a directory; one `search_files` with a name glob and a content regex | No `list_directory`; content search is pure Python and never prompts |
-| 2 | Where the file tools reach | The working directory plus the system temp directory | Everything else refused; ergane's config and state directories always refused |
+| 1 | Finding and listing files | `read_file` reads files only; a separate `list_directory`; one `search_files` with a name glob and a content regex | Eight tools. Decided first as a folded `read_file`, then reversed after using it: one tool with two jobs was confusing. Content search is pure Python and never prompts |
+| 2 | Where the file tools reach | The working directory plus the system temp directory | Everything else refused; ergane's own config and state directories are not singled out (the roots are the protection) |
 | 3 | Do the web tools ask | Both ask on every call, "Always allow" available | `read_only` false for `web_fetch` and `web_search` |
 | 4 | `web_search` source | A keyless DuckDuckGo built-in, best effort | About 70 lines; an MCP server is the documented route for another provider |
 | 5 | `web_fetch` | Rebase the branch; drop `robots.txt`; ordinary dependencies | No `protego`; `beautifulsoup4`, `lxml` and `markdownify` join `dependencies`; no `web` extra |
 | 6 | `edit_file` matching | Exact, then normalized | Trailing whitespace, smart quotes, Unicode dashes and spaces, file's own text kept |
-| 7 | Which tools are offered | All seven, always | A `builtin_tools` setting and `--no-builtin` keep the plain chat reachable |
+| 7 | Which tools are offered | All eight, always | A `builtin_tools` setting and `--no-builtin` keep the plain chat reachable |
 | 8 | `run_command` timeout | 120 seconds, `timeout_s` to raise it | The process group is killed at the limit |
 | 9 | First phase | 0 and 1: the helpers, `read_file`, `search_files` and the switch | Read-only tools first, before anything writes |
 | 10 | `apply_patch` for GPT models | Never: `edit_file` only | One editing mechanism for every model; no per-model tool choice |
 | 11 | Pictures in `read_file` | Text only first, pictures in a later small commit | Phase 6 |
-| 12 | Ignore rules in `search_files` | Honour `.gitignore` with `pathspec` | One more dependency |
+| 12 | Ignore rules in `search_files` and directory listings | Honour `.gitignore` with `pathspec`, from the repository root down | One more dependency; a listing counts what it left out |
 | 13 | `run_command` environment | Inherit everything except `OPENAI_API_KEY` | Git credentials and toolchains work; variables exported for MCP servers are inherited and the docs say so |
 | 14 | Long command output | Head and tail with a note, no file | Nothing for ergane to track or delete |

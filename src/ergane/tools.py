@@ -15,7 +15,7 @@ import functools
 import importlib
 import inspect
 import pkgutil
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from types import ModuleType
 from typing import Any, get_type_hints, overload
@@ -90,10 +90,18 @@ class Tool:
     # Stops the calls of this tool that are running, if that can be done: called when
     # the user presses Ctrl-C while several calls run together.
     cancel: Callable[[], None] | None = None
+    # Arguments as JSON text -> what the call would change, as text for the user, who is
+    # asked before a call that is not read-only and may ask to see it. It changes
+    # nothing and may raise (the console says so). None: the arguments are all there is
+    # to show.
+    preview: Callable[[str], str] | None = None
 
     @classmethod
     def from_function(
-        cls, function: Callable[..., str], read_only: bool = True
+        cls,
+        function: Callable[..., str],
+        read_only: bool = True,
+        preview: Callable[..., str] | None = None,
     ) -> Tool:
         """Describe a function as a tool.
 
@@ -101,6 +109,9 @@ class Tool:
             function: A synchronous function that returns text.
             read_only: Whether the tool only reads. True unless declared otherwise:
                 a tool that changes anything must say so.
+            preview: A function with the same parameters as `function`, which returns
+                what the call would change, as text for the user to read before
+                allowing it (a diff, say). It must change nothing.
 
         Returns:
             The tool.
@@ -151,6 +162,11 @@ class Tool:
             _make_check(checker),
             arguments.validate_json,
             read_only,
+            preview=(
+                TypeAdapter[str](preview).validate_json  # pyright: ignore[reportArgumentType]
+                if preview
+                else None
+            ),
         )
 
     def param(self) -> FunctionToolParam:
@@ -200,9 +216,15 @@ class Tool:
 @overload
 def tool(function: Callable[..., str], /) -> Tool: ...
 @overload
-def tool(*, read_only: bool = True) -> Callable[[Callable[..., str]], Tool]: ...
 def tool(
-    function: Callable[..., str] | None = None, /, *, read_only: bool = True
+    *, read_only: bool = True, preview: Callable[..., str] | None = None
+) -> Callable[[Callable[..., str]], Tool]: ...
+def tool(
+    function: Callable[..., str] | None = None,
+    /,
+    *,
+    read_only: bool = True,
+    preview: Callable[..., str] | None = None,
 ) -> Tool | Callable[[Callable[..., str]], Tool]:
     """Make a function a tool: `@tool`, or `@tool(read_only=False)`.
 
@@ -214,6 +236,8 @@ def tool(
     Args:
         function: The function, when used as a bare `@tool`.
         read_only: Whether the tool only reads (default True).
+        preview: What the user may ask to see before allowing a call (see
+            `Tool.from_function`).
 
     Returns:
         The Tool, or a decorator that returns it.
@@ -224,7 +248,7 @@ def tool(
     """
 
     def make(function: Callable[..., str]) -> Tool:
-        return Tool.from_function(function, read_only)
+        return Tool.from_function(function, read_only, preview)
 
     return make if function is None else make(function)
 
@@ -266,6 +290,28 @@ def tools_in(
             if isinstance(value, Tool):
                 found[id(value)] = value
     return list(found.values())
+
+
+def pick_tools(
+    tools: Sequence[Tool], wanted: bool | Sequence[str]
+) -> tuple[list[Tool], list[str]]:
+    """The tools a setting asks for: all of them (True), none (False), or the named ones.
+
+    Args:
+        tools: The tools there are.
+        wanted: The `builtin_tools` setting.
+
+    Returns:
+        The chosen tools, in the order they came, and the names that were asked for but
+        that no tool has.
+    """
+    if isinstance(wanted, bool):
+        return (list(tools) if wanted else []), []
+    known = {tool.name for tool in tools}
+    return (
+        [tool for tool in tools if tool.name in wanted],
+        [name for name in wanted if name not in known],
+    )
 
 
 def tool_clash(name: str) -> str:

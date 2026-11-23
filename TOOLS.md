@@ -106,9 +106,9 @@ def save(path: str, text: str) -> str:
     """Write text to a file, replacing it."""
 ```
 
-`read_only` is the only option of `@tool`, and it is `True` unless you say otherwise.
-Say `False` for anything that changes something outside the program: a file, a process,
-the network with a side effect.
+`read_only` is `True` unless you say otherwise. Say `False` for anything that changes
+something outside the program: a file, a process, the network with a side effect. The
+other option of `@tool` is `preview`, below.
 
 - A tool that is not read-only asks the user before each call: the question is
   `Allow save {…}?` with the arguments, over a menu whose default is Deny. "Always allow"
@@ -120,6 +120,27 @@ the network with a side effect.
 - Ctrl-C stops a call that asks first, as any Ctrl-C in Python does. A read-only call runs
   on a thread, which cannot be interrupted: Ctrl-C ends the wait and the call runs on in
   the background. Keep calls short, or give them a timeout.
+
+### Showing what a call would change: `preview`
+
+The question shows the arguments, cut in the middle if they are long, which is not enough
+to decide about a write. A tool that is not read-only may give `@tool` a `preview`: a
+function with the same parameters, that returns what the call would change, as text.
+
+```python
+def show_save(path: str, text: str) -> str:
+    return diff_of(path, text)  # reads, and changes nothing
+
+
+@tool(read_only=False, preview=show_save)
+def save(path: str, text: str) -> str:
+    """Write text to a file, replacing it."""
+```
+
+The menu then always has a last option, "Show the change" (`?` at a typed question), which
+prints that text, and asks again. The preview runs only when the user asks, in the main
+thread, and must change nothing. If it raises, the user is told, and the question stays.
+`write_file` and `edit_file` show a diff this way.
 
 ## Testing it
 

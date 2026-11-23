@@ -197,6 +197,9 @@ class Config(BaseModel):
     # None sends no reasoning setting, so the model's default applies.
     # Non-reasoning models reject any effort with HTTP 400.
     reasoning_effort: ReasoningEffort = None  # Optional[Literal[...]] already
+    # Which of ergane's own tools (`ergane.builtin`) are offered: all, none, or the ones
+    # named. `--no-builtin` is false for one run.
+    builtin_tools: bool | list[str] = True
     # Only config.json lists servers: they are nested, and no flag or variable
     # could say them. `mcpServers` in the file, as in other tools' MCP files.
     mcp_servers: dict[ServerName, McpServerConfig] = Field(

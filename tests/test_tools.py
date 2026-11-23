@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import pytest
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from ergane import builtin
 from ergane.tools import (
@@ -13,6 +13,7 @@ from ergane.tools import (
     Image,
     Tool,
     ToolOutput,
+    pick_tools,
     tool,
     tool_clash,
     tools_in,
@@ -445,3 +446,87 @@ class TestToolsIn:
 
 def test_a_tool_left_out_for_its_name_is_reported_by_it():
     assert tool_clash("add") == "Tool add is defined twice; only the first is offered"
+
+
+class TestPickTools:
+    @staticmethod
+    def three() -> list[Tool]:
+        def make(name: str) -> Tool:
+            def function() -> str:
+                """Say it."""
+                return name
+
+            function.__name__ = name
+            return Tool.from_function(function)
+
+        return [make("alpha"), make("beta"), make("gamma")]
+
+    def test_true_is_all_of_them(self):
+        tools = self.three()
+
+        assert pick_tools(tools, True) == (tools, [])
+
+    def test_false_is_none(self):
+        assert pick_tools(self.three(), False) == ([], [])
+
+    def test_names_pick_those_in_the_order_the_tools_came(self):
+        tools = self.three()
+
+        chosen, unknown = pick_tools(tools, ["gamma", "alpha"])
+
+        assert [t.name for t in chosen] == ["alpha", "gamma"]
+        assert unknown == []
+
+    def test_a_name_that_no_tool_has_is_returned(self):
+        chosen, unknown = pick_tools(self.three(), ["beta", "nope", "nada"])
+
+        assert [t.name for t in chosen] == ["beta"]
+        assert unknown == ["nope", "nada"]
+
+    def test_an_empty_list_is_none(self):
+        assert pick_tools(self.three(), []) == ([], [])
+
+
+class TestPreview:
+    @staticmethod
+    def save(path: str, text: str) -> str:
+        """Save text."""
+        return path
+
+    @staticmethod
+    def show(path: str, text: str) -> str:
+        return f"{path} would hold {text!r}"
+
+    def test_a_tool_has_none_unless_it_is_given_one(self):
+        assert Tool.from_function(self.save, read_only=False).preview is None
+
+    def test_a_preview_is_called_with_the_arguments_the_model_sent(self):
+        built = Tool.from_function(self.save, read_only=False, preview=self.show)
+
+        assert built.preview is not None
+        assert built.preview('{"path": "a.txt", "text": "hi"}') == (
+            "a.txt would hold 'hi'"
+        )
+
+    def test_a_preview_checks_the_arguments_like_the_tool_does(self):
+        built = Tool.from_function(self.save, read_only=False, preview=self.show)
+
+        assert built.preview is not None
+        with pytest.raises(ValidationError):
+            built.preview('{"path": "a.txt"}')
+
+    def test_the_decorator_takes_it_too(self):
+        @tool(read_only=False, preview=self.show)
+        def save(path: str, text: str) -> str:
+            """Save text."""
+            return path
+
+        assert save.preview is not None and save.preview(
+            '{"path": "p", "text": "t"}'
+        ) == ("p would hold 't'")
+
+    def test_a_preview_changes_nothing_about_the_definition_the_model_sees(self):
+        plain = Tool.from_function(self.save, read_only=False)
+        with_preview = Tool.from_function(self.save, read_only=False, preview=self.show)
+
+        assert plain.param() == with_preview.param()

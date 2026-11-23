@@ -82,7 +82,8 @@ the prompt history and the saved sessions too and is made `0700`.
 The modules, in dependency order (each imports only from those above it):
 
 - `tools.py`: the `@tool` decorator and `Tool` (`name`, `description`, `parameters`,
-  `check`, `runner`, `read_only`). `Tool.call` never raises (except Ctrl-C): a bad call
+  `check`, `runner`, `read_only`, `preview`: what the user may ask to see before
+  allowing a call, a diff for a write). `Tool.call` never raises (except Ctrl-C): a bad call
   or an exception comes back as text for the model, and output is cut at
   `MAX_OUTPUT_CHARS`. `tools_in(package)` finds the tools of a package: a `@tool`
   function in a module of `builtin/` is offered with nothing else to edit; [TOOLS.md](TOOLS.md)
