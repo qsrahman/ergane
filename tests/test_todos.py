@@ -305,3 +305,12 @@ class TestTheTodoToolThroughTheModel:
         output = fake_server.requests[1]["input"][-1]["output"]
         assert output == "Unknown tool: todo. Available tools: none."
         assert agent.todos.items == []
+
+
+def test_the_parameter_and_each_field_of_a_step_are_described():
+    # The model fills them from these words alone.
+    schema = TodoList().tool().parameters
+
+    assert schema["properties"]["todos"].get("description")
+    for name, field in schema["$defs"]["TodoItem"]["properties"].items():
+        assert field.get("description"), name

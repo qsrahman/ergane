@@ -155,11 +155,11 @@ def run_command(
     other commands; not to read, write or edit files (use read_file, write_file and
     edit_file) or to look for them (use list_directory and search_files). Do not run
     destructive commands (rm -rf, git reset --hard, force pushes) unless the user asked.
-    stdin is closed, so interactive commands do not work, and each call is a fresh
-    process: cd does not persist, use cwd. The command and its child processes are
+    stdin is closed and each call is a fresh process, so interactive commands do not
+    work and cd does not persist: use cwd. The command and its child processes are
     stopped after timeout_s, so do not start dev servers or watchers. Output past about
-    16,000 characters keeps its start and end; binary output becomes a note. The command
-    is not confined to the working directory, only cwd is."""
+    16,000 characters keeps its start and end. Only cwd must be inside the working
+    directory or the system temp directory, not what the command touches."""
     directory = resolve(cwd)
     if not directory.is_dir():
         raise NotADirectoryError(f"{cwd} is not a directory")

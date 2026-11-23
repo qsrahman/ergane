@@ -41,6 +41,33 @@ it, what it returns, and what a wrong call looks like. The model decides from it
 whether and how to call the tool. Every tool's definition goes into every request, so
 keep it as short as that allows.
 
+What OpenAI advises for function definitions (the function calling guide, "Best
+practices for defining functions"; the GPT-5 and Codex prompting guides), as it applies
+here:
+
+- Say what the tool does, what each parameter is for (and its format), and what the
+  result looks like. A parameter's words go in its `Field(description=...)`: ergane
+  sends the whole docstring as the description, so an `Args:` section would be read as
+  prose and say everything twice. (The OpenAI Agents SDK instead takes the summary as
+  the description and the `Args:` entries as parameter descriptions.)
+- Pass the intern test: could a person use the tool from these words alone? Put in what
+  a wrong call looks like, and for a tool a shell command could stand in for, say which
+  tool to use instead (`run_command` names the file tools); Codex's guide asks for a
+  directive like that, or the model reaches for the terminal.
+- Make invalid calls hard to write: `Literal` for a fixed set, `ge`/`le` for a range, a
+  default for what the code knows. Do not make the model send what the program already
+  has. A rule the schema cannot hold ("give at least one of name and contains") goes in
+  the first lines of the description, and the error names the fix.
+- Name tools by what they do (`web_search`, not `search`), and keep their output
+  distinguishable from other tools'. OpenAI suggests fewer than 20 tools at the start
+  of a turn (a soft limit).
+- Descriptions are input tokens in every request: cut detail the model does not decide
+  on (how a limit is implemented) and keep what it does (what is skipped, when output
+  stops).
+- Not adopted: `strict: true`. It needs every parameter required (an optional one
+  becomes a nullable one), and ergane already checks the arguments with pydantic and
+  sends back a message the model can correct from, on models that ignore `strict`.
+
 The name must be letters, digits, `_` and `-` (the API refuses a request with any other),
 and unique among the tools: when two tools have one name, the first is offered and
 `ergane` says `[Tool NAME is defined twice; only the first is offered]`. Names of MCP

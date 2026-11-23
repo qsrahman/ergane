@@ -14,9 +14,9 @@ tool results and summaries. It is not saved with a session.
 """
 
 import threading
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ergane.tools import Tool
 
@@ -33,8 +33,8 @@ _MARKS: dict[str, str] = {
 class TodoItem(BaseModel):
     """One step of the list."""
 
-    content: str
-    status: Status
+    content: Annotated[str, Field(description="The step, in a few words.")]
+    status: Annotated[Status, Field(description="Where the step stands.")]
 
 
 class TodoList:
@@ -51,7 +51,13 @@ class TodoList:
         """The tool the model calls to replace the list."""
         return Tool.from_function(self.todo)
 
-    def todo(self, todos: list[TodoItem]) -> str:
+    def todo(
+        self,
+        todos: Annotated[
+            list[TodoItem],
+            Field(description="The whole list, in order; it replaces the old one."),
+        ],
+    ) -> str:
         """Keep a checklist for a task with three or more steps, or when the user gives
         you several tasks. Skip it for a simple task or a plain question.
 

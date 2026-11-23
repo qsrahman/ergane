@@ -149,13 +149,14 @@ def read_file(
         int, Field(ge=1, description="The line to start from, 1-based.")
     ] = 1,
     limit: Annotated[
-        int | None, Field(ge=1, description="The most lines to return.")
+        int | None,
+        Field(ge=1, description="The most lines to return (default: as many as fit)."),
     ] = None,
 ) -> str:
-    """Read a text file (not a directory or a binary file). Output is capped at about
-    16,000 characters; a longer file ends with the offset to continue from. Use offset
-    and limit for a range of lines. Only works inside the working directory and the
-    system temp directory."""
+    """Read a text file (not a directory or a binary file) and return its lines as they
+    are, without line numbers. Output is capped at about 16,000 characters; a longer
+    file ends with the offset to continue from. Use offset and limit for a range of
+    lines. Only works inside the working directory and the system temp directory."""
     real = resolve(path)
     if real.is_dir():
         raise IsADirectoryError(
@@ -302,17 +303,16 @@ def search_files(
         int, Field(ge=1, le=500, description="The most results to return.")
     ] = 100,
 ) -> str:
-    """Find files by name, by content, or both, under a directory.
+    """Find files by name, by content, or both, under a directory. Give at least one of
+    name and contains.
 
     name is a case-sensitive glob matched against each path relative to path: '*.py'
     matches only directly under path, '**/*.py' at any depth. contains is a regular
     expression searched in the text of each file (binary files and files over 1 MB are
-    skipped). Give at least one of them. The result is relative paths, directories
-    ending in /, or path:line: text when contains is given. Files that .gitignore
-    excludes (the repository's, from its root down) and .git are skipped, symbolic links
-    are never followed, and at most limit results are returned; the result says when it stopped.
-    Paths must be inside the working directory or the system temp directory. To read a
-    file, use read_file.
+    skipped). The result is relative paths, directories ending in /, or path:line: text
+    when contains is given, and says when it stopped at limit. Files that .gitignore
+    excludes, .git and symbolic links are skipped. Only works inside the working
+    directory and the system temp directory. To read a file, use read_file.
     """
     if name is None and contains is None:
         raise ValueError("Give name, contains, or both")
