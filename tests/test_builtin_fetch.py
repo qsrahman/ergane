@@ -124,6 +124,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, body, "text/html")
         if path == "/big":
             return self.send(200, b"x" * 200_000)
+        if path == "/big-pdf":  # over the cap: refused for its type, not its size
+            return self.send(200, b"x" * 200_000, "application/pdf")
+        if path == "/utf7":
+            body = (
+                b'<html><head><meta charset="utf-7"></head><body><article><p>'
+                b"+AGE-bc</p></article></body></html>"
+            )
+            return self.send(200, body, "text/html")
         if path == "/big-declared":
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
@@ -224,6 +232,9 @@ class TestThePage:
     def test_a_charset_declared_in_the_page_is_honoured(self, tool, site):
         assert "café café" in call(tool, site, "/latin1")
 
+    def test_a_declared_utf7_is_not_used(self, tool, site):
+        assert "+AGE-bc" in call(tool, site, "/utf7")
+
 
 class TestWhatItReadsAndWhatItDoesNot:
     def test_navigation_and_footers_are_left_out(self, tool, site):
@@ -285,12 +296,17 @@ class TestWhatItReadsAndWhatItDoesNot:
         assert "not text; web_fetch returns text only" in result
         assert "%PDF" not in result
 
+    def test_a_type_that_is_not_text_is_refused_before_the_body_is_read(
+        self, tool, site
+    ):
+        assert "is a application/pdf file, not text" in call(tool, site, "/big-pdf")
+
     def test_a_page_that_nests_too_deep_is_refused_at_once(self, tool, site):
         started = time.monotonic()
 
         result = call(tool, site, "/deep")
 
-        assert "nests its elements more than 256 levels deep" in result
+        assert "nests its elements too deeply" in result
         assert "raw=true" in result
         assert time.monotonic() - started < 3
 
@@ -311,28 +327,6 @@ class TestWhatItReadsAndWhatItDoesNot:
 
         assert result.startswith("The page is large: only its first 800 characters")
         assert "item" not in result  # the list comes after the cut
-
-
-class TestNestingDepth:
-    @pytest.mark.parametrize(
-        ("html", "depth"),
-        [
-            ("<div><div><span>x</span></div></div>", 3),
-            ("<p>a<p>b<p>c", 1),  # a new <p> closes the open one
-            ("<ul><li>a<li>b<li>c</ul>", 2),
-            ("<div><br><img src=x><hr/></div>", 1),  # void elements have no depth
-            ("<div><script>if (a < b) { '<div><div>' }</script></div>", 1),
-            ("<div><!-- <div><div> --></div>", 1),
-            ("<div><b><i></b>x</div>", 3),  # a close tag closes up to its match
-        ],
-    )
-    def test_how_deep(self, html, depth):
-        assert fetch._nesting_depth(html) == depth  # pyright: ignore[reportPrivateUsage]
-
-    def test_it_stops_counting_past_the_limit(self):
-        html = "<div>" * 100_000
-
-        assert fetch._nesting_depth(html) == fetch.MAX_DOM_DEPTH + 1  # pyright: ignore[reportPrivateUsage]
 
 
 class TestReadingInParts:
@@ -484,6 +478,11 @@ class TestWhatItRefuses:
             ("fe80::1", False),
             ("::ffff:127.0.0.1", False),  # IPv4-mapped
             ("64:ff9b::7f00:1", False),  # NAT64 around 127.0.0.1
+            (
+                "64:ff9b::808:808",
+                True,
+            ),  # NAT64 around 8.8.8.8: a DNS64 network's answer
+            ("4000::1", False),  # outside global unicast, which is_global allows
             ("224.0.0.1", False),
         ],
     )

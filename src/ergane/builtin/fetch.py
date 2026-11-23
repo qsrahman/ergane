@@ -20,14 +20,13 @@ server's safeguards, because a tool that reads whatever URL a model names has to
   page is kept for a few minutes, so reading it in parts fetches it once.
 
 What it leaves out: `robots.txt` (opencode, pi and codex do not read it either, and the
-fetches are the user's, asked about one at a time), the Node.js Readability path and the
-recovery of hidden content (readabilipy's pure-Python extractor only, with page furniture
-taken out beforehand), proxies (the proxy variables are not read: a proxy resolves names
+fetches are the user's, asked about one at a time), Readability's scoring of every
+block (the main content is found by `<main>` or `<article>`, and page furniture is taken
+out), proxies (the proxy variables are not read: a proxy resolves names
 where they cannot be checked), a host allowlist, a timeout the model sets, and the MCP
 prompt.
 """
 
-import codecs
 import ipaddress
 import re
 import socket
@@ -36,7 +35,6 @@ import zlib
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from html.parser import HTMLParser
 from importlib.metadata import version
 from typing import TYPE_CHECKING, Annotated
 from urllib.parse import urljoin, urlparse
@@ -75,58 +73,6 @@ class FetchError(Exception):
 
 # --- Which hosts may be fetched -------------------------------------------------------
 
-# IANA special-purpose ranges that are not public destinations. ``is_global`` covers
-# most of them, but its tables were corrected only in recent releases, so the ranges
-# are listed here too, to give the same answer on every supported Python.
-_NON_PUBLIC_NETWORKS = tuple(
-    ipaddress.ip_network(network)
-    for network in (
-        "0.0.0.0/8",
-        "10.0.0.0/8",
-        "100.64.0.0/10",
-        "127.0.0.0/8",
-        "169.254.0.0/16",
-        "172.16.0.0/12",
-        "192.0.0.0/24",
-        "192.0.2.0/24",
-        "192.88.99.0/24",
-        "192.168.0.0/16",
-        "198.18.0.0/15",
-        "198.51.100.0/24",
-        "203.0.113.0/24",
-        "240.0.0.0/4",
-        # IPv4-compatible IPv6 (RFC 4291 2.5.5.1), deprecated and never routed; it
-        # also holds the unspecified (::) and loopback (::1) addresses.
-        "::/96",
-        "64:ff9b:1::/48",
-        "100::/64",
-        "2001::/23",
-        "2001:db8::/32",
-        "2002::/16",
-        "3fff::/20",
-        "fc00::/7",
-        "fe80::/10",
-        # Deprecated site-local (RFC 3879), which is_global reads as global.
-        "fec0::/10",
-    )
-)
-
-# Globally reachable assignments inside the ranges above (anycast services and the
-# like), matching the exceptions in current CPython's tables.
-_PUBLIC_EXCEPTIONS = tuple(
-    ipaddress.ip_network(network)
-    for network in (
-        "192.0.0.9/32",
-        "192.0.0.10/32",
-        "2001:1::1/128",
-        "2001:1::2/128",
-        "2001:3::/32",
-        "2001:4:112::/48",
-        "2001:20::/28",
-        "2001:30::/28",
-    )
-)
-
 # The well-known NAT64 prefix (RFC 6052) and the IPv4-translated addresses (RFC 2765,
 # RFC 6145): a translator forwards them to the IPv4 held in their low 32 bits, so
 # that IPv4 is the destination.
@@ -134,9 +80,7 @@ _NAT64_WELL_KNOWN = ipaddress.IPv6Network("64:ff9b::/96")
 _IPV4_TRANSLATED = ipaddress.IPv6Network("::ffff:0:0:0/96")
 
 # IPv6 global unicast (RFC 4291 2.4). The rest of the IPv6 space is reserved, unique or
-# site-local, link-local or multicast, none of it a public destination, while
-# is_global reads most of it as global: deny by default there means a range missing
-# from the list above cannot pass as public.
+# site-local, link-local or multicast, none of it a public destination.
 _IPV6_GLOBAL_UNICAST = ipaddress.IPv6Network("2000::/3")
 
 
@@ -146,24 +90,19 @@ def is_public_address(address: str) -> bool:
     Refused: loopback, RFC 1918, link-local (169.254.0.0/16, which holds most cloud
     metadata endpoints), shared address space (100.64.0.0/10, which holds Alibaba
     Cloud's 100.100.100.200), unique local IPv6 (AWS's fd00:ec2::254), multicast,
-    unspecified, documentation and other special-purpose ranges. An IPv4-mapped,
-    IPv4-translated or well-known NAT64 address is judged by the IPv4 it wraps; a
-    deprecated IPv4-compatible address (`::/96`) is refused whatever it holds. Any
-    other IPv6 address outside global unicast (`2000::/3`) is refused.
+    unspecified, documentation and other special-purpose ranges: whatever
+    `ipaddress`'s `is_global` refuses. An IPv4-mapped, IPv4-translated or well-known
+    NAT64 address is judged by the IPv4 it wraps, and any other IPv6 address outside
+    global unicast (`2000::/3`) is refused.
     """
     ip = ipaddress.ip_address(address)
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
-    elif isinstance(ip, ipaddress.IPv6Address) and (
-        ip in _NAT64_WELL_KNOWN or ip in _IPV4_TRANSLATED
-    ):
-        ip = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
-    if any(ip in network for network in _PUBLIC_EXCEPTIONS):
-        return True
-    if any(ip in network for network in _NON_PUBLIC_NETWORKS):
-        return False
-    if isinstance(ip, ipaddress.IPv6Address) and ip not in _IPV6_GLOBAL_UNICAST:
-        return False
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        elif ip in _NAT64_WELL_KNOWN or ip in _IPV4_TRANSLATED:
+            ip = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+        elif ip not in _IPV6_GLOBAL_UNICAST:
+            return False
     return ip.is_global and not ip.is_multicast
 
 
@@ -370,168 +309,24 @@ def _declared_length(response: httpx2.Response) -> int | None:
         return None
 
 
-def _decode_text(response: httpx2.Response, content: bytes) -> str:
-    """Decode `content` as httpx's `response.text` would: the header's charset when
-    Python knows it, UTF-8 otherwise, with undecodable bytes replaced."""
-    return content.decode(response.encoding or "utf-8", errors="replace")
-
-
-class _MetaCharset(HTMLParser):
-    """Finds the first charset an HTML document declares in a `<meta>` tag."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.declared: str | None = None
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag != "meta" or self.declared is not None:
-            return
-        values = {name: (value or "").strip() for name, value in attrs}
-        if values.get("charset"):
-            self.declared = values["charset"]
-        elif values.get("http-equiv", "").lower() == "content-type":
-            found = re.search(
-                r"""charset\s*=\s*["']?\s*([^\s"';]+)""",
-                values.get("content", ""),
-                re.IGNORECASE,
-            )
-            if found:
-                self.declared = found.group(1)
-
-
 def _decode_page(response: httpx2.Response, content: bytes) -> str:
-    """Decode a fetched body, honouring a charset the HTML declares.
+    """Decode a fetched body: a byte order mark, the header's charset, a charset the
+    HTML declares in a `<meta>` tag, then UTF-8 or windows-1252 (BeautifulSoup's
+    `UnicodeDammit`). UTF-7 is never used: it would rewrite the markup itself."""
+    from bs4 import UnicodeDammit
 
-    httpx's `response.text` uses the Content-Type header's charset, and UTF-8 without
-    one, so a page that declares a legacy encoding only in a `<meta charset>` or
-    `<meta http-equiv="Content-Type">` tag would come back garbled. Following the HTML
-    encoding-sniffing order, kept simple: a byte order mark or a header charset wins,
-    and otherwise the first 1024 bytes of a `text/html` or `application/xhtml+xml` (or
-    untyped) body are parsed for the first `<meta>` that declares one. The stdlib HTML
-    parser does the tokenizing, so a commented-out tag or an unrelated attribute
-    (`data-charset`) is not mistaken for a declaration. A declaration Python does not
-    know, or one that names a codec that is not a web text encoding, is ignored.
-    """
-    media_type = (
-        response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    header = response.charset_encoding
+    dammit = UnicodeDammit(
+        content, [header] if header else [], is_html=True, exclude_encodings=["utf-7"]
     )
-    if (
-        response.charset_encoding is not None
-        or media_type not in ("", "text/html", "application/xhtml+xml")
-        or content.startswith(
-            (codecs.BOM_UTF8, codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)
-        )
-    ):
-        return _decode_text(response, content)
-
-    # Latin-1 maps every byte to one character, so an ASCII declaration reads the same
-    # whatever the page's real encoding. A tag cut off at byte 1024 is left unparsed,
-    # since the parser is never closed.
-    scan = _MetaCharset()
-    scan.feed(content[:1024].decode("latin-1"))
-    if scan.declared is None:
-        return _decode_text(response, content)
-    try:
-        name = codecs.lookup(scan.declared).name
-        # A UTF-16/32 declaration in an ASCII-compatible document cannot be true, so
-        # the HTML standard reads it as UTF-8.
-        if name.startswith(("utf-16", "utf-32")):
-            name = "utf-8"
-        # Python codecs that are not web text encodings: decoding a page with them
-        # would mangle it rather than fix it.
-        if name in ("idna", "punycode", "unicode-escape", "raw-unicode-escape"):
-            return _decode_text(response, content)
-        # A declaration found in ASCII bytes is only believable for an
-        # ASCII-compatible encoding. UTF-7, HZ and the EBCDIC code pages would rewrite
-        # the markup itself, so they fail this probe and are ignored.
-        probe = b"\t\n\r" + bytes(range(0x20, 0x7F))
-        if probe.decode(name) != probe.decode("ascii"):
-            return _decode_text(response, content)
-        return content.decode(name, errors="replace")
-    except LookupError, ValueError:  # UnicodeError is a ValueError
-        # An unknown charset, a name Python refuses outright, a non-text codec
-        # (base64, rot13, ...), or one that refuses to decode at all.
-        return _decode_text(response, content)
+    return dammit.unicode_markup or ""
 
 
 # --- Simplifying a page --------------------------------------------------------------
 
-# Simplifying runs on the main thread (readabilipy parses the page in Python), so the
-# HTML that is converted is capped: a larger page is cut. Its cost also grows steeply
-# with nesting depth, and Python's recursion limit ends a very deep page after seconds
-# of work, so a page nested deeper than this is refused up front. Real pages nest well
-# under 100 levels.
+# Simplifying runs on the main thread, so the HTML that is converted is capped: a larger
+# page is cut.
 MAX_EXTRACT_HTML_CHARS = 1_500_000
-MAX_DOM_DEPTH = 256
-
-# Elements that never have content, and elements whose end tag may be left out (a new
-# `<li>` closes the open one), which a count of open tags must not mistake for nesting.
-_VOID_ELEMENTS = frozenset(
-    [
-        "area",
-        "base",
-        "br",
-        "col",
-        "embed",
-        "hr",
-        "img",
-        "input",
-        "link",
-        "meta",
-        "param",
-        "source",
-        "track",
-        "wbr",
-    ]
-)
-_OPTIONAL_END = frozenset(
-    [
-        "p",
-        "li",
-        "dt",
-        "dd",
-        "tr",
-        "td",
-        "th",
-        "thead",
-        "tbody",
-        "tfoot",
-        "option",
-        "optgroup",
-        "colgroup",
-        "caption",
-        "rt",
-        "rp",
-    ]
-)
-_TAG = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9:-]*)[^>]*?(/?)>")
-_SCRIPT_STYLE_COMMENT = re.compile(
-    r"<(script|style)\b.*?</\1\s*>|<!--.*?-->", re.IGNORECASE | re.DOTALL
-)
-
-
-def _nesting_depth(html: str) -> int:
-    """How deep the elements of `html` nest, counted from the tags alone (no parsing),
-    and counted only up to `MAX_DOM_DEPTH` + 1: past that the page is refused."""
-    stack: list[str] = []
-    deepest = 0
-    for closing, name, self_closing in _TAG.findall(
-        _SCRIPT_STYLE_COMMENT.sub("", html)
-    ):
-        name = name.lower()
-        if name in _VOID_ELEMENTS or self_closing:
-            continue
-        if closing:
-            if name in stack:
-                del stack[len(stack) - 1 - stack[::-1].index(name) :]
-            continue
-        if name in _OPTIONAL_END and stack and stack[-1] == name:
-            stack.pop()
-        stack.append(name)
-        deepest = max(deepest, len(stack))
-        if deepest > MAX_DOM_DEPTH:
-            break
-    return deepest
 
 
 # What a page is built around rather than made of: it is left out before the content
@@ -588,8 +383,7 @@ def extract_content_from_html(html: str, base_url: str = "") -> str:
     The page's main content is found and converted, links and images included, made
     absolute (a model cannot follow `/about`, and does not know where it was).
     Navigation, footers, sidebars, scripts, and what the page hides are left out. This
-    is simpler than Readability.js, which scores every block of a page, and it keeps
-    what readabilipy's pure-Python extractor drops: the links.
+    is simpler than Readability.js, which scores every block of a page.
 
     Args:
         html: Raw HTML content to process.
@@ -599,16 +393,11 @@ def extract_content_from_html(html: str, base_url: str = "") -> str:
         The page as markdown, or an `<error>` line when it has nothing to show.
 
     Raises:
-        FetchError: If the page nests too deeply to be converted.
+        RecursionError: If the page nests too deeply to be converted.
     """
     import markdownify
     from bs4 import BeautifulSoup
 
-    if _nesting_depth(html) > MAX_DOM_DEPTH:
-        raise FetchError(
-            f"The page nests its elements more than {MAX_DOM_DEPTH} levels deep, too "
-            "many to simplify; try raw=true."
-        )
     # lxml, not html.parser: only lxml ends an unclosed `<p>` or `<li>` where the next
     # one starts, as browsers do. html.parser nests them, and a page of a few hundred
     # paragraphs then runs into Python's recursion limit.
@@ -657,10 +446,9 @@ _BINARY_TYPE = re.compile(
 )
 
 
-def _is_textual(mime: str, body: bytes) -> bool:
-    """Whether a body is text: not a type that is binary, and no NUL byte near its
-    start."""
-    return not _BINARY_TYPE.match(mime) and b"\0" not in body[:8192]
+def _not_text(url: str, mime: str) -> FetchError:
+    what = f"a {mime} file" if mime else "binary content"
+    return FetchError(f"{url} is {what}, not text; web_fetch returns text only")
 
 
 # --- The tool -------------------------------------------------------------------------
@@ -701,6 +489,15 @@ def _fetch(url: str, raw: bool, timeout: float, permit: Callable[[str], bool]) -
                     raise FetchError(
                         f"Failed to fetch {url} - status code {response.status_code}"
                     )
+                # A type that is not text is refused before its body is downloaded.
+                mime = (
+                    response.headers.get("content-type", "")
+                    .split(";", 1)[0]
+                    .strip()
+                    .lower()
+                )
+                if _BINARY_TYPE.match(mime):
+                    raise _not_text(str(response.url), mime)
                 # Refused before reading anything when the size is declared;
                 # otherwise the streamed read stops at the cap.
                 length = _declared_length(response)
@@ -709,18 +506,14 @@ def _fetch(url: str, raw: bool, timeout: float, permit: Callable[[str], bool]) -
                 content, truncated = _read_capped(response, MAX_RESPONSE_BYTES)
                 if truncated:
                     raise FetchError(too_large)
+                if b"\0" in content[:8192]:
+                    raise _not_text(str(response.url), mime)
         except httpx2.TimeoutException as exc:
             raise FetchError(f"Failed to fetch {url}: timed out: {exc!r}") from None
         except httpx2.HTTPError as exc:
             raise FetchError(f"Failed to fetch {url}: {exc!r}") from None
         final = str(response.url)
         content_type = response.headers.get("content-type", "")
-        mime = content_type.split(";", 1)[0].strip().lower()
-        if not _is_textual(mime, content):
-            what = f"a {mime} file" if mime else "binary content"
-            raise FetchError(
-                f"{final} is {what}, not text; web_fetch returns text only"
-            )
         page_raw = _decode_page(response, content)
 
     # Markdown is already what this tool returns, so it is not simplified, and it
@@ -734,7 +527,12 @@ def _fetch(url: str, raw: bool, timeout: float, permit: Callable[[str], bool]) -
     )
     if is_page_html and not raw:
         cut = len(page_raw) > MAX_EXTRACT_HTML_CHARS
-        text = extract_content_from_html(page_raw[:MAX_EXTRACT_HTML_CHARS], final)
+        try:
+            text = extract_content_from_html(page_raw[:MAX_EXTRACT_HTML_CHARS], final)
+        except RecursionError:  # a page nested thousands of levels deep
+            raise FetchError(
+                "The page nests its elements too deeply to simplify; try raw=true."
+            ) from None
         note = (
             f"The page is large: only its first {MAX_EXTRACT_HTML_CHARS} characters "
             "were read.\n"
