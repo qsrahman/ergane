@@ -39,7 +39,9 @@ PRUNE_TAIL = 1000
 IMAGE_DROPPED = "[image dropped to fit the context]"
 
 
-IMAGE_REFUSED = "[image removed: the model does not take pictures]"
+IMAGE_REFUSED = (
+    "[image removed: the model does not take pictures; tell the user you cannot see it]"
+)
 
 
 def function_output(

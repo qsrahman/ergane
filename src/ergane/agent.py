@@ -52,6 +52,7 @@ from ergane.loops import (
     step_signature,
 )
 from ergane.outputs import (
+    IMAGE_REFUSED,
     answer_open_calls,
     drop_images,
     drop_outputs,
@@ -112,11 +113,14 @@ class _Running:
 
 
 def _output_item(
-    call: ResponseFunctionToolCall, result: ToolOutput | None
+    call: ResponseFunctionToolCall, result: ToolOutput | None, pictures: bool
 ) -> ResponseInputItemParam:
     """The item that answers a call: the output of a tool, or, for a call whose thread
-    ended without one, a note that says so."""
+    ended without one, a note that says so. A model that takes no `pictures` gets a
+    note in their place instead of a request that would be refused."""
     result = result or ToolOutput("Error: the call ended without a result.")
+    if result.images and not pictures:
+        result = ToolOutput(f"{result.text}\n{IMAGE_REFUSED}")
     return {
         "type": "function_call_output",
         "call_id": call.call_id,
@@ -182,6 +186,10 @@ class Agent:
         self.context = Context()
         # Tools the user allowed for the rest of the session, by name.
         self.always_allowed: set[str] = set()
+        # The models that refused a request for its pictures: later pictures are not sent
+        # to them, since each would cost a request that is refused. By model, since
+        # `/model` can change it.
+        self.no_pictures: set[str] = set()
         # What the server counted in the last request it answered; None until then,
         # and when a compatible server sends no usage.
         self.last_input_tokens: int | None = None
@@ -318,9 +326,10 @@ class Agent:
                 # Only if there was a picture to take out: then the same request
                 # cannot be refused for it again, and this does not go on for ever.
                 if is_images_rejected(exc) and drop_images(turn.items):
+                    self.no_pictures.add(self.config.model)
                     io.on_notice(
-                        "The model does not take pictures, so they were dropped; "
-                        "set images to false for the server that sent them"
+                        "The model does not take pictures, so they were dropped "
+                        "(an MCP server's: set its images to false)"
                     )
                     continue
                 if is_context_overflow(exc) and not turn.refused:
@@ -712,10 +721,12 @@ class Agent:
                     running.thread.join(_CANCEL_SECONDS)
                 for call, running in together:
                     if not running.thread.is_alive():
-                        items.append(_output_item(call, running.result))
+                        items.append(
+                            _output_item(call, running.result, self._pictures())
+                        )
                 raise
             for call, running in together:
-                items.append(_output_item(call, running.result))
+                items.append(_output_item(call, running.result, self._pictures()))
             together.clear()
 
         offered = self.offered()
@@ -727,8 +738,16 @@ class Agent:
                 together.append((call, _Running(tool, call.arguments, self._slots)))
                 continue
             settle()  # what came before is answered first
-            items.append(_output_item(call, self._answer(call, tool, problem, io)))
+            items.append(
+                _output_item(
+                    call, self._answer(call, tool, problem, io), self._pictures()
+                )
+            )
         settle()
+
+    def _pictures(self) -> bool:
+        """Whether the model may be sent pictures: it has not refused any."""
+        return self.config.model not in self.no_pictures
 
     def _answer(
         self,

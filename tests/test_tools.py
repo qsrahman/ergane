@@ -289,6 +289,25 @@ class TestToolFromParts:
         )
 
 
+class TestAToolThatReturnsPictures:
+    def test_str_or_tool_output_is_an_allowed_return_type(self):
+        def shot() -> str | ToolOutput:
+            """Take a screenshot."""
+            return ToolOutput("a screenshot", (Image("aGk=", "image/png"),))
+
+        defined = Tool.from_function(shot)
+
+        assert defined.call_output("{}").images == (Image("aGk=", "image/png"),)
+
+    def test_other_unions_are_not(self):
+        def shot() -> str | int:
+            """Take a screenshot."""
+            return "x"
+
+        with pytest.raises(TypeError, match="must be annotated to return str"):
+            Tool.from_function(shot)  # pyright: ignore[reportArgumentType]
+
+
 class TestPictures:
     PICTURE = Image("aGk=", "image/png")
 

@@ -12,7 +12,7 @@ import re
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
-from ergane.tools import Image, invalid_arguments
+from ergane.tools import IMAGE_TYPES, MAX_IMAGE_CHARS, Image, invalid_arguments
 
 if TYPE_CHECKING:
     from mcp import ClientSession
@@ -23,11 +23,6 @@ if TYPE_CHECKING:
 # is cut at the longest it takes (a server's name has the same rule, in `config.py`).
 _DISALLOWED = re.compile(r"[^a-zA-Z0-9_-]")
 _MAX_NAME_CHARS = 128
-
-# The kinds of picture the Responses API takes, and the most of one (as base64) that is
-# passed on: it is in every request until it is dropped.
-_IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
-_MAX_IMAGE_CHARS = 5_000_000
 
 
 def tool_name(server: str, tool: str, taken: set[str]) -> str:
@@ -95,8 +90,8 @@ def result_images(result: CallToolResult) -> tuple[Image, ...]:
         Image(block.data, block.mime_type)
         for block in result.content
         if isinstance(block, ImageContent)
-        and block.mime_type in _IMAGE_TYPES
-        and len(block.data) <= _MAX_IMAGE_CHARS
+        and block.mime_type in IMAGE_TYPES
+        and len(block.data) <= MAX_IMAGE_CHARS
     )
 
 

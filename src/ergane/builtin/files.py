@@ -21,6 +21,7 @@ import pathspec
 import regex
 from pydantic import Field
 
+from ergane.builtin._images import picture_type, read_picture
 from ergane.builtin._paths import Directory, File, not_found, resolve
 from ergane.builtin._text import (
     MAX_TEXT_CHARS,
@@ -29,7 +30,7 @@ from ergane.builtin._text import (
     read_lines,
     take_lines,
 )
-from ergane.tools import tool
+from ergane.tools import ToolOutput, tool
 
 _SNIFF_BYTES = 8192
 # A file over this is not searched for content: it is a data file, not source.
@@ -165,11 +166,12 @@ def read_file(
         int | None,
         Field(ge=1, description="The most lines to return (default: as many as fit)."),
     ] = None,
-) -> str:
-    """Read a text file (not a directory or a binary file) and return its lines as they
-    are, without line numbers. Output is capped at about 16,000 characters; a longer
-    file ends with the offset to continue from. Use offset and limit for a range of
-    lines. Only works inside the working directory and the system temp directory."""
+) -> str | ToolOutput:
+    """Read a text file and return its lines as they are, without line numbers, or look
+    at a png, jpeg, webp or gif picture (not a directory or another binary file). Text
+    output is capped at about 16,000 characters; a longer file ends with the offset to
+    continue from. Use offset and limit for a range of lines. Only works inside the
+    working directory and the system temp directory."""
     real = resolve(path)
     if real.is_dir():
         raise IsADirectoryError(
@@ -177,6 +179,10 @@ def read_file(
         )
     if not real.exists():
         raise FileNotFoundError(not_found(path, real, "File"))
+    with open(real, "rb") as raw:
+        mime = picture_type(raw.read(_SNIFF_BYTES))
+    if mime:
+        return read_picture(real, path, mime)
     return _read_lines(real, path, offset, limit)
 
 

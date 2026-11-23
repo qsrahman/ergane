@@ -505,7 +505,7 @@ class TestPictures:
 
         from ergane.mcp_tools import result_images
 
-        monkeypatch.setattr("ergane.mcp_tools._MAX_IMAGE_CHARS", 4)
+        monkeypatch.setattr("ergane.mcp_tools.MAX_IMAGE_CHARS", 4)
         big = mcp_types.ImageContent(type="image", data="x" * 5, mime_type="image/png")
         small = mcp_types.ImageContent(
             type="image", data="x" * 4, mime_type="image/png"

@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import time
@@ -8,6 +9,11 @@ import pytest
 
 from ergane.builtin.files import list_directory, read_file, search_files
 from ergane.tools import MAX_OUTPUT_CHARS, Tool
+
+# A 1x1 png: its chunks are in the right order, which is what the sniffing reads.
+PNG_FILE = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
 
 
 def call(tool: Tool, **arguments: object) -> str:
@@ -95,6 +101,70 @@ class TestReadFile:
         text = call(read_file, path="min.js")
 
         assert len(text) < 3_000 and "[line cut: 50,000 characters]" in text
+
+    def test_a_picture_comes_back_as_a_picture_with_a_line_that_names_it(
+        self, tmp_path: Path
+    ):
+        (tmp_path / "logo.png").write_bytes(PNG_FILE)
+
+        result = read_file.call_output(json.dumps({"path": "logo.png"}))
+
+        assert (
+            result.text
+            == f"Picture: logo.png (image/png, {len(PNG_FILE) / 1000:.0f} KB)"
+        )
+        assert [(i.mime_type, base64.b64decode(i.data)) for i in result.images] == [
+            ("image/png", PNG_FILE)
+        ]
+
+    def test_the_name_does_not_decide_what_a_file_is(self, tmp_path: Path):
+        write(tmp_path / "words.png", "just text\n")
+        (tmp_path / "picture.txt").write_bytes(PNG_FILE)
+
+        assert call(read_file, path="words.png") == "just text"
+        assert read_file.call_output(json.dumps({"path": "picture.txt"})).images
+
+    def test_the_text_of_a_picture_is_all_that_call_returns(self, tmp_path: Path):
+        (tmp_path / "logo.png").write_bytes(PNG_FILE)
+
+        assert call(read_file, path="logo.png").startswith("Picture: logo.png")
+
+    def test_a_picture_over_the_limit_is_refused_and_says_what_to_do(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        (tmp_path / "big.png").write_bytes(PNG_FILE)
+        monkeypatch.setattr("ergane.builtin._images.MAX_IMAGE_CHARS", 8)
+
+        result = call(read_file, path="big.png")
+
+        assert "is a image/png picture" in result and "ask for a smaller one" in result
+
+    def test_the_limit_counts_the_base64_that_is_sent_not_the_bytes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        (tmp_path / "big.png").write_bytes(PNG_FILE)
+        # The file is under this many bytes; its base64 text is not.
+        monkeypatch.setattr(
+            "ergane.builtin._images.MAX_IMAGE_CHARS", len(PNG_FILE) + 10
+        )
+
+        assert "ask for a smaller one" in call(read_file, path="big.png")
+
+    def test_a_picture_at_the_limit_is_sent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        (tmp_path / "ok.png").write_bytes(PNG_FILE)
+        monkeypatch.setattr(
+            "ergane.builtin._images.MAX_IMAGE_CHARS", len(PNG_FILE) // 3 * 4 + 4
+        )
+
+        assert read_file.call_output(json.dumps({"path": "ok.png"})).images
+
+    def test_an_animated_png_is_a_binary_file_like_any_other(self, tmp_path: Path):
+        animated = PNG_FILE.replace(b"IDAT", b"acTL\0\0\0\0\0\0\0\0\0\0\0\0IDAT", 1)
+        (tmp_path / "anim.png").write_bytes(animated)
+
+        assert "looks like a binary file" in call(read_file, path="anim.png")
 
     def test_a_byte_order_mark_is_not_shown(self, tmp_path: Path):
         (tmp_path / "bom.txt").write_bytes(b"\xef\xbb\xbftitle\nbody\n")

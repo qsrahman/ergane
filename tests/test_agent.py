@@ -130,7 +130,7 @@ class TestAgentRunTurn:
 
         assert len(fake_server.requests) == 1  # nothing was sent again
 
-    def test_pictures_that_come_later_in_the_turn_are_taken_out_too(
+    def test_after_a_refusal_later_pictures_are_not_sent_at_all(
         self, make_agent, fake_server, streaming
     ):
         agent = make_agent(tools=[self.shot()], STREAMING=streaming)
@@ -139,12 +139,43 @@ class TestAgentRunTurn:
         with pytest.raises(TurnError, match="^Stopped: the model keeps repeating"):
             agent.run_turn("novision_tool_loop", on_notice=notices.append)
 
-        # Every round got a picture back; the last one's was never sent.
-        assert notices.count(
-            "The model does not take pictures, so they were dropped; "
-            "set images to false for the server that sent them"
-        ) == (LOOP_ROUNDS - 1)
-        assert "input_image" not in str(fake_server.requests[-1]["input"])
+        # Every round got a picture back, but only the first was sent (and refused);
+        # the others were replaced by a note, so no request was spent on them.
+        refusals = [n for n in notices if "does not take pictures" in n]
+        assert len(refusals) == 1
+        sent = [r for r in fake_server.requests if "input_image" in str(r["input"])]
+        assert len(sent) == 1
+        assert IMAGE_REFUSED in str(fake_server.requests[-1]["input"])
+
+    def test_a_later_picture_is_answered_with_a_note_that_tells_the_model_why(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = make_agent(tools=[self.shot()], STREAMING=streaming)
+        agent.run_turn("novision_tool_call")
+        before = len(fake_server.requests)
+
+        agent.run_turn("novision_tool_call")
+
+        outputs = [
+            item["output"]  # type: ignore[index]
+            for item in agent.context.items
+            if item.get("type") == "function_call_output"
+        ]
+        assert outputs[-1] == f"the page\n{IMAGE_REFUSED}"
+        # Two requests for the turn, neither refused: no retry was needed.
+        assert len(fake_server.requests) - before == 2
+
+    def test_the_memory_is_of_the_model_so_another_one_gets_its_pictures(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = make_agent(tools=[self.shot()], STREAMING=streaming)
+        agent.run_turn("novision_tool_call")
+        agent.config.model = "another-model"
+
+        agent.run_turn("novision_tool_call")
+
+        sent = [r for r in fake_server.requests if "input_image" in str(r["input"])]
+        assert len(sent) == 2  # one refused request for each model
 
     def test_an_error_that_is_not_about_pictures_leaves_them_alone(
         self, make_agent, fake_server, streaming

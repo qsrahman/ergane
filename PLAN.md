@@ -6,9 +6,8 @@ shell, fetch and search tools), ergane's own `tools` branch (a `fetch_url` port)
 tools of opencode, pi and codex. The decisions at the end were settled in a round of
 questions and answers, and each is recorded there with what follows from it.
 
-**Status.** Phases 0 to 5 are built and committed on the `builtin-tools` branch (phase 5
-awaits approval). Phase 6 (pictures) and phase 7 (docs and the model evaluation) are
-planned below. The build departed from this plan in four places, all recorded in
+**Status.** Phases 0 to 6 are built on the `builtin-tools` branch (5 and 6 await approval).
+Phase 7 (docs and the model evaluation) is planned below. The build departed from this plan in four places, all recorded in
 Decisions: `read_file` was split into `read_file` and `list_directory` (1); ergane's own
 config and state directories are not refused (2); `web_fetch`'s charset sniffing, address
 tables and depth guard were replaced by `UnicodeDammit`, `is_global` and a

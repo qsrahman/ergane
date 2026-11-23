@@ -28,6 +28,12 @@ from pydantic.json_schema import GenerateJsonSchema
 MAX_OUTPUT_CHARS = 20 * 1024
 
 
+# The kinds of picture the Responses API takes, and the most of one (as base64) that is
+# passed on: it is in every request until it is dropped.
+IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
+MAX_IMAGE_CHARS = 5_000_000
+
+
 @dataclass(frozen=True)
 class Image:
     """A picture a tool returns for the model to look at."""
@@ -99,7 +105,7 @@ class Tool:
     @classmethod
     def from_function(
         cls,
-        function: Callable[..., str],
+        function: Callable[..., str | ToolOutput],
         read_only: bool = True,
         preview: Callable[..., str] | None = None,
     ) -> Tool:
@@ -131,8 +137,11 @@ class Tool:
         if inspect.iscoroutinefunction(function):
             raise TypeError(f"Tool {name} must not be async")
         hints = get_type_hints(function, include_extras=True)
-        if hints.get("return") is not str:
-            raise TypeError(f"Tool {name} must be annotated to return str")
+        if hints.get("return") not in (str, str | ToolOutput):
+            raise TypeError(
+                f"Tool {name} must be annotated to return str (or str | ToolOutput, "
+                "for a tool that returns pictures)"
+            )
 
         for param_name, param in inspect.signature(function).parameters.items():
             if param.kind not in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY):
@@ -214,18 +223,18 @@ class Tool:
 
 
 @overload
-def tool(function: Callable[..., str], /) -> Tool: ...
+def tool(function: Callable[..., str | ToolOutput], /) -> Tool: ...
 @overload
 def tool(
     *, read_only: bool = True, preview: Callable[..., str] | None = None
-) -> Callable[[Callable[..., str]], Tool]: ...
+) -> Callable[[Callable[..., str | ToolOutput]], Tool]: ...
 def tool(
-    function: Callable[..., str] | None = None,
+    function: Callable[..., str | ToolOutput] | None = None,
     /,
     *,
     read_only: bool = True,
     preview: Callable[..., str] | None = None,
-) -> Tool | Callable[[Callable[..., str]], Tool]:
+) -> Tool | Callable[[Callable[..., str | ToolOutput]], Tool]:
     """Make a function a tool: `@tool`, or `@tool(read_only=False)`.
 
     The decorated name becomes the Tool, so a test calls `add.call('{"a": 1}')` and a
@@ -247,7 +256,7 @@ def tool(
         TypeError: See Tool.from_function.
     """
 
-    def make(function: Callable[..., str]) -> Tool:
+    def make(function: Callable[..., str | ToolOutput]) -> Tool:
         return Tool.from_function(function, read_only, preview)
 
     return make if function is None else make(function)
