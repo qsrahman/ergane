@@ -29,6 +29,7 @@ line, because lines move. Everything is in [`src/ergane/`](src/ergane/).
                        │  response_problem  failed, incomplete or empty? ──► stop and report it
                        │  tool calls?       none ──► stop: this was the answer
                        │  _run_tools        one output per call (asks you first when it must)
+                       │  loop guard        the same step again and again? ──► warn, then stop
                        │  budget check      turn too big? ──► drop older results; still too big? stop
                        └──────────────────────────────────┤
                                                           ▼
@@ -41,7 +42,7 @@ that `Repl.ask` hands it, which are methods of `Console`:
 | Callback    | Is                | Carries                                                       |
 |-------------|-------------------|---------------------------------------------------------------|
 | `on_text`   | `Console.write`   | the reply, as it arrives                                      |
-| `on_notice` | `Console.notice`  | one-line status: a trim, a retry, a dropped result            |
+| `on_notice` | `Console.notice`  | one-line status: a trim, a retry, a dropped result, a todo change, a repeat warning |
 | `confirm`   | `Console.confirm` | the permission question; returns whether the call may run     |
 | `on_call`   | `Console.call`    | a call that runs without asking, as one line                  |
 
@@ -129,7 +130,7 @@ Every request is built the same way, and is the only place the API is called:
 | Field          | Value                                                                                                  |
 |----------------|--------------------------------------------------------------------------------------------------------|
 | `model`        | the `model` setting                                                                                    |
-| `instructions` | the system prompt (`SYSTEM_PROMPT` if the agent has tools, else `SYSTEM_PROMPT_NO_TOOLS`), then the OS and the date, then the todo list while steps are open (`TodoList.notes`), then the notice to a model that repeats itself (§6) |
+| `instructions` | the system prompt (`SYSTEM_PROMPT` if the agent has tools, else `SYSTEM_PROMPT_NO_TOOLS`), then the OS and the date, then the todo list while steps are open and the agent has tools (`TodoList.notes`), then the notice to a model that repeats itself (§6) |
 | `input`        | **all** the items: the history, this prompt, and everything this turn has produced so far              |
 | `tools`        | the schema of every tool, if there are any, and the `todo` tool with them (`Agent.offered`)            |
 | `reasoning`    | `{"effort": …}`, only if `reasoning_effort` is set                                                      |
@@ -211,6 +212,11 @@ with input or output redirected it is the typed line `Allow name {args}? [y/N/a]
   server) and keeps the outputs of the calls that had ended.
 - **A result is never shown to you.** It goes to the model, whose reply is meant to
   say what it found.
+- **The `todo` tool** (`todos.py`) is offered with any other tool (`Agent.offered`; with
+  none, the chat stays plain), runs without asking and shows as a `▸ todo` line. Every
+  call sends the whole list; two steps `in_progress` come back as an error and change
+  nothing. After a round that changed the list, one notice says so (`[Todos updated: 2/5
+  completed, 1 in progress. Now: …]`). `/todo` shows the list.
 - After the calls, the items grow by the model's own output (its reasoning and its
   `function_call` items, and any text it said first), then one output per call. The
   next round sends all of that back.
@@ -229,13 +235,19 @@ structured content is that as JSON); other blocks become a placeholder such as
 `[image: image/png]`; a server-side error gets an `Error:` prefix. A call that times out is cancelled and the connection stays usable
 (`Error: TimeoutError: MCP server 'x' did not answer within N s`); a server whose connection
 ended fails the call that finds it (`Error: McpServerError: MCP server 'x': …`) and is
-started again by the next call (up to 3 times a session), which is not repeated for it. See [README.md](README.md#mcp-servers).
+started again by the next call (up to 3 times a session), which is not repeated for it. A call after 10 s of silence, or after a failed one, first pings; only an answer that says the connection is closed starts the server again, since one that answers with an error of its own is alive. See [README.md](README.md#mcp-servers).
 
 ## 6. When the rounds stop
 
 After each round with tool calls the loop checks, in this order:
 
-1. **The budget.** `_next_request_tokens` takes the `usage.input_tokens` the server
+1. **The loop guard** (`loops.py`). A turn has no cap on its rounds. Each round is
+   identified by its calls and what they returned. When the newest one has appeared more
+   than twice among the last 10, the following requests carry a notice in their
+   instructions (and you see one line) until the model takes a different step; when one
+   step fills more than 5 of the last 10, the turn is saved with a closing assistant note
+   and ends with `Stopped: the model keeps repeating the same tool calls`.
+2. **The budget.** `_next_request_tokens` takes the `usage.input_tokens` the server
    reported for the request it just answered, which is exact, plus an estimate of the
    items added since (everything is estimated if the server sent no usage). Over
    `max_context_tokens` first shortens tool results: those of the rounds before the one
@@ -259,12 +271,6 @@ After each round with tool calls the loop checks, in this order:
    one-word prompt is about 9 tokens of history and about 600 to the server with no
    tools, and the 42 small tools of the example below add about 3,000 more (by the
    estimate); real servers describe their tools at more length.
-2. **The loop guard** (`loops.py`). A turn has no cap on its rounds. Each round is
-   identified by its calls and what they returned. When the newest one has appeared more
-   than twice among the last 10, the following requests carry a notice in their
-   instructions (and you see one line) until the model takes a different step; when one
-   step fills more than 5 of the last 10, the turn is saved with a closing assistant note
-   and ends with `Stopped: the model keeps repeating the same tool calls`.
 
 The loop also ends, without those checks, on a response with a problem or with no
 tool calls (the answer).
@@ -336,8 +342,8 @@ Three of these are worth knowing about:
   stays valid. Either way the turn is closed with `[Stopped after N model calls:
   interrupted by the user]`. In the first round's model call nothing has run, and
   nothing is saved.
-- **Failures and the cap save.** A turn that fails after a completed round is kept with
-  a note, like the cap, for the same reason.
+- **Failures and the loop guard save.** A turn that fails after a completed round is
+  kept with a note, like the stop of the loop guard, for the same reason.
 - **The budget drops results first.** A result is worth less than the work around it,
   so old results go before a turn is given up on; a turn is lost to the budget only
   when one round's results alone are over it.
@@ -351,6 +357,8 @@ Three of these are worth knowing about:
 | your prompts and its replies | yes | yes (history) |
 | tool calls | one line each | yes |
 | tool results | **no** | yes |
+| the todo list | `/todo`, and a line when it changes | yes, in the instructions while steps are open |
+| a warning that it repeats itself | one line | yes, a notice in the instructions |
 | its reasoning | no | yes, in the turn and the next one; then removed |
 | a denial | your own answer | `The user denied this call.` |
 
@@ -389,6 +397,11 @@ their text is printed when output is redirected or `NO_COLOR` is set.
   `/sessions`, replaces the whole history). `begin_turn` and the rounds work on a copy.
 - **The newest user message is never trimmed away,** and neither is the summary.
 - **A summary replaces turns only when it is good:** the history is whole after a failure.
+- **A turn has no cap on its model calls.** The loop guard warns a model that repeats a
+  step and stops one that goes on; the notice is in the instructions, never in a tool
+  result, and does not outlive the turn.
+- **The todo tool is offered only with another tool,** and its list reaches the
+  instructions only then, so a chat with no tools never mentions one.
 - **The agent prints nothing.** If a new message is for the user, it goes through one
   of the four callbacks.
 
@@ -436,6 +449,8 @@ the model still answered.
 | the turn, the rounds, the stops       | `Agent.run_turn`, `_ask`, `_run_round` in [`agent.py`](src/ergane/agent.py) |
 | the request and the stream            | `Responder` in [`responses.py`](src/ergane/responses.py)    |
 | calls and permissions                 | `Agent._run_tools`, `Tool` in [`tools.py`](src/ergane/tools.py) |
+| the todo tool and its list            | `TodoList` in [`todos.py`](src/ergane/todos.py); `Agent.offered` |
+| the loop guard                        | `Agent._watch_loop` in [`agent.py`](src/ergane/agent.py), the functions in [`loops.py`](src/ergane/loops.py) |
 | history, summary, trimming, saving    | `Context` in [`context.py`](src/ergane/context.py)          |
 | summarizing                           | `Compactor` in [`compaction.py`](src/ergane/compaction.py) |
 | the too-long retry                    | `_shrink` in [`agent.py`](src/ergane/agent.py) |
