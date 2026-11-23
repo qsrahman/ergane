@@ -100,7 +100,7 @@ class TestReadFile:
 
         text = call(read_file, path="min.js")
 
-        assert len(text) < 3_000 and "[line cut: 50,000 characters]" in text
+        assert len(text) < 11_000 and "[line cut: 50,000 characters]" in text
 
     def test_a_picture_comes_back_as_a_picture_with_a_line_that_names_it(
         self, tmp_path: Path

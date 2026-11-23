@@ -120,8 +120,10 @@ still alternate and `/undo` and `/retry` work on the turns after it.
 `max_context_tokens` is a budget for the whole request, not only the history, so the
 items are given what is left of it after the part every request carries: the
 instructions and the definitions of the tools (`Agent._fixed_tokens`, estimated the
-same way). A long tool list therefore leaves less room for the history. The reply is
-not counted.
+same way). A long tool list therefore leaves less room for the history: the built-in
+tools and `todo` are about 2,400 tokens, and the tool part of the prompt about 360 more,
+so a request with the defaults carries about 2,800 more than a plain chat (4% of the
+default budget). The reply is not counted.
 
 ## 3. A round: the request (`Responder.send`, in `responses.py`)
 
@@ -132,7 +134,7 @@ Every request is built the same way, and is the only place the API is called:
 | `model`        | the `model` setting                                                                                    |
 | `instructions` | the system prompt (`SYSTEM_PROMPT` if the agent has tools, else `SYSTEM_PROMPT_NO_TOOLS`), then the OS and the date, then the todo list while steps are open and the agent has tools (`TodoList.notes`), then the notice to a model that repeats itself (§6) |
 | `input`        | **all** the items: the history, this prompt, and everything this turn has produced so far              |
-| `tools`        | the schema of every tool, if there are any, and the `todo` tool with them (`Agent.offered`)            |
+| `tools`        | the schema of every tool, if there are any (the built-ins that `builtin_tools` allows, then each server's; `cli.py`), and the `todo` tool with them (`Agent.offered`) |
 | `reasoning`    | `{"effort": …}`, only if `reasoning_effort` is set                                                      |
 | `store`        | `false`                                                                                                |
 
@@ -202,6 +204,11 @@ with input or output redirected it is the typed line `Allow name {args}? [y/N/a]
   tool name). At a terminal the question is a menu (`Console.choose`, which `Repl`
   supplies as `choose`, in `terminal.py`; Deny is first, so Enter denies); typed, anything but `y` and
   `a` is a no, and so is the end of input. Ctrl-C stops the turn (§8).
+- A tool may add a **preview** to the question (`Tool.preview`): `write_file` and
+  `edit_file` do, and the menu's "Show the change" option prints the diff of exactly the
+  edit that would be made, or says why it would fail. The other built-ins that ask are
+  `run_command`, `web_fetch` and `web_search`; `read_file`, `list_directory` and
+  `search_files` only read.
 - **Read-only calls that follow one another run at the same time**, each on a thread of its
   own (at most `MAX_PARALLEL_CALLS`, 8): they change nothing, so they cannot depend on one
   another, and a batch takes as long as its slowest call, not the sum. Any other call is a
@@ -211,7 +218,9 @@ with input or output redirected it is the typed line `Allow name {args}? [y/N/a]
   requests that are still waiting (`Tool.cancel`; for an MCP tool, the SDK tells the
   server) and keeps the outputs of the calls that had ended.
 - **A result is never shown to you.** It goes to the model, whose reply is meant to
-  say what it found.
+  say what it found. A result may carry a picture (`read_file` of a png): it goes in the
+  same output item, and a model that takes none is refused once, then remembered
+  (`Agent.no_pictures`, §8).
 - **The `todo` tool** (`todos.py`) is offered with any other tool (`Agent.offered`; with
   none, the chat stays plain), runs without asking and shows as a `▸ todo` line. Every
   call sends the whole list; two steps `in_progress` come back as an error and change

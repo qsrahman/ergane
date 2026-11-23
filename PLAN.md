@@ -319,12 +319,18 @@ small one. At least 5 runs each. Baseline first, against `main`'s no-tools chat 
 applies, then the branch; a scenario that is worse on a model blocks the merge until the
 cause is found.
 
-Open item from using it: asked to "show me the contents of README.md", a model answers
-with an excerpt. Causes found: the prompt tells the model not to paste long output, the
-user never sees tool results, a result is capped at 16,000 characters, and one line over
-2,000 characters is cut with no way to read the rest. Fixes offered, none chosen: raise
-the line cut to about 10,000 and add a "show in full" rule to the prompt (tested as above
-on gpt-5.5 and beam:cloud), or add a `/show PATH` command that prints a file itself.
+Resolved: "show me the contents of README.md" gave an excerpt. Causes found: the prompt told
+the model not to paste long output, the user never sees tool results, a result is capped at
+16,000 characters, and one line over 2,000 characters was cut with no way to read the rest.
+The fix is two changes: the line cut is 10,000, and the prompt says to show a file, a
+command's output or a page in full when asked (read all of it first), with the rule against
+pasting making an exception for that. Compared on the old and the new prompt, 5 runs each
+(a README-like file of 199 lines with one 2,500-character row, at least 90% of the lines in
+the reply): gpt-5.5 went from 0/5 (4 to 11 lines shown) to 5/5; gpt-oss:20b stayed at 0/5
+(it shows 24 to 31 of 199 lines, against 4 to 116 before; one run failed with a server
+error); beam:cloud and gemma4:cloud could not be measured (their credits had run out). The
+answers that must stay short ("summarize notes.txt in one sentence", "what does `connect()`
+do") stayed short on both models that ran: 10/10 each, old and new.
 
 **Last checks.** Suite, `ruff`, `pyright`, `uv build`; a fresh clone with `uv sync` (no
 extras) to confirm the new dependencies install; one real `web_fetch` and one real

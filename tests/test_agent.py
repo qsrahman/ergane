@@ -1434,6 +1434,16 @@ def test_the_prompt_with_tools_says_what_the_program_does_with_them():
     assert "denied" in SYSTEM_PROMPT
 
 
+def test_the_prompt_tells_the_model_to_show_what_it_is_asked_to_show():
+    # Models took "do not paste long output" as a reason to give 6 lines of a 199-line
+    # file when asked to see it; the rule that says to show it is with the tools, since
+    # the user cannot see a result, and the one against pasting makes an exception.
+    assert "asks to see a file" in SYSTEM_PROMPT
+    assert "in full, after reading all of it" in SYSTEM_PROMPT
+    for prompt in (SYSTEM_PROMPT, SYSTEM_PROMPT_NO_TOOLS):
+        assert "unless they ask to see it" in prompt
+
+
 def test_the_prompt_with_tools_asks_for_scratch_scripts_to_be_cleaned_up():
     # "A new temporary directory" alone made gemma4 create one in the project, so
     # it names the system's temporary location; and it says the project is no place.

@@ -136,7 +136,7 @@ class TestAgentWithTodos:
     def test_the_list_is_left_out_once_no_tool_is_left(self, make_agent, fake_server):
         agent = make_agent()
         agent.update_server([], [tool_with(read_file)], "srv", None)
-        call(agent.todos, ("write it", "in_progress"))
+        call(agent.todos, ("frobnicate the widget", "in_progress"))
         agent.update_server(["read_file"], [], "srv", None)  # the server went away
 
         agent.run_turn("hi")
@@ -144,18 +144,18 @@ class TestAgentWithTodos:
         request = fake_server.requests[0]
         # A chat with no tools never talks of tools, or of a list kept with one.
         assert request["instructions"].startswith(SYSTEM_PROMPT_NO_TOOLS)
-        assert "write it" not in request["instructions"]
+        assert "frobnicate the widget" not in request["instructions"]
         assert "todo" not in request["instructions"]
 
     def test_finished_steps_are_not_repeated_in_the_instructions(
         self, make_agent, fake_server
     ):
         agent = make_agent(tools=[tool_with(read_file)])
-        call(agent.todos, ("write it", "completed"))
+        call(agent.todos, ("frobnicate the widget", "completed"))
 
         agent.run_turn("hi")
 
-        assert "write it" not in fake_server.requests[0]["instructions"]
+        assert "frobnicate the widget" not in fake_server.requests[0]["instructions"]
 
     def test_a_change_made_in_a_round_is_shown_once(self, make_agent):
         agent = make_agent(tools=[])

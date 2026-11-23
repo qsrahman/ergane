@@ -11,8 +11,10 @@ from typing import TextIO
 
 # Well under MAX_OUTPUT_CHARS, so a tool's own footer always survives.
 MAX_TEXT_CHARS = 16_000
-# A line longer than this is cut, so one minified file cannot fill a whole result.
-MAX_LINE_CHARS = 2_000
+# A line longer than this is cut, so one minified file cannot fill a whole result. Long
+# enough for a line of prose or a README's long table row, which a cut at 2,000 broke
+# with no way to read the rest.
+MAX_LINE_CHARS = 10_000
 # How much of a line is read at a time while skipping or measuring it.
 _CHUNK = 65_536
 # What `head_tail` keeps back for the note that says what was left out.

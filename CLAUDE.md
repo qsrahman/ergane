@@ -8,8 +8,9 @@ turn through the code; this file keeps what a change must not break.
 
 `ergane` is a minimal interactive terminal chat agent on the OpenAI **Responses API**
 (`src/ergane/`, `src` layout). Its tools come from MCP servers listed in
-`config.json` and from the Python functions in `src/ergane/builtin/` (none yet); with
-no tool at all it is a plain chat.
+`config.json` and from the Python functions in `src/ergane/builtin/` (files, shell, web
+fetch and web search); `--no-builtin` and no server is the plain chat, which has no tool
+at all.
 
 ## Commands
 
@@ -54,7 +55,13 @@ it editable; the script is `ergane.cli:main`. Tests import modules directly
 - `test_console.py` gives `Console` an `output=Vt100_Output(io.StringIO(), …)` to see the
   codes of styled lines, and a `choose` function in place of the menu; the real menu is
   driven with a pipe input in `TestMenu` (`test_terminal.py`), like the prompt.
-- A behaviour change gets a mutation check: break the code, see the test fail.
+- A behaviour change gets a mutation check: break the code, see the test fail. Run it
+  with a script that always restores the file (a `| head` that closes the pipe early
+  once left a mutated file behind).
+- The built-ins have a `test_builtin_*.py` each, on `tmp_path` (the autouse fixture makes
+  it the working directory). The fetch and search tests serve from a local HTTP server
+  and never touch the network; `test_builtin_shell.py` points `tempfile.tempdir` at
+  `tmp_path` so that saved output does not pile up in the real temp directory.
 
 ## Configuration
 
@@ -98,6 +105,16 @@ The modules, in dependency order (each imports only from those above it):
   time, held in memory, not saved with a session). The agent offers it only when it has
   another tool, shows a change as one notice, and puts a list with open steps into the
   instructions of each request, since old tool results are dropped from the history.
+- `builtin/`: ergane's own tools, each module only `@tool` functions (and the helpers
+  they share, whose names start with `_`, which `tools_in` skips). In dependency order:
+  `_paths` (`resolve`: the one place a model's path becomes a real one), `_text`
+  (what counts as text; the line, character and head-and-tail cuts), `_images` (which
+  files are pictures), `_edit` (the text of an edit, pure), then `files` (`read_file`,
+  `list_directory`, `search_files`), `writes` (`write_file`, `edit_file`), `shell`
+  (`run_command`), `fetch` (`web_fetch`) and `search` (`web_search`). A tool that needs
+  a setting a test changes is made by a `make_*_tool` factory (the fetch and search
+  ones), since tools cannot see `Config`. [TOOLS.md](TOOLS.md) is the guide; `PLAN.md`
+  records why each tool is as it is.
 - `mcp_tools.py`: what an MCP server's tools and results become for the model: names,
   the text and pictures of a result, the check of a call's arguments. Plain functions.
 - `mcp_client.py`: `McpClient`, one connection used from synchronous code (on anyio's
@@ -187,6 +204,37 @@ What must stay true:
   `.env`, server list or saved session is read from the working directory. A session is
   played back as the model's own words, so one that a project shipped could give orders
   in its voice; `sessions.py` reads only the state directory.
+- **A model's path becomes a real one in `_paths.resolve` only:** `..` is collapsed
+  first, symlinks are followed, and the result must be inside the working directory or
+  the system temp directory (a path that does not exist yet is judged by its nearest
+  parent that does). Nothing else in `builtin/` opens a path the model wrote. ergane's own
+  config and state directories are not singled out: the roots are the protection.
+- **A file is never written through a symbolic link,** and only a regular file is
+  overwritten (`writes.py`): the path the model wrote must not be a link, a new file is
+  made with `O_EXCL`, and an existing one is opened with `O_NOFOLLOW` after an `lstat`
+  (opening a named pipe would block). `edit_file` and its preview share one plan
+  (`_plan_edit`), so the diff the user approves is the change that is made.
+- **A tool that is not `read_only` asks, and these are:** `write_file`, `edit_file`,
+  `run_command`, `web_fetch` and `web_search` (a page the model read can tell it what to
+  fetch or search). The three that only read run on threads and cannot be stopped by
+  Ctrl-C, so each is bounded without help: output caps, a 30 s search deadline, a 0.5 s
+  limit per line for the `regex` package (the stdlib `re` backtracks without end),
+  reads in chunks (a file of one huge line must not be read whole), and content search
+  only in plain files (a named pipe would block for ever).
+- **`run_command` leaves nothing running and tells nothing secret:** each call is a
+  fresh `sh -c` in its own process group, stopped whole on a timeout, an overflow or
+  Ctrl-C; stdin is closed; `OPENAI_API_KEY` is not in its environment; only its `cwd` is
+  confined, the command is not. A cut result is saved whole in the temp directory and
+  the result names the file.
+- **`web_fetch` connects only to an address it checked:** the lookup is made inside the
+  connection (`_CheckedBackend`), every address must be public, and every redirect hop is
+  a new check. Without this a page could send the model to an internal service, or a
+  DNS answer that changes between a check and a connection could. It reads at most
+  5 MB after decompression and refuses a binary type before reading the body.
+- **Pictures cost a request to refuse, so a refusal is remembered:** `read_file` returns
+  a picture only for the four kinds the API takes, by the file's first bytes, up to
+  3.7 MB; a model that refuses one is in `Agent.no_pictures`, and later pictures for it
+  are replaced by a note before the request is made.
 
 ## Conventions
 
@@ -231,3 +279,7 @@ What must stay true:
   goes for the summary prompt: a recall check (plant five facts, summarize twice, ask)
   gave 5 of 5 on gpt-5.5 and gemma4, and showed that gemma4 does not write the
   `<summary>` tags, which a strict parser would have refused.
+- A tool's description is a prompt too: a change to one is compared on the models
+  (which tool is called first for a dozen requests, several runs each) before it is
+  kept. Trimming `search_files`'s and `run_command`'s was checked that way; it is also
+  where "use `read_file`, not `cat`" lives, since the system prompt names no tool but `todo`.
