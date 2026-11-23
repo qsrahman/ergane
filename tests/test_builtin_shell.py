@@ -199,6 +199,26 @@ class TestStoppingIt:
         assert "done" in result and "background processes" in result
         assert gone(int((tmp_path / "bg.pid").read_text()))
 
+    def test_a_process_that_left_the_group_does_not_hold_the_call_up(
+        self, tmp_path: Path
+    ):
+        leave = (
+            "import subprocess; print(subprocess.Popen(['sleep', '30'], "
+            "start_new_session=True).pid)"
+        )
+        started = time.monotonic()
+        try:
+            result = run(f'python3 -c "{leave}" > left.pid; echo done', timeout_s=5)
+        finally:
+            for pid_file in tmp_path.glob("left.pid"):
+                try:
+                    os.kill(int(pid_file.read_text()), signal.SIGKILL)
+                except ValueError, ProcessLookupError:
+                    pass
+
+        assert time.monotonic() - started < 6
+        assert "done" in result
+
     def test_a_runaway_output_stops_the_command(self, monkeypatch):
         monkeypatch.setattr("ergane.builtin.shell._MAX_CAPTURE_BYTES", 200_000)
         started = time.monotonic()
@@ -206,8 +226,18 @@ class TestStoppingIt:
         result = run("yes")
 
         assert time.monotonic() - started < 10
-        assert "output was too large" in result
+        assert "over 10 MB" in result and "command was stopped" in result
         assert len(result) < MAX_OUTPUT_CHARS
+
+    @pytest.mark.parametrize("stream", ["", ">&2"])
+    def test_output_over_the_cap_from_a_command_that_ends_says_so(
+        self, monkeypatch, stream
+    ):
+        monkeypatch.setattr("ergane.builtin.shell._MAX_CAPTURE_BYTES", 1000)
+
+        result = run(f"head -c 5000 /dev/zero | tr '\\0' x {stream}")
+
+        assert "was cut off" in result and "command was stopped" not in result
 
     @pytest.mark.skipif(sys.platform == "win32", reason="needs signals")
     def test_ctrl_c_stops_the_command_and_is_not_swallowed(self, tmp_path: Path):

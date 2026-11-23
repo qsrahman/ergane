@@ -54,7 +54,9 @@ class _Capture:
     """Reads a pipe on a thread of its own, keeping the start of it up to a limit.
 
     Past the limit it goes on reading, so that the command is never blocked on a full
-    pipe, and says that it overflowed."""
+    pipe, and says that it overflowed. It closes the pipe itself when it ends: closing
+    it from another thread would wait for a read that a process which left the group
+    (and holds the pipe) never finishes."""
 
     def __init__(self, stream: IO[bytes], limit: int) -> None:
         self.data = bytearray()
@@ -64,13 +66,14 @@ class _Capture:
         self.thread.start()
 
     def _read(self, stream: IO[bytes]) -> None:
-        # `read1` returns what there is; `read` would wait for a full buffer.
-        while chunk := stream.read1(65536):  # pyright: ignore[reportAttributeAccessIssue]
-            room = self._limit - len(self.data)
-            if room > 0:
-                self.data += chunk[:room]
-            if len(chunk) > room:
-                self.overflowed = True
+        with stream:
+            # `read1` returns what there is; `read` would wait for a full buffer.
+            while chunk := stream.read1(65536):  # pyright: ignore[reportAttributeAccessIssue]
+                room = self._limit - len(self.data)
+                if room > 0:
+                    self.data += chunk[:room]
+                if len(chunk) > room:
+                    self.overflowed = True
 
 
 def _stop(process: subprocess.Popen[bytes]) -> None:
@@ -175,6 +178,7 @@ def run_command(
     out = _Capture(process.stdout, _MAX_CAPTURE_BYTES)
     err = _Capture(process.stderr, _MAX_CAPTURE_BYTES)
     notes: list[str] = []
+    runaway = False
     deadline = time.monotonic() + timeout_s
     try:
         while True:
@@ -186,8 +190,8 @@ def run_command(
             if time.monotonic() >= deadline:
                 notes.append(f"command timed out after {timeout_s} s and was stopped")
             elif out.overflowed or err.overflowed:
-                notes.append("the output was too large (over 10 MB): command stopped")
-            if notes:
+                runaway = True
+            if notes or runaway:
                 _stop(process)
                 break
         _join((out, err))
@@ -195,13 +199,16 @@ def run_command(
             # A process the command started in the background holds the pipes.
             _stop(process)
             _join((out, err))
-            notes.append("background processes the command started were stopped")
+            notes.append(
+                "background processes the command started held its output open; "
+                "those in its process group were stopped"
+            )
     except BaseException:  # Ctrl-C, mostly: leave nothing running
         _stop(process)
         raise
-    finally:
-        process.stdout.close()
-        process.stderr.close()
-    if out.overflowed and "too large" not in " ".join(notes):
-        notes.append("the output was cut off at 10 MB")
+    if out.overflowed or err.overflowed:
+        notes.append(
+            "the output was over 10 MB and was cut off"
+            + ("; the command was stopped" if runaway else "")
+        )
     return _result(process.returncode, bytes(out.data), bytes(err.data), notes)
