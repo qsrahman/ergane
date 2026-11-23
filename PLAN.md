@@ -34,11 +34,12 @@ What this changes in the plan:
 - **Matching is exact, then normalized.** Both `opencode` and `pi` fall back to trailing
   whitespace, smart quotes, Unicode dashes and spaces. That is evidence it matters in
   practice.
-- **Web search is not a built-in.** Which search service to use is the user's choice, and its
-  keys and terms change; `opencode` makes the provider a plugin the user picks, and `codex`
-  uses a hosted tool (which ergane does not: it works on one vendor's endpoint only, and
-  ergane could not ask before a search). In ergane that pluggable layer is MCP.
-  `web_fetch`, which has no provider and no key, is built in.
+- **Web search needs no key if it reads DuckDuckGo.** `opencode` makes the provider a plugin
+  the user picks, and `codex` uses a hosted tool (which ergane does not: it works on one
+  vendor's endpoint only, and ergane could not ask before a search). The
+  [duckduckgo-mcp-server](https://github.com/nickclyde/duckduckgo-mcp-server) shows a keyless
+  way: a form POST to DuckDuckGo's HTML endpoint, parsed with BeautifulSoup. ergane takes
+  that approach as a small built-in (see `web_search`) and leaves MCP for other providers.
 
 ## Constraints from ergane that shape the design
 
@@ -66,9 +67,9 @@ What this changes in the plan:
 | `edit_file` | `path`, `old_text`, `new_text`, `replace_all` | yes | `old_text` must match once unless `replace_all`; exact, then normalized; one line back |
 | `run_command` | `command`, `cwd`, `timeout_s` | yes | A fresh process each call, stdin closed, process group killed on timeout, head and tail of the output |
 | `web_fetch` | `url`, `max_length`, `start_index`, `raw` | decision 3 | From the `tools` branch port; its dependencies are an optional extra |
+| `web_search` | `query`, `max_results` | decision 3 | Keyless: DuckDuckGo's HTML endpoint; best effort; the same optional extra |
 
 `list_directory` is not a tool of its own: `read_file` lists a directory (decision 1).
-`web_search` is not a built-in: it comes from a search MCP server (see `web_search` below).
 Parameters are `snake_case`, and each has a description (`Annotated[..., Field(description=...)]`).
 
 ## Shared pieces
@@ -84,6 +85,7 @@ builtin/
   _edit.py    exact and normalized matching, line endings
   shell.py    run_command
   fetch.py    web_fetch (from the tools branch, renamed); heavy imports on first use
+  search.py   web_search: the DuckDuckGo form POST, the parser, the block check
 ```
 
 ## Security design
@@ -135,23 +137,37 @@ core that the tools need (`Tool`, `Console.confirm`, with tests).
   file and return its path; that adds a file ergane would have to track and delete, so it
   is left out.)
 
-## `web_search`: from MCP
+## `web_search`: DuckDuckGo, no key
 
-No code in ergane. A search tool is one HTTP call to a provider the user chooses, with that
-provider's key and terms, so it belongs behind the layer ergane already has for that:
+A built-in of about 70 lines, written from the page structure and not copied from
+duckduckgo-mcp-server (MIT; if any line is copied after all, its notice goes in
+`THIRD_PARTY_NOTICES.md`).
 
-- The user lists a search server under `mcpServers` and offers only its search tool with
-  `tools`. The key goes in the server's `env` as `${NAME}`, so ergane never stores it and
-  the server never sees `OPENAI_API_KEY`.
-- It asks before each call, which is the default for a server (`read_only` unset): the query
-  leaves the machine, and a page can tell the model what to search for.
-- The README gets a short section with a generic example (placeholders, not a named server),
-  and says that results are third-party text, that tool names carry the server's prefix, and
-  that a result over 20 KiB is cut from the end.
-- Cost of this choice: the user installs and configures a server, and each server's
-  description and behaviour differ, so a server is worth a quick check with the models in
-  use. A built-in Brave tool (about 150 lines, no dependencies, a `brave_api_key` setting)
-  can be added later without breaking anyone (decision 4).
+- **The request.** A form POST to `https://html.duckduckgo.com/html` with `q`, `kl` (region,
+  empty by default) and `kp` (safe search, moderate), through `httpx2`, with an honest user
+  agent (`ergane/<version>`) and a 15 s timeout.
+- **The parse.** BeautifulSoup with `html.parser`: each `.result`, its `.result__title a` and
+  `.result__snippet`; results whose link contains `y.js` are ads and skipped; a link of the
+  form `//duckduckgo.com/l/?uddg=...` is unwrapped to the real URL. The output is numbered:
+  title, URL, snippet; `max_results` 1 to 20, default 10.
+- **A block is said aloud.** DuckDuckGo answers a client it dislikes with an empty page and
+  status `202`, not an error. A `202`, `403` or `429`, or an empty body, returns "search was
+  refused or returned nothing, try again later", never "no results". A parsed page with no
+  results says there are none.
+- **Measured** (three runs each, one machine, one moment): an honest user agent got `200`
+  and 10 results every time; the other server's browser-like headers (a Chrome 139 user
+  agent with `Sec-Ch-Ua` and `Sec-Fetch-*`) got `202` and no results every time.
+- **Not taken from that server:** `curl_cffi` Chrome TLS impersonation (it evades bot filters,
+  and adds a native dependency), the spoofed headers, its three rate limiters (one query at
+  a time from a terminal needs, at most, a minimum interval), the `ref://` link tokens, and
+  its transport, SSL and DNS-rebinding options.
+- **It asks before each call** (decision 3): the query leaves the machine, and a page can
+  tell the model what to search for. Results are third-party text, labelled untrusted in the
+  description.
+- **Risk.** It scrapes an endpoint that is not an API, so it can break or be blocked without
+  notice, and DuckDuckGo's terms were not checked. It is best effort; a user who needs a
+  reliable provider lists a search MCP server instead (offered with `tools`, the key in the
+  server's `env` as `${NAME}`), and the README says how, with a generic example.
 
 ## Libraries
 
@@ -184,8 +200,8 @@ Optional or to reconsider:
   but a dry run shows 14 new packages. Extraction quality is untested. Consider it only if
   the branch's output is poor on pages that matter.
 - **`markitdown`** pulls in `numpy` and `onnxruntime` (13 packages): skip.
-- **`ddgs`** (+3 packages) searches DuckDuckGo without a key by scraping. Unofficial: an
-  optional fallback at most.
+- **`ddgs`** (+3 packages) wraps the same DuckDuckGo scraping. Not needed: `web_search` is
+  about 70 lines on `httpx2` and `beautifulsoup4`.
 
 Kept custom: the SSRF-safe client (address check inside the connection's own lookup, per-hop
 redirect checks, post-decompression body cap). No library was evaluated for it.
@@ -203,8 +219,10 @@ Each phase is its own commit, with tests and a mutation check.
    bring its tests and licence notices. Move `beautifulsoup4`, `lxml` and `markdownify` into
    an optional `web` extra, imported on first use, so that a missing one gives a clear error
    and not a failed start. Try the standard `urllib.robotparser` in place of `protego`.
-5. Docs (README, including the search-server section, `TOOLS.md`, `CLAUDE.md`, `TURN.md`), then a model eval on gpt-5.5 and
-   gemma4: picks the file tools over shell `cat`, reports an ambiguous edit instead of
+5. `web_search`, with a saved DuckDuckGo page as a test fixture; it joins the `web` extra
+   (`beautifulsoup4` is all it needs).
+6. Docs (README, with a note on using a search MCP server for another provider, `TOOLS.md`,
+   `CLAUDE.md`, `TURN.md`), then a model eval on gpt-5.5 and gemma4: picks the file tools over shell `cat`, reports an ambiguous edit instead of
    guessing, writes nothing outside the roots, and edits as well with `edit_file` as with a
    patch. If `gpt-5.5` does clearly worse with `edit_file`, try an `apply_patch` function
    tool for it, as `opencode` does for GPT-5+ models.
@@ -216,8 +234,11 @@ Each phase is its own commit, with tests and a mutation check.
 - Fake HTTP servers for fetch, never the real network.
 - A test that each tool's footer survives the 20 KiB cut.
 - The approval preview: an edit's diff is shown, nothing is written before approval.
-- `web_fetch` without its extra installed: the tool is not offered, or says how to install
-  it, and ergane still starts.
+- `web_search` on a saved results page: ordinary results, an ad, a `uddg` redirect, and no
+  results; a fake server answering `202`, `403`, `429` and an empty body each gives the
+  "refused" message, not "no results".
+- `web_fetch` and `web_search` without the extra installed: the tool is not offered, or says
+  how to install it, and ergane still starts.
 
 ## Decisions
 
@@ -225,20 +246,21 @@ Each phase is its own commit, with tests and a mutation check.
    *Default: fold*; it removes a tool definition from every request.
 2. **Confinement.** Working directory plus temp only, or unrestricted? *Default: confined*,
    with an `allowed_dirs` setting only if it is needed.
-3. **Does `web_fetch` ask on each call?** The `tools` branch chose to ask, because a page can
-   tell the model to fetch a URL that carries the user's data. *Default: ask*, with "Always
-   allow" available.
-4. **`web_search`.** From an MCP server, with a README note and no built-in code? Or a built-in
-   Brave tool, with a `brave_api_key` in `config.json`? *Default: MCP.*
+3. **Do `web_fetch` and `web_search` ask on each call?** The `tools` branch chose to ask,
+   because a page can tell the model to fetch a URL that carries the user's data.
+   *Default: ask*, with "Always allow" available.
+4. **`web_search`.** A keyless DuckDuckGo built-in (best effort), MCP only, or a built-in
+   Brave tool with a `brave_api_key` in `config.json`? *Default: the DuckDuckGo built-in,
+   with the MCP route documented.*
 5. **`web_fetch`.** Rebase the branch rather than rewrite it, keeping `robots.txt`? `opencode`,
    `pi` and `codex` do not obey it, so it could go to save code. *Default: rebase and keep it.*
    Dependencies (`beautifulsoup4`, `lxml`, `markdownify`; `protego` only if the standard
-   parser fails the branch's tests): normal dependencies, or an optional `web` extra?
-   *Default: optional extra.*
+   parser fails the branch's tests; `web_search` needs only `beautifulsoup4`): normal
+   dependencies, or an optional `web` extra? *Default: optional extra.*
 6. **`edit_file` matching.** Exact only, or exact then normalized (as `opencode` and `pi`
    do)? *Default: exact then normalized.* (This reverses the earlier default, on the
    evidence that both ship it.)
 7. **Which tools are on by default.** All, or the core four (`read_file`, `write_file`,
-   `edit_file`, `run_command`) plus `search_files`, with `web_fetch` offered when its extra
-   is installed? Measure the definitions with `/context` first. *Default: core five on,
-   `web_fetch` when installed.*
+   `edit_file`, `run_command`) plus `search_files`, with `web_fetch` and `web_search` offered when
+   the extra is installed? Measure the definitions with `/context` first. *Default: core five on,
+   the web tools when installed.*
