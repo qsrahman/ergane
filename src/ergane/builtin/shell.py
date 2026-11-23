@@ -13,13 +13,17 @@ part of that environment.
 
 What the model reads back is plain text, not JSON: the output as it is when the command
 succeeded and printed only to stdout, and otherwise the exit code and each stream
-labelled. Output over about 16,000 characters keeps its start and its end.
+labelled. Output over about 16,000 characters keeps its start and its end, and the whole
+of it is saved to a file in the system temp directory (which `read_file` may read), named
+at the end of the result: a build log's cause is often in the middle, and the model would
+otherwise have to run the command again to find it. The files are not deleted.
 """
 
 import os
 import re
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -108,11 +112,16 @@ def _clean(data: bytes) -> str:
     return "\n".join(line.rsplit("\r", 1)[-1] for line in text.split("\n")).strip("\n")
 
 
-def _result(returncode: int, out: bytes, err: bytes, notes: list[str]) -> str:
-    stdout, stderr = _clean(out), _clean(err)
+def _format(
+    returncode: int,
+    stdout: str,
+    stderr: str,
+    notes: list[str],
+    out_limit: int,
+    err_limit: int,
+) -> str:
     if returncode == 0 and not stderr and not notes:
-        return head_tail(stdout, _ONE_STREAM) if stdout else "(no output)"
-    out_limit, err_limit = _BOTH_STREAMS if stdout and stderr else (_ONE_STREAM,) * 2
+        return head_tail(stdout, out_limit) if stdout else "(no output)"
     parts = []
     if returncode < 0 and not notes:
         parts.append(f"killed by signal {-returncode}")
@@ -123,6 +132,23 @@ def _result(returncode: int, out: bytes, err: bytes, notes: list[str]) -> str:
     if stderr:
         parts.append(f"[stderr]\n{head_tail(stderr, err_limit)}")
     return "\n".join([*parts, *notes])
+
+
+def _result(returncode: int, out: bytes, err: bytes, notes: list[str]) -> str:
+    stdout, stderr = _clean(out), _clean(err)
+    out_limit, err_limit = _BOTH_STREAMS if stdout and stderr else (_ONE_STREAM,) * 2
+    text = _format(returncode, stdout, stderr, notes, out_limit, err_limit)
+    if len(stdout) <= out_limit and len(stderr) <= err_limit:
+        return text
+    # Saved for `read_file`; a command's result is still given if the disk is full.
+    whole = _format(returncode, stdout, stderr, notes, len(stdout), len(stderr))
+    try:
+        descriptor, path = tempfile.mkstemp(prefix="ergane-output-", suffix=".txt")
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(whole)
+    except OSError:
+        return text
+    return f"{text}\n[full output saved to {path}: read it with read_file]"
 
 
 @tool(read_only=False)
@@ -158,7 +184,8 @@ def run_command(
     stdin is closed and each call is a fresh process, so interactive commands do not
     work and cd does not persist: use cwd. The command and its child processes are
     stopped after timeout_s, so do not start dev servers or watchers. Output past about
-    16,000 characters keeps its start and end. Only cwd must be inside the working
+    16,000 characters keeps its start and end, and the full output is saved to a file
+    named at the end (read it with read_file). Only cwd must be inside the working
     directory or the system temp directory, not what the command touches."""
     directory = resolve(cwd)
     if not directory.is_dir():

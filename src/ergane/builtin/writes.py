@@ -62,6 +62,18 @@ def _write(real: Path, content: str) -> bool:
     return existed
 
 
+_BOM = "\ufeff"
+
+
+def _keeping_bom(real: Path, content: str) -> str:
+    """`content`, with the UTF-8 byte order mark that the file it replaces has, since the
+    model never sees one and would drop it."""
+    if content.startswith(_BOM) or not real.is_file():
+        return content
+    with real.open("rb") as handle:
+        return _BOM + content if handle.read(3) == _BOM.encode() else content
+
+
 def _read_text(real: Path, shown: str) -> str:
     """The text of a file that an edit may change: there, UTF-8, and not huge."""
     if not real.exists():
@@ -119,7 +131,9 @@ def _preview_write(path: str, content: str) -> str:
     real = _target(path)
     if real.is_file():
         try:
-            return _diff(real.read_bytes().decode("utf-8"), content, path)
+            return _diff(
+                real.read_bytes().decode("utf-8"), _keeping_bom(real, content), path
+            )
         except UnicodeDecodeError:
             return (
                 f"{path} is not text; it would be overwritten "
@@ -151,7 +165,8 @@ def write_file(
     """Create a file or completely overwrite one, creating missing parent directories.
     Overwrites without warning; to change part of a file use edit_file. Only works
     inside the working directory and the system temp directory."""
-    existed = _write(_target(path), content)
+    real = _target(path)
+    existed = _write(real, _keeping_bom(real, content))
     lines = len(content.splitlines())
     return f"{'Overwrote' if existed else 'Created'} {path} ({lines} lines)"
 

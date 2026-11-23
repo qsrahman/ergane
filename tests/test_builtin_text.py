@@ -1,10 +1,14 @@
+import io
+
 import pytest
 
 from ergane.builtin._text import (
     MAX_LINE_CHARS,
     MAX_TEXT_CHARS,
+    count_lines,
     head_tail,
     is_text,
+    read_lines,
     take_lines,
 )
 from ergane.tools import MAX_OUTPUT_CHARS
@@ -73,17 +77,77 @@ class TestTakeLines:
     def test_a_start_past_the_end_takes_nothing(self):
         assert take_lines(LINES, start=99) == ("", 99)
 
-    def test_a_very_long_line_is_cut_and_says_so(self):
-        text, end = take_lines(["x" * (MAX_LINE_CHARS + 500)])
-
-        assert text.startswith("x" * MAX_LINE_CHARS + "...")
-        assert f"[line cut: {MAX_LINE_CHARS + 500:,} characters]" in text
-        assert end == 1
-
     def test_the_default_budget_leaves_room_for_a_footer(self):
         text, _ = take_lines(["y" * 100] * 1_000)
 
         assert len(text) <= MAX_TEXT_CHARS
+
+
+class Spy(io.StringIO):
+    """A text file that records how much each read asked for."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__(text)
+        self.asked: list[int] = []
+
+    def readline(self, size: int = -1, /) -> str:
+        self.asked.append(size)
+        return super().readline(size)
+
+
+class TestReadLines:
+    def test_lines_come_back_without_their_newlines(self):
+        assert read_lines(io.StringIO("a\nb\nc\n"), 0, 10) == ["a", "b", "c"]
+
+    def test_start_and_count_pick_the_range(self):
+        assert read_lines(io.StringIO("a\nb\nc\nd\n"), 1, 2) == ["b", "c"]
+
+    def test_a_last_line_without_a_newline_is_kept(self):
+        assert read_lines(io.StringIO("a\nb"), 0, 10) == ["a", "b"]
+
+    def test_a_start_past_the_end_gives_nothing(self):
+        assert read_lines(io.StringIO("a\nb\n"), 5, 10) == []
+
+    @pytest.mark.parametrize("extra", [500, 200_000])
+    def test_a_very_long_line_is_cut_and_says_how_long_it_was(self, extra):
+        length = MAX_LINE_CHARS + extra
+        lines = read_lines(io.StringIO("x" * length + "\nnext\n"), 0, 10)
+
+        assert lines[0].startswith("x" * MAX_LINE_CHARS + "...")
+        assert f"[line cut: {length:,} characters]" in lines[0]
+        assert lines[1:] == ["next"]  # the rest of the long line was dropped
+
+    def test_a_line_of_exactly_the_limit_is_not_cut(self):
+        assert read_lines(io.StringIO("y" * MAX_LINE_CHARS + "\n"), 0, 1) == [
+            "y" * MAX_LINE_CHARS
+        ]
+
+    def test_one_character_over_the_limit_is_cut(self):
+        line = read_lines(io.StringIO("y" * (MAX_LINE_CHARS + 1) + "\n"), 0, 1)[0]
+
+        assert f"[line cut: {MAX_LINE_CHARS + 1:,} characters]" in line
+
+    def test_skipped_lines_may_be_enormous(self):
+        assert read_lines(io.StringIO("z" * 1_000_000 + "\nafter\n"), 1, 1) == ["after"]
+
+    def test_no_read_asks_for_more_than_a_chunk(self):
+        text = "w" * 1_000_000 + "\nb\n" + "v" * 1_000_000
+        handle = Spy(text)
+        read_lines(handle, 0, 10)
+        skipping = Spy(text)
+        read_lines(skipping, 1, 10)
+        counting = Spy(text)
+        count_lines(counting)
+
+        for spy in (handle, skipping, counting):
+            # -1 is "the whole line": the read that must never be made.
+            assert all(0 < size <= 65_536 for size in spy.asked), spy.asked[:3]
+
+    def test_count_lines_counts_what_is_left(self):
+        handle = io.StringIO("a\nb\nc")
+        handle.readline()
+
+        assert count_lines(handle) == 2
 
 
 class TestHeadTail:

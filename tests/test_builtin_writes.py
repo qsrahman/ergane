@@ -15,6 +15,43 @@ def call(tool: Tool, **arguments: object) -> str:
     return tool.call(json.dumps(arguments))
 
 
+class TestAByteOrderMark:
+    BOM = b"\xef\xbb\xbf"
+
+    def test_overwriting_a_file_that_has_one_keeps_it(self, tmp_path: Path):
+        (tmp_path / "a.txt").write_bytes(self.BOM + b"old")
+
+        call(write_file, path="a.txt", content="new")
+
+        assert (tmp_path / "a.txt").read_bytes() == self.BOM + b"new"
+
+    def test_a_file_without_one_does_not_get_one(self, tmp_path: Path):
+        (tmp_path / "a.txt").write_bytes(b"old")
+
+        call(write_file, path="a.txt", content="new")
+
+        assert (tmp_path / "a.txt").read_bytes() == b"new"
+
+    def test_content_that_has_its_own_is_not_given_a_second(self, tmp_path: Path):
+        (tmp_path / "a.txt").write_bytes(self.BOM + b"old")
+
+        call(write_file, path="a.txt", content="\ufeffnew")
+
+        assert (tmp_path / "a.txt").read_bytes() == self.BOM + b"new"
+
+    def test_the_preview_does_not_show_it_as_a_change(self, tmp_path: Path):
+        (tmp_path / "a.txt").write_bytes(self.BOM + b"same\n")
+
+        assert "No change" in _preview_write("a.txt", "same\n")
+
+    def test_an_edit_keeps_it(self, tmp_path: Path):
+        (tmp_path / "a.txt").write_bytes(self.BOM + b"title: one\n")
+
+        call(edit_file, path="a.txt", old_text="title: one", new_text="title: two")
+
+        assert (tmp_path / "a.txt").read_bytes() == self.BOM + b"title: two\n"
+
+
 class TestWriteFile:
     def test_a_new_file_is_created_and_the_model_is_told_in_a_line(
         self, tmp_path: Path

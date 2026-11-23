@@ -1,5 +1,7 @@
 import json
 import os
+import time
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -93,6 +95,35 @@ class TestReadFile:
         text = call(read_file, path="min.js")
 
         assert len(text) < 3_000 and "[line cut: 50,000 characters]" in text
+
+    def test_a_byte_order_mark_is_not_shown(self, tmp_path: Path):
+        (tmp_path / "bom.txt").write_bytes(b"\xef\xbb\xbftitle\nbody\n")
+
+        assert call(read_file, path="bom.txt") == "title\nbody"
+
+    def test_a_huge_line_does_not_fill_the_memory(self, tmp_path: Path):
+        # 100 MB on one line used to be read whole, and decoded, into memory.
+        with (tmp_path / "one.txt").open("wb") as handle:
+            for _ in range(100):
+                handle.write(b"a" * 1_000_000)
+        tracemalloc.start()
+        try:
+            text = call(read_file, path="one.txt")
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+
+        assert "[line cut: 100,000,000 characters]" in text
+        assert peak < 20_000_000
+
+    def test_an_offset_past_the_end_of_a_file_of_long_lines_says_so(
+        self, tmp_path: Path
+    ):
+        write(tmp_path / "long.txt", ("x" * 50_000 + "\n") * 3)
+
+        assert "past the end of the file, which has 3 lines" in call(
+            read_file, path="long.txt", offset=10
+        )
 
     def test_a_binary_file_is_refused(self, tmp_path: Path):
         (tmp_path / "b.bin").write_bytes(b"\x00\x01\x02binary")
@@ -391,6 +422,30 @@ class TestSearchByContent:
 
     def test_it_is_a_regular_expression(self):
         assert call(search_files, contains=r"def \w+\(").strip() == "a.py:3: def run():"
+
+    def test_a_pattern_that_backtracks_without_end_is_refused_not_waited_for(
+        self, tmp_path: Path
+    ):
+        # With `re` this never returned, on a thread that Ctrl-C cannot stop.
+        write(tmp_path / "trap.txt", "a" * 46 + "!\n")
+        started = time.monotonic()
+
+        result = call(search_files, contains=r"(a|aa)+$", name="trap.txt")
+
+        assert time.monotonic() - started < 10
+        assert "took too long to match a line" in result
+
+    def test_a_search_that_runs_out_of_time_returns_what_it_has(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr("ergane.builtin.files._SEARCH_SECONDS", -1)
+
+        result = call(search_files, contains="os")
+
+        assert "gave up after -1 seconds" in result
+
+    def test_a_case_insensitive_pattern_still_works(self):
+        assert "a.py:1: import os" in call(search_files, contains=r"(?i)IMPORT OS")
 
     def test_name_narrows_the_files_that_are_searched(self):
         result = call(search_files, name="**/*.py", contains="os")

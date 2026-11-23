@@ -1,8 +1,10 @@
 import json
 import os
 import signal
+import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -34,6 +36,67 @@ def gone(pid: int, wait: float = 3.0) -> bool:
             return True
         time.sleep(0.05)
     return not alive(pid)
+
+
+@pytest.fixture(autouse=True)
+def private_temp_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Output that is cut is saved in the temp directory: keep it out of the real one."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+
+
+def saved_path(result: str) -> Path:
+    return Path(result.rsplit("saved to ", 1)[1].split(":", 1)[0])
+
+
+class TestTheFullOutput:
+    def test_output_that_was_cut_is_saved_whole_and_the_result_says_where(self):
+        result = run("seq 1 100000")
+
+        saved = saved_path(result).read_text()
+        assert saved.startswith("1\n2\n") and saved.endswith("99999\n100000")
+        assert saved.count("\n") == 99_999
+        assert result.endswith("read it with read_file]")
+
+    def test_the_model_can_read_the_middle_with_read_file(self):
+        from ergane.builtin.files import read_file
+
+        path = saved_path(run("seq 1 100000"))
+
+        text = read_file.call(json.dumps({"path": str(path), "offset": 50_000}))
+
+        assert text.startswith("50000\n50001\n")
+
+    def test_both_streams_are_saved_labelled(self):
+        saved = saved_path(run("seq 1 50000; seq 1 50000 >&2; exit 1")).read_text()
+
+        assert saved.startswith("exit code 1\n[stdout]\n1\n")
+        assert "\n[stderr]\n1\n" in saved and "omitted" not in saved
+
+    def test_a_long_stderr_alone_is_saved_too(self):
+        saved = saved_path(run("seq 1 100000 >&2")).read_text()
+
+        assert saved.startswith("[stderr]\n1\n") and saved.endswith("99999\n100000")
+
+    def test_output_that_fits_leaves_no_file(self, tmp_path: Path):
+        result = run("seq 1 100")
+
+        assert "full output" not in result
+        assert not list(tmp_path.glob("ergane-output-*"))
+
+    def test_the_saved_file_is_private(self):
+        mode = saved_path(run("seq 1 100000")).stat().st_mode
+
+        assert stat.S_IMODE(mode) == 0o600
+
+    def test_a_disk_that_cannot_be_written_still_gives_the_result(self, monkeypatch):
+        def full(*args, **kwargs):
+            raise OSError("no space left")
+
+        monkeypatch.setattr(tempfile, "mkstemp", full)
+
+        result = run("seq 1 100000")
+
+        assert "characters omitted" in result and "full output" not in result
 
 
 class TestTheResult:
@@ -82,7 +145,7 @@ class TestWhatIsLeftOutOfTheOutput:
     def test_long_output_keeps_its_start_and_its_end(self):
         result = run("seq 1 100000")
 
-        assert result.startswith("1\n2\n") and result.endswith("99999\n100000")
+        assert result.startswith("1\n2\n") and "99999\n100000\n[full output" in result
         assert "characters omitted" in result
         assert len(result) < MAX_OUTPUT_CHARS
 

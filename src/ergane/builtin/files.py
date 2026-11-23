@@ -10,7 +10,7 @@ never what the generic cut at 20 KiB removes.
 """
 
 import os
-import re
+import time
 from collections import deque
 from collections.abc import Iterator
 from itertools import islice
@@ -18,10 +18,17 @@ from pathlib import Path, PurePosixPath
 from typing import Annotated
 
 import pathspec
+import regex
 from pydantic import Field
 
 from ergane.builtin._paths import Directory, File, not_found, resolve
-from ergane.builtin._text import MAX_TEXT_CHARS, is_text, take_lines
+from ergane.builtin._text import (
+    MAX_TEXT_CHARS,
+    count_lines,
+    is_text,
+    read_lines,
+    take_lines,
+)
 from ergane.tools import tool
 
 _SNIFF_BYTES = 8192
@@ -29,8 +36,13 @@ _SNIFF_BYTES = 8192
 _MAX_SCAN_BYTES = 1_000_000
 # A matching line is cut here, so one minified file cannot fill the result.
 _MAX_MATCH_CHARS = 300
-# How many entries one search looks at before it gives up.
+# How many entries one search looks at before it gives up, and for how long.
 _MAX_VISITS = 100_000
+_SEARCH_SECONDS = 30
+# Matching one line may take this long before the pattern is called too slow. `re`
+# backtracks without limit: `(a+)+$` on a line of 46 `a`s and a `!` never ends, on a
+# thread that Ctrl-C cannot stop. The `regex` package can be given a time limit.
+_LINE_SECONDS = 0.5
 _NEVER_ENTERED = frozenset({".git"})
 
 
@@ -41,13 +53,14 @@ def _read_lines(real: Path, shown: str, offset: int, limit: int | None) -> str:
             raise ValueError(f"{shown} looks like a binary file, not text")
     total = 0  # the lines of the file, counted only when there is nothing to show
     try:
-        with open(real, encoding="utf-8") as handle:
+        # utf-8-sig drops a byte order mark, which the model would see as a stray
+        # character at the start of the first line.
+        with open(real, encoding="utf-8-sig") as handle:
             # At most one character a line fits in the budget, so no more can be used.
-            wanted = islice(handle, offset - 1, offset - 1 + MAX_TEXT_CHARS + 1)
-            lines = [line.rstrip("\n") for line in wanted]
+            lines = read_lines(handle, offset - 1, MAX_TEXT_CHARS + 1)
             if not lines:
                 handle.seek(0)
-                total = sum(1 for _ in handle)
+                total = count_lines(handle)
     except UnicodeDecodeError:
         raise ValueError(f"{shown} is not valid UTF-8 text") from None
     if not lines:
@@ -207,19 +220,21 @@ class _Walk:
     The `.gitignore` files of the repository that holds the directory are used, from its
     root down (see `_Rules`); `.git` is never entered, and a symbolic link is listed but
     never followed. Entries are yielded as (path relative to the start, entry).
-    `stopped` says that the walk gave up after `_MAX_VISITS` entries, and
-    `unreadable` that a directory could not be read.
+    `stopped` says that the walk gave up after `_MAX_VISITS` entries or
+    `_SEARCH_SECONDS`, and `unreadable` that a directory could not be read.
     """
 
     def __init__(self, root: Path) -> None:
         self.root = root
         self.stopped = False
+        self.out_of_time = False
         self.unreadable = False
 
     def entries(self) -> Iterator[tuple[str, os.DirEntry[str]]]:
         start = os.fspath(self.root) + os.sep
         queue = deque([(self.root, _Rules.above(self.root).inside(self.root))])
         visited = 0
+        deadline = time.monotonic() + _SEARCH_SECONDS
         while queue:
             directory, rules = queue.popleft()
             try:
@@ -232,6 +247,9 @@ class _Walk:
                 if visited > _MAX_VISITS:
                     self.stopped = True
                     return
+                if time.monotonic() > deadline:
+                    self.out_of_time = True
+                    return
                 yield entry.path[len(start) :], entry
                 if entry.is_dir(follow_symlinks=False):
                     child = Path(entry.path)
@@ -239,7 +257,7 @@ class _Walk:
 
 
 def _matching_lines(
-    entry: os.DirEntry[str], relative: str, pattern: re.Pattern[str]
+    entry: os.DirEntry[str], relative: str, pattern: regex.Pattern[str]
 ) -> Iterator[str]:
     """The lines of a text file that match, as `path:line: text`; none for anything that
     is not a plain file (a directory, a symbolic link, a named pipe, which would block
@@ -260,12 +278,12 @@ def _matching_lines(
     except UnicodeDecodeError:
         return
     for number, line in enumerate(text.splitlines(), 1):
-        if pattern.search(line):
+        if pattern.search(line, timeout=_LINE_SECONDS):
             yield f"{relative}:{number}: {line.strip()[:_MAX_MATCH_CHARS]}"
 
 
 def _hits(
-    walk: _Walk, name: str | None, pattern: re.Pattern[str] | None
+    walk: _Walk, name: str | None, pattern: regex.Pattern[str] | None
 ) -> Iterator[str]:
     """The results of a search, one at a time: the entries whose path matches the glob
     `name`, or, with `pattern`, the matching lines of the files among them."""
@@ -319,8 +337,8 @@ def search_files(
     pattern = None
     if contains is not None:
         try:
-            pattern = re.compile(contains)
-        except re.error as exc:
+            pattern = regex.compile(contains)
+        except regex.error as exc:
             raise ValueError(
                 f"contains is not a valid regular expression: {exc}"
             ) from None
@@ -332,7 +350,13 @@ def search_files(
 
     walk = _Walk(root)
     # One more than the limit, to know whether the search was cut.
-    results = list(islice(_hits(walk, name, pattern), limit + 1))
+    try:
+        results = list(islice(_hits(walk, name, pattern), limit + 1))
+    except TimeoutError:
+        raise ValueError(
+            "contains took too long to match a line (a pattern such as (a+)+$ can "
+            "backtrack without end); make it simpler"
+        ) from None
     cut = len(results) > limit
     del results[limit:]
 
@@ -347,6 +371,11 @@ def search_files(
     if walk.stopped:
         notes.append(
             f"[... gave up after looking at {_MAX_VISITS} entries; search a subdirectory]"
+        )
+    if walk.out_of_time:
+        notes.append(
+            f"[... gave up after {_SEARCH_SECONDS} seconds; search a subdirectory or "
+            "use a more specific name or pattern]"
         )
     if walk.unreadable:
         notes.append(
