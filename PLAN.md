@@ -34,11 +34,11 @@ What this changes in the plan:
 - **Matching is exact, then normalized.** Both `opencode` and `pi` fall back to trailing
   whitespace, smart quotes, Unicode dashes and spaces. That is evidence it matters in
   practice.
-- **Web search is a normal function tool,** not OpenAI's hosted one. `opencode` asks per query
-  and lets the user pick a provider; `codex` uses a hosted tool, which ergane does not (it
-  would work only on an OpenAI endpoint, and ergane could not ask before a search). Brave,
-  through `httpx2`, works on any endpoint and goes through the same approval as the other
-  tools.
+- **Web search is not a built-in.** Which search service to use is the user's choice, and its
+  keys and terms change; `opencode` makes the provider a plugin the user picks, and `codex`
+  uses a hosted tool (which ergane does not: it works on one vendor's endpoint only, and
+  ergane could not ask before a search). In ergane that pluggable layer is MCP.
+  `web_fetch`, which has no provider and no key, is built in.
 
 ## Constraints from ergane that shape the design
 
@@ -65,10 +65,10 @@ What this changes in the plan:
 | `write_file` | `path`, `content` | yes | Creates parent directories; refuses a symlink or a non-regular file |
 | `edit_file` | `path`, `old_text`, `new_text`, `replace_all` | yes | `old_text` must match once unless `replace_all`; exact, then normalized; one line back |
 | `run_command` | `command`, `cwd`, `timeout_s` | yes | A fresh process each call, stdin closed, process group killed on timeout, head and tail of the output |
-| `web_fetch` | `url`, `max_length`, `start_index`, `raw` | decision 3 | From the `tools` branch port |
-| `web_search` | `query`, `count`, `freshness` | decision 3 | Brave; built by a factory in `cli.py` and offered only when a `brave_api_key` is configured |
+| `web_fetch` | `url`, `max_length`, `start_index`, `raw` | decision 3 | From the `tools` branch port; its dependencies are an optional extra |
 
 `list_directory` is not a tool of its own: `read_file` lists a directory (decision 1).
+`web_search` is not a built-in: it comes from a search MCP server (see `web_search` below).
 Parameters are `snake_case`, and each has a description (`Annotated[..., Field(description=...)]`).
 
 ## Shared pieces
@@ -83,8 +83,7 @@ builtin/
   files.py    read_file, search_files, write_file, edit_file
   _edit.py    exact and normalized matching, line endings
   shell.py    run_command
-  fetch.py    web_fetch (from the tools branch, renamed)
-  search.py   web_search_tool(api_key) factory; cli adds it only with a key
+  fetch.py    web_fetch (from the tools branch, renamed); heavy imports on first use
 ```
 
 ## Security design
@@ -97,8 +96,10 @@ builtin/
   directory is the home directory.
 - **Symlinks.** Resolve with `realpath` before the root check. Writes use exclusive create or
   `O_NOFOLLOW`.
-- **`run_command`'s environment.** Remove `OPENAI_API_KEY` and `BRAVE_API_KEY` from the child's
-  environment: they are the secrets ergane holds.
+- **`run_command`'s environment.** Remove `OPENAI_API_KEY` from the child's environment: it is
+  the secret ergane holds. Variables the user exported for MCP servers (`${NAME}`
+  placeholders) are part of the user's own environment and are inherited, as with `pi` and
+  `opencode`; the docs say so.
 - **Network.** `web_fetch` keeps the safeguards of the port (address check inside the
   connection's lookup, every hop checked, body capped after decompression). Its results are
   labelled untrusted in the description.
@@ -127,30 +128,30 @@ core that the tools need (`Tool`, `Console.confirm`, with tests).
 ## `run_command`
 
 - `subprocess.Popen(shell=True, start_new_session=True, stdin=DEVNULL)`, killed as a group on
-  timeout (default 120 s) or Ctrl-C; the child's environment lacks `OPENAI_API_KEY` and `BRAVE_API_KEY`.
+  timeout (default 120 s) or Ctrl-C; the child's environment lacks `OPENAI_API_KEY`.
 - Output: the exit code when not zero, stderr labelled when there is any, escape codes
   stripped, binary output as a note, and over about 16,000 characters the head and the tail
   with a line saying how much was left out. (`opencode` and `pi` save the full output to a
   file and return its path; that adds a file ergane would have to track and delete, so it
   is left out.)
 
-## `web_search`
+## `web_search`: from MCP
 
-Brave Search, as in workshop-mcp: one GET with `httpx2`, the response parsed with pydantic,
-results as numbered title, URL, age and description. Parameters `query`, `count` (1 to 20)
-and `freshness`; the others (country, language, safesearch, offset) are left out, since each
-costs tokens in every request.
+No code in ergane. A search tool is one HTTP call to a provider the user chooses, with that
+provider's key and terms, so it belongs behind the layer ergane already has for that:
 
-- **The key** is `brave_api_key` in `config.json` (it supports `${BRAVE_API_KEY}`
-  placeholders), not a new environment variable: ergane reads only `OPENAI_API_KEY`, on
-  purpose. The key is never put in a URL, a result or an error, and `run_command` does not
-  pass it on (the child's environment loses `BRAVE_API_KEY` as well as `OPENAI_API_KEY`).
-- **The tool is offered only when the key is set.** `cli.py` builds it and adds it, so
-  `tools_in` is unchanged.
-- **It asks before each call** (decision 3): the query leaves the machine, and a page can tell
-  the model what to search for.
-- One retry when the rate limit resets within 5 seconds; a clear error otherwise. Results are
-  labelled untrusted in the description.
+- The user lists a search server under `mcpServers` and offers only its search tool with
+  `tools`. The key goes in the server's `env` as `${NAME}`, so ergane never stores it and
+  the server never sees `OPENAI_API_KEY`.
+- It asks before each call, which is the default for a server (`read_only` unset): the query
+  leaves the machine, and a page can tell the model what to search for.
+- The README gets a short section with a generic example (placeholders, not a named server),
+  and says that results are third-party text, that tool names carry the server's prefix, and
+  that a result over 20 KiB is cut from the end.
+- Cost of this choice: the user installs and configures a server, and each server's
+  description and behaviour differ, so a server is worth a quick check with the models in
+  use. A built-in Brave tool (about 150 lines, no dependencies, a `brave_api_key` setting)
+  can be added later without breaking anyone (decision 4).
 
 ## Libraries
 
@@ -177,14 +178,14 @@ Optional or to reconsider:
   `rg` when present is a later optimization.
 - **`protego` may be unnecessary.** The standard `urllib.robotparser` on 3.14 handled the
   three cases tried: `Disallow: /private/*/secret`, `Disallow: /*.pdf$`, and an `Allow` after
-  a broader `Disallow`, each the same as `protego`. Phase 5 should run the branch's
+  a broader `Disallow`, each the same as `protego`. Phase 4 should run the branch's
   `robots.txt` tests with it swapped in.
 - **`trafilatura`** would replace `beautifulsoup4`, `markdownify` and the page-furniture code,
   but a dry run shows 14 new packages. Extraction quality is untested. Consider it only if
   the branch's output is poor on pages that matter.
 - **`markitdown`** pulls in `numpy` and `onnxruntime` (13 packages): skip.
 - **`ddgs`** (+3 packages) searches DuckDuckGo without a key by scraping. Unofficial: an
-  optional fallback at most. Brave needs no library.
+  optional fallback at most.
 
 Kept custom: the SSRF-safe client (address check inside the connection's own lookup, per-hop
 redirect checks, post-decompression body cap). No library was evaluated for it.
@@ -197,12 +198,12 @@ Each phase is its own commit, with tests and a mutation check.
 1. `read_file` (files, directories, images) and `search_files`.
 2. The `Tool.preview` hook and the console change, then `write_file` and `edit_file`.
 3. `run_command`.
-4. `web_search`: the Brave client, the `brave_api_key` setting, the factory in `cli.py`.
-5. `web_fetch`. Rebase the `tools` branch commit (`a7c7aaf`: it still says `muagent`, uses
+4. `web_fetch`. Rebase the `tools` branch commit (`a7c7aaf`: it still says `muagent`, uses
    `pydantic-settings`, which main dropped, and sits on an old base), rename the tool, and
-   bring its tests and licence notices. Try the standard `urllib.robotparser` in place of
-   `protego`.
-6. Docs (README, `TOOLS.md`, `CLAUDE.md`, `TURN.md`), then a model eval on gpt-5.5 and
+   bring its tests and licence notices. Move `beautifulsoup4`, `lxml` and `markdownify` into
+   an optional `web` extra, imported on first use, so that a missing one gives a clear error
+   and not a failed start. Try the standard `urllib.robotparser` in place of `protego`.
+5. Docs (README, including the search-server section, `TOOLS.md`, `CLAUDE.md`, `TURN.md`), then a model eval on gpt-5.5 and
    gemma4: picks the file tools over shell `cat`, reports an ambiguous edit instead of
    guessing, writes nothing outside the roots, and edits as well with `edit_file` as with a
    patch. If `gpt-5.5` does clearly worse with `edit_file`, try an `apply_patch` function
@@ -215,8 +216,8 @@ Each phase is its own commit, with tests and a mutation check.
 - Fake HTTP servers for fetch, never the real network.
 - A test that each tool's footer survives the 20 KiB cut.
 - The approval preview: an edit's diff is shown, nothing is written before approval.
-- A fake Brave server for `web_search`: results, an empty result, a rate limit, a bad key,
-  and a check that the key appears in no URL, result or error.
+- `web_fetch` without its extra installed: the tool is not offered, or says how to install
+  it, and ergane still starts.
 
 ## Decisions
 
@@ -224,20 +225,20 @@ Each phase is its own commit, with tests and a mutation check.
    *Default: fold*; it removes a tool definition from every request.
 2. **Confinement.** Working directory plus temp only, or unrestricted? *Default: confined*,
    with an `allowed_dirs` setting only if it is needed.
-3. **Do `web_fetch` and `web_search` ask on each call?** The `tools` branch chose
-   to ask, because a page can tell the model to fetch a URL that carries the user's data.
-   *Default: ask*, with "Always allow" available.
-4. **`web_search` provider.** Brave only, with the key in `config.json`? *Default: Brave.*
+3. **Does `web_fetch` ask on each call?** The `tools` branch chose to ask, because a page can
+   tell the model to fetch a URL that carries the user's data. *Default: ask*, with "Always
+   allow" available.
+4. **`web_search`.** From an MCP server, with a README note and no built-in code? Or a built-in
+   Brave tool, with a `brave_api_key` in `config.json`? *Default: MCP.*
 5. **`web_fetch`.** Rebase the branch rather than rewrite it, keeping `robots.txt`? `opencode`,
    `pi` and `codex` do not obey it, so it could go to save code. *Default: rebase and keep it.*
-   Dependencies: `beautifulsoup4`, `lxml` and `markdownify` as normal dependencies (`protego`
-   only if the standard parser fails the branch's tests), or an optional `web` extra?
-   *Default: normal dependencies.*
+   Dependencies (`beautifulsoup4`, `lxml`, `markdownify`; `protego` only if the standard
+   parser fails the branch's tests): normal dependencies, or an optional `web` extra?
+   *Default: optional extra.*
 6. **`edit_file` matching.** Exact only, or exact then normalized (as `opencode` and `pi`
    do)? *Default: exact then normalized.* (This reverses the earlier default, on the
    evidence that both ship it.)
 7. **Which tools are on by default.** All, or the core four (`read_file`, `write_file`,
-   `edit_file`, `run_command`) plus `search_files`, with the web tools offered only when configured
-   (`web_search` needs its key; `web_fetch` could sit behind a setting, as in `pi`)? Measure
-   the definitions with `/context` first. *Default: core five on, `web_search` with a key,
-   `web_fetch` on.*
+   `edit_file`, `run_command`) plus `search_files`, with `web_fetch` offered when its extra
+   is installed? Measure the definitions with `/context` first. *Default: core five on,
+   `web_fetch` when installed.*
