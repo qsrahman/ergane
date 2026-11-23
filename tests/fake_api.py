@@ -66,6 +66,18 @@ def make_response(status: str | None, output: list | None = None, **extra) -> di
     }
 
 
+def todo_call(*steps: tuple[str, str]) -> dict:
+    """A call of the todo tool, the one ergane offers itself, with these steps."""
+    todos = [{"content": c, "status": s} for c, s in steps]
+    return {
+        **FUNCTION_CALL,
+        "id": "fc_todo",
+        "call_id": "call_todo",
+        "name": "todo",
+        "arguments": json.dumps({"todos": todos}),
+    }
+
+
 # What each tool scenario's first response contains (tool_loop uses the default).
 TOOL_CALLS = {
     "tool_call": [FUNCTION_CALL],
@@ -78,6 +90,11 @@ TOOL_CALLS = {
         {**SECOND_FUNCTION_CALL, "id": "fc_3", "call_id": "call_3"},
     ],
     "tool_call_flaky": [FUNCTION_CALL],
+    # The todo tool: a list with a step under way, one that the tool refuses (two
+    # steps in progress), and one the arguments check refuses (a status that is not).
+    "tool_todo": [todo_call(("write it", "in_progress"), ("test it", "pending"))],
+    "tool_todo_two_active": [todo_call(("a", "in_progress"), ("b", "in_progress"))],
+    "tool_todo_bad_status": [todo_call(("a", "done"))],
 }
 
 
@@ -223,7 +240,7 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     every time), "status_N" (an error response with
     status N and an OpenAI-style body),
     "picture_error" (a refusal for pictures, whatever the request holds), "novision_X" (scenario X, but a request that carries a picture is refused, as
-    by a model without vision), "tool_then_X" (a tool call, then the scenario X once the tool's output is
+    by a model without vision), "tool_todo", "tool_todo_two_active" and "tool_todo_bad_status" (a call of the todo tool, then text), "tool_then_X" (a tool call, then the scenario X once the tool's output is
     in the input, such as "tool_then_failed"), or anything else for a completed
     response.
     """

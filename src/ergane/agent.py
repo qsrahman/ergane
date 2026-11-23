@@ -585,8 +585,9 @@ class Agent:
     def _instructions(self, loop_note: str = "") -> str:
         """What every request carries as `instructions`: the system prompt, what the
         servers say, then the environment, so that the part that rarely changes
-        comes first and can be cached. The todo list and the notice to a model that
-        repeats itself (`loop_note`, of the turn that is running) go last."""
+        comes first and can be cached. The todo list, if there are tools to keep it
+        with, and the notice to a model that repeats itself (`loop_note`, of the turn
+        that is running) go last."""
         prompt = SYSTEM_PROMPT if self.tools else SYSTEM_PROMPT_NO_TOOLS
         if self.server_notes and self.tools:
             sections = "\n".join(
@@ -598,7 +599,7 @@ class Agent:
             "Environment:\n"
             f"- Operating system: {platform.platform()}\n"
             f"- Current date: {date.today().isoformat()}\n"
-            f"{self.todos.notes()}"
+            f"{self.todos.notes() if self.tools else ''}"
             f"{loop_note}"
         )
 

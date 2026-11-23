@@ -133,6 +133,20 @@ class TestAgentWithTodos:
 
         assert "[>] write it" in fake_server.requests[0]["instructions"]
 
+    def test_the_list_is_left_out_once_no_tool_is_left(self, make_agent, fake_server):
+        agent = make_agent()
+        agent.update_server([], [tool_with(read_file)], "srv", None)
+        call(agent.todos, ("write it", "in_progress"))
+        agent.update_server(["read_file"], [], "srv", None)  # the server went away
+
+        agent.run_turn("hi")
+
+        request = fake_server.requests[0]
+        # A chat with no tools never talks of tools, or of a list kept with one.
+        assert request["instructions"].startswith(SYSTEM_PROMPT_NO_TOOLS)
+        assert "write it" not in request["instructions"]
+        assert "todo" not in request["instructions"]
+
     def test_finished_steps_are_not_repeated_in_the_instructions(
         self, make_agent, fake_server
     ):
@@ -199,3 +213,95 @@ class TestTodoCommand:
         run_repl(monkeypatch, make_agent(), ["/todo", "/exit"])
 
         assert "No todos" in capsys.readouterr().out
+
+
+class TestTheTodoToolThroughTheModel:
+    """The whole path of a call: the model names `todo`, the agent finds it, checks the
+    arguments, runs it, answers the call, and shows and keeps the list."""
+
+    @pytest.fixture(autouse=True, params=[True, False], ids=["streaming", "not"])
+    def streaming(self, request):
+        return request.param
+
+    def agent(self, make_agent, streaming):
+        return make_agent(tools=[tool_with(read_file)], STREAMING=streaming)
+
+    def test_the_call_is_answered_shown_and_kept(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = self.agent(make_agent, streaming)
+        notices: list[str] = []
+        shown: list[str] = []
+
+        agent.run_turn(
+            "tool_todo",
+            on_notice=notices.append,
+            on_call=lambda name, arguments: shown.append(name),
+        )
+
+        # Answered with the summary, and the model went on to its reply.
+        answer = fake_server.requests[1]["input"][-1]
+        assert answer["type"] == "function_call_output"
+        assert answer["output"] == (
+            "Todos updated: 0/2 completed, 1 in progress, 1 pending. Now: write it"
+        )
+        assert agent.todos.render() == "[>] write it\n[ ] test it"
+        # It runs without asking, shown as a line, and the user is told of the change.
+        assert shown == ["todo"]
+        assert notices == [
+            "Todos updated: 0/2 completed, 1 in progress, 1 pending. Now: write it"
+        ]
+        # The call and its output are in the history, with the reply.
+        items = agent.context.items
+        assert [i.get("type") for i in items[1:3]] == [
+            "function_call",
+            "function_call_output",
+        ]
+
+    def test_the_list_goes_with_the_next_turn_after_the_tool_work_is_dropped(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = self.agent(make_agent, streaming)
+        agent.run_turn("tool_todo")
+        agent.run_turn("one turn")  # the first turn's tool work is dropped from now on
+        agent.run_turn("another")
+
+        last = fake_server.requests[-1]
+        assert not any(item.get("type") == "function_call" for item in last["input"])
+        assert "[>] write it\n[ ] test it" in last["instructions"]
+
+    def test_two_steps_in_progress_come_back_as_an_error_and_change_nothing(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = self.agent(make_agent, streaming)
+        notices: list[str] = []
+
+        agent.run_turn("tool_todo_two_active", on_notice=notices.append)
+
+        output = fake_server.requests[1]["input"][-1]["output"]
+        assert output.startswith("Error: ValueError: only one todo can be in_progress")
+        assert agent.todos.items == []
+        assert notices == []  # nothing changed, so nothing to show
+
+    def test_arguments_that_do_not_fit_are_answered_without_running_it(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = self.agent(make_agent, streaming)
+
+        agent.run_turn("tool_todo_bad_status")
+
+        output = fake_server.requests[1]["input"][-1]["output"]
+        assert output.startswith("Invalid arguments: todos.0.status")
+        assert agent.todos.items == []
+
+    def test_a_chat_with_no_tool_does_not_offer_it(
+        self, make_agent, fake_server, streaming
+    ):
+        agent = make_agent(STREAMING=streaming)
+
+        agent.run_turn("tool_todo")
+
+        # The fake calls it anyway; the agent does not know the tool.
+        output = fake_server.requests[1]["input"][-1]["output"]
+        assert output == "Unknown tool: todo. Available tools: none."
+        assert agent.todos.items == []
