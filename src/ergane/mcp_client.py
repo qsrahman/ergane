@@ -94,7 +94,16 @@ _MAX_RESTARTS = 3
 
 
 class McpServerError(Exception):
-    """An MCP server could not be started, or is not running."""
+    """An MCP server could not be started, or is not running.
+
+    `connection_lost` is set when the error says the connection ended (as against the
+    server answering with an error of its own), which is what makes `_stale` start it
+    again.
+    """
+
+    def __init__(self, message: str, *, connection_lost: bool = False) -> None:
+        super().__init__(message)
+        self.connection_lost = connection_lost
 
 
 def _leaf(exc: BaseException) -> BaseException:
@@ -102,6 +111,18 @@ def _leaf(exc: BaseException) -> BaseException:
     while isinstance(exc, BaseExceptionGroup):
         exc = exc.exceptions[0]
     return exc
+
+
+def _connection_lost(exc: BaseException) -> bool:
+    """Whether an exception says the connection ended: the SDK's own answer for a
+    closed one, or a stream that is closed or broken. A server's error response is
+    not: it is alive."""
+    from mcp import MCPError
+    from mcp_types import CONNECTION_CLOSED
+
+    return isinstance(exc, anyio.ClosedResourceError | anyio.BrokenResourceError) or (
+        isinstance(exc, MCPError) and exc.code == CONNECTION_CLOSED
+    )
 
 
 async def _stdio(stack: AsyncExitStack, config: LocalMcpServer, log: TextIO):
@@ -451,11 +472,15 @@ class McpClient:
         """`_submit` without looking at the connection first."""
         portal, session = self._portal, self._session
         if portal is None or session is None:
-            raise McpServerError(f"MCP server {self.name!r} is not running")
+            raise McpServerError(
+                f"MCP server {self.name!r} is not running", connection_lost=True
+            )
         try:
             future = portal.start_task_soon(make, session)
         except RuntimeError:  # close() stopped the portal since
-            raise McpServerError(f"MCP server {self.name!r} is not running") from None
+            raise McpServerError(
+                f"MCP server {self.name!r} is not running", connection_lost=True
+            ) from None
         self._inflight.add(future)
         try:
             result = future.result(timeout)
@@ -471,7 +496,8 @@ class McpClient:
             self._active = 0.0  # the next call checks the connection first
             leaf = _leaf(exc)
             raise McpServerError(
-                f"MCP server {self.name!r}: {type(leaf).__name__}: {leaf}"
+                f"MCP server {self.name!r}: {type(leaf).__name__}: {leaf}",
+                connection_lost=_connection_lost(leaf),
             ) from None
         finally:
             self._inflight.discard(future)
@@ -493,6 +519,6 @@ class McpClient:
             self._run(lambda session: session.send_ping(), _PING_SECONDS)
         except TimeoutError:
             return False
-        except McpServerError:
-            return True
+        except McpServerError as exc:
+            return exc.connection_lost
         return False

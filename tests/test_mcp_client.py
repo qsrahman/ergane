@@ -568,6 +568,29 @@ class TestResultText:
         assert result_text(block_result(text, is_error=True)) == "Error: bad"
 
 
+class TestWhatSaysTheConnectionEnded:
+    def test_the_sdks_closed_answer_and_closed_streams_do(self):
+        import anyio
+        from mcp import MCPError
+        from mcp_types import CONNECTION_CLOSED
+
+        from ergane.mcp_client import _connection_lost
+
+        assert _connection_lost(MCPError(CONNECTION_CLOSED, "Connection closed"))
+        assert _connection_lost(anyio.ClosedResourceError())
+        assert _connection_lost(anyio.BrokenResourceError())
+
+    def test_an_error_a_live_server_answers_with_does_not(self):
+        from mcp import MCPError
+        from mcp_types import INTERNAL_ERROR, METHOD_NOT_FOUND
+
+        from ergane.mcp_client import _connection_lost
+
+        assert not _connection_lost(MCPError(METHOD_NOT_FOUND, "Method not found"))
+        assert not _connection_lost(MCPError(INTERNAL_ERROR, "boom"))
+        assert not _connection_lost(ValueError("bad"))
+
+
 class TestConnectionLost:
     """A server whose connection ended is started again by the next call."""
 
@@ -590,6 +613,26 @@ class TestConnectionLost:
         self.kill(server, tools["fake__pid"])
 
         assert tools["fake__add"].call('{"a": 1, "b": 2}') == "3"  # no error at all
+
+    def test_a_live_server_that_answers_the_ping_with_an_error_is_not_restarted(
+        self, make_server, monkeypatch
+    ):
+        from mcp import ClientSession, MCPError
+        from mcp_types import METHOD_NOT_FOUND
+
+        async def refused(self, *args, **kwargs):
+            raise MCPError(METHOD_NOT_FOUND, "Method not found")
+
+        server = make_server(name="alive")
+        tools = {t.name: t for t in server.tools()}
+        pid = tools["alive__pid"].call("{}")
+        monkeypatch.setattr(ClientSession, "send_ping", refused)
+
+        # The connection is fine: the server answers, and its answer is an error.
+        assert tools["alive__add"].call('{"a": 1, "b": 2}') == "3"
+
+        assert server._restarts == 0  # pyright: ignore[reportPrivateUsage]
+        assert tools["alive__pid"].call("{}") == pid  # the same program
 
     def test_a_call_that_failed_makes_the_next_one_check_the_connection(
         self, make_server, monkeypatch
