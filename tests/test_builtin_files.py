@@ -296,6 +296,34 @@ class TestTheListingLeavesOutWhatGitIgnores:
         assert "a.txt" in call(list_directory, path=".")
 
 
+class TestTheListingAndTheSearchAgree:
+    """They both start from what a directory shows, so what one leaves out the other
+    does too, whatever is in the directory."""
+
+    def test_the_same_entries_in_the_same_order(self, tmp_path: Path):
+        write(tmp_path / ".gitignore", "*.log\nbuild/\n!keep.log\n")
+        write(tmp_path / ".git" / "HEAD", "")
+        write(tmp_path / "keep.log", "")
+        write(tmp_path / "drop.log", "")
+        write(tmp_path / "build" / "out.o", "")
+        write(tmp_path / "src" / "a.py", "")
+        write(tmp_path / "Zeta.txt", "")
+        write(tmp_path / "alpha.txt", "")
+        (tmp_path / "real_dir").mkdir()
+        (tmp_path / "link").symlink_to(tmp_path / "alpha.txt")
+        (tmp_path / "dirlink").symlink_to(tmp_path / "real_dir")
+
+        listed = call(list_directory, path=".")
+        entries = listed.split("\n[")[0].splitlines()  # without the note at the end
+        searched = call(search_files, name="*").splitlines()
+
+        assert entries == searched
+        assert "link@" in entries and "dirlink@" in entries and "src/" in entries
+        assert "keep.log" in entries  # brought back by the negation
+        for left_out in ("drop.log", "build/", ".git/"):
+            assert left_out not in entries
+
+
 class TestSearchByName:
     @pytest.fixture(autouse=True)
     def tree(self, tmp_path: Path) -> None:
@@ -403,6 +431,20 @@ class TestSearchByContent:
         (tmp_path / "link.txt").symlink_to(outside)
 
         assert "link.txt" not in call(search_files, contains="needle")
+
+    @pytest.mark.timeout(10)
+    def test_a_named_pipe_is_not_read_for_ever(self, tmp_path: Path):
+        # Reading a FIFO with no writer blocks, and a search runs on a thread that
+        # Ctrl-C cannot stop.
+        os.mkfifo(tmp_path / "pipe")
+        write(tmp_path / "a.txt", "needle\n")
+
+        assert call(search_files, contains="needle") == "a.txt:1: needle"
+
+    def test_a_named_pipe_is_listed_by_name_like_any_entry(self, tmp_path: Path):
+        os.mkfifo(tmp_path / "pipe")
+
+        assert call(search_files, name="pipe") == "pipe"
 
     def test_a_bad_regular_expression_is_explained(self):
         assert "not a valid regular expression" in call(search_files, contains="(")

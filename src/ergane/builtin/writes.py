@@ -14,14 +14,13 @@ user.
 import difflib
 import os
 import stat
-from itertools import islice
 from pathlib import Path
 from typing import Annotated
 
 from pydantic import Field
 
 from ergane.builtin._edit import EditError, edit_text
-from ergane.builtin._paths import not_found, resolve
+from ergane.builtin._paths import File, absolute_path, not_found, resolve
 from ergane.tools import tool
 
 # A file bigger than this is not edited: it is not source, and it is read whole.
@@ -30,14 +29,19 @@ _MAX_EDIT_BYTES = 10 * 1024 * 1024
 _PREVIEW_LINES = 120
 
 
-def _refuse_symlink(path: str) -> None:
-    """The path the model wrote must not be a symbolic link: it would be written
-    through, to somewhere else than the question named."""
-    written = Path(os.path.normpath(Path.cwd() / Path(path).expanduser()))
-    if written.is_symlink():
+def _target(path: str) -> Path:
+    """The file a tool is to write, which every entry of this module starts from: the
+    path the model wrote must not be a symbolic link (it would be written through, to
+    somewhere else than the question named), it must be allowed (`resolve`), and it must
+    not be a directory."""
+    if absolute_path(path).is_symlink():
         raise ValueError(
             f"{path} is a symbolic link; write to the file it points to instead"
         )
+    real = resolve(path)
+    if real.is_dir():
+        raise IsADirectoryError(f"{path} is a directory, not a file")
+    return real
 
 
 def _write(real: Path, content: str) -> bool:
@@ -59,9 +63,7 @@ def _write(real: Path, content: str) -> bool:
 
 
 def _read_text(real: Path, shown: str) -> str:
-    """The text of a file that an edit may change: a file, UTF-8, and not huge."""
-    if real.is_dir():
-        raise IsADirectoryError(f"{shown} is a directory, not a file")
+    """The text of a file that an edit may change: there, UTF-8, and not huge."""
     if not real.exists():
         raise FileNotFoundError(not_found(shown, real, "File"))
     if real.stat().st_size > _MAX_EDIT_BYTES:
@@ -71,6 +73,12 @@ def _read_text(real: Path, shown: str) -> str:
     except UnicodeDecodeError:
         # Writing it back would make the replacement characters permanent.
         raise ValueError(f"Refusing to edit: {shown} is not valid UTF-8 text") from None
+
+
+def _cut(lines: list[str]) -> list[str]:
+    """The lines a preview shows: the first `_PREVIEW_LINES`, and how many are left."""
+    left = len(lines) - _PREVIEW_LINES
+    return lines[:_PREVIEW_LINES] + ([f"[... {left} more lines]"] if left > 0 else [])
 
 
 def _diff(before: str, after: str, shown: str) -> str:
@@ -87,36 +95,47 @@ def _diff(before: str, after: str, shown: str) -> str:
     )
     if not lines:
         return "No change: the file already has this content"
-    more = len(lines) - _PREVIEW_LINES
-    kept = lines[:_PREVIEW_LINES] + ([f"[... {more} more lines]"] if more > 0 else [])
-    return "\n".join(kept)
+    return "\n".join(_cut(lines))
+
+
+def _plan_edit(
+    path: str, old_text: str, new_text: str, replace_all: bool
+) -> tuple[Path, str, str, int]:
+    """What an edit would do, without doing it: the file, its text now, its text after,
+    and how many places change. `edit_file` writes the result; the preview shows it, so
+    that what the user is shown is what is done.
+
+    Raises:
+        EditError: If the edit cannot be made.
+    """
+    real = _target(path)
+    before = _read_text(real, path)
+    after, count = edit_text(before, old_text, new_text, replace_all, path)
+    return real, before, after, count
 
 
 def _preview_write(path: str, content: str) -> str:
     """What `write_file` would do: a diff for a file that exists, else its start."""
-    _refuse_symlink(path)
-    real = resolve(path)
+    real = _target(path)
     if real.is_file():
         try:
             return _diff(real.read_bytes().decode("utf-8"), content, path)
         except UnicodeDecodeError:
-            return f"{path} is not text; it would be overwritten ({real.stat().st_size:,} bytes)"
+            return (
+                f"{path} is not text; it would be overwritten "
+                f"({real.stat().st_size:,} bytes)"
+            )
     lines = content.splitlines()
-    shown = [f"+{line}" for line in islice(lines, _PREVIEW_LINES)]
-    if len(lines) > _PREVIEW_LINES:
-        shown.append(f"[... {len(lines) - _PREVIEW_LINES} more lines]")
-    return f"New file {path} ({len(lines)} lines):\n" + "\n".join(shown)
+    start = _cut([f"+{line}" for line in lines])
+    return f"New file {path} ({len(lines)} lines):\n" + "\n".join(start)
 
 
 def _preview_edit(
     path: str, old_text: str, new_text: str, replace_all: bool = False
 ) -> str:
     """What `edit_file` would do: a diff, or why it would fail."""
-    _refuse_symlink(path)
-    real = resolve(path)
-    before = _read_text(real, path)
     try:
-        after, _ = edit_text(before, old_text, new_text, replace_all, path)
+        _, before, after, _ = _plan_edit(path, old_text, new_text, replace_all)
     except EditError as exc:
         return f"This edit would fail: {exc}"
     return _diff(before, after, path)
@@ -124,13 +143,7 @@ def _preview_edit(
 
 @tool(read_only=False, preview=_preview_write)
 def write_file(
-    path: Annotated[
-        str,
-        Field(
-            description="The file: absolute, relative to the working directory, or "
-            "starting with ~."
-        ),
-    ],
+    path: File,
     content: Annotated[
         str, Field(description="The complete new contents of the file.")
     ],
@@ -138,24 +151,14 @@ def write_file(
     """Create a file or completely overwrite one, creating missing parent directories.
     Overwrites without warning; to change part of a file use edit_file. Only works
     inside the working directory and the system temp directory."""
-    _refuse_symlink(path)
-    real = resolve(path)
-    if real.is_dir():
-        raise IsADirectoryError(f"{path} is a directory, not a file")
-    existed = _write(real, content)
+    existed = _write(_target(path), content)
     lines = len(content.splitlines())
     return f"{'Overwrote' if existed else 'Created'} {path} ({lines} lines)"
 
 
 @tool(read_only=False, preview=_preview_edit)
 def edit_file(
-    path: Annotated[
-        str,
-        Field(
-            description="The file: absolute, relative to the working directory, or "
-            "starting with ~."
-        ),
-    ],
+    path: File,
     old_text: Annotated[
         str, Field(description="The text to replace, copied exactly from the file.")
     ],
@@ -175,9 +178,6 @@ def edit_file(
     trailing whitespace and typographic quotes, dashes and spaces are ignored, line by
     line. Nothing is written if the edit cannot be made. Only works inside the working
     directory and the system temp directory."""
-    _refuse_symlink(path)
-    real = resolve(path)
-    before = _read_text(real, path)
-    after, count = edit_text(before, old_text, new_text, replace_all, path)
+    real, _, after, count = _plan_edit(path, old_text, new_text, replace_all)
     _write(real, after)
     return f"Edited {path} ({count} replacement{'s' if count != 1 else ''})"

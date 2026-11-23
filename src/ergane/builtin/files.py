@@ -1,6 +1,6 @@
 """The tools that look at files: `read_file`, `list_directory` and `search_files`.
 
-Both only read, so they run without asking, on threads, several at once: they keep no
+All three only read, so they run without asking, on threads, several at once: they keep no
 state. Every path goes through `_paths.resolve` first and the path it returns is the one
 opened. A search never follows a symbolic link, so a link inside the working directory
 cannot lead it out of the directories `resolve` allows.
@@ -20,7 +20,7 @@ from typing import Annotated
 import pathspec
 from pydantic import Field
 
-from ergane.builtin._paths import not_found, resolve
+from ergane.builtin._paths import Directory, File, not_found, resolve
 from ergane.builtin._text import MAX_TEXT_CHARS, is_text, take_lines
 from ergane.tools import tool
 
@@ -113,15 +113,38 @@ class _Rules:
         return ignored
 
 
+def _children(directory: Path, rules: _Rules) -> tuple[list[os.DirEntry[str]], int]:
+    """What a directory shows: its entries without `.git` and what `.gitignore`
+    excludes, directories first and each kind by name, and how many were left out. The
+    listing and the search both start from this, so they never disagree about it.
+
+    Raises:
+        OSError: If the directory cannot be read.
+    """
+    entries = list(os.scandir(directory))
+    kept = sorted(
+        (
+            entry
+            for entry in entries
+            if entry.name not in _NEVER_ENTERED
+            and not rules.ignores(entry.path, entry.is_dir(follow_symlinks=False))
+        ),
+        key=lambda e: (not e.is_dir(follow_symlinks=False), e.name),
+    )
+    return kept, len(entries) - len(kept)
+
+
+def _marked(name: str, entry: os.DirEntry[str]) -> str:
+    """The name of an entry, with `/` after a directory and `@` after a symbolic link
+    (which is never followed)."""
+    if entry.is_dir(follow_symlinks=False):
+        return f"{name}/"
+    return f"{name}@" if entry.is_symlink() else name
+
+
 @tool
 def read_file(
-    path: Annotated[
-        str,
-        Field(
-            description="The file: absolute, relative to the working directory, or "
-            "starting with ~."
-        ),
-    ],
+    path: File,
     offset: Annotated[
         int, Field(ge=1, description="The line to start from, 1-based.")
     ] = 1,
@@ -144,15 +167,7 @@ def read_file(
 
 
 @tool
-def list_directory(
-    path: Annotated[
-        str,
-        Field(
-            description="The directory: absolute, relative to the working directory, "
-            "or starting with ~ (default: the working directory)."
-        ),
-    ] = ".",
-) -> str:
+def list_directory(path: Directory = ".") -> str:
     """List a directory, one entry per line: directories (first) end in / and symbolic
     links in @. Entries that .gitignore excludes, and .git, are left out and counted at
     the end. Output is capped at about 16,000 characters; the result says when it
@@ -166,26 +181,8 @@ def list_directory(
         )
     if not real.exists():
         raise FileNotFoundError(not_found(path, real, "Directory"))
-    rules = _Rules.above(real).inside(real)
-    entries = list(os.scandir(real))
-    kept = sorted(
-        (
-            entry
-            for entry in entries
-            if entry.name not in _NEVER_ENTERED
-            and not rules.ignores(entry.path, entry.is_dir(follow_symlinks=False))
-        ),
-        key=lambda e: (not e.is_dir(follow_symlinks=False), e.name),
-    )
-    left_out = len(entries) - len(kept)
-    lines = [
-        f"{entry.name}/"
-        if entry.is_dir(follow_symlinks=False)
-        else f"{entry.name}@"
-        if entry.is_symlink()
-        else entry.name
-        for entry in kept
-    ]
+    kept, left_out = _children(real, _Rules.above(real).inside(real))
+    lines = [_marked(entry.name, entry) for entry in kept]
     note = (
         f"\n[{left_out} {'entry' if left_out == 1 else 'entries'} left out: ignored "
         "by .gitignore, or .git]"
@@ -208,8 +205,8 @@ class _Walk:
 
     The `.gitignore` files of the repository that holds the directory are used, from its
     root down (see `_Rules`); `.git` is never entered, and a symbolic link is listed but
-    never followed. Entries are yielded as (path relative to the start, entry, is a
-    directory). `stopped` says that the walk gave up after `_MAX_VISITS` entries, and
+    never followed. Entries are yielded as (path relative to the start, entry).
+    `stopped` says that the walk gave up after `_MAX_VISITS` entries, and
     `unreadable` that a directory could not be read.
     """
 
@@ -218,32 +215,24 @@ class _Walk:
         self.stopped = False
         self.unreadable = False
 
-    def entries(self) -> Iterator[tuple[str, os.DirEntry[str], bool]]:
+    def entries(self) -> Iterator[tuple[str, os.DirEntry[str]]]:
         start = os.fspath(self.root) + os.sep
         queue = deque([(self.root, _Rules.above(self.root).inside(self.root))])
         visited = 0
         while queue:
             directory, rules = queue.popleft()
             try:
-                found = sorted(
-                    os.scandir(directory),
-                    key=lambda e: (not e.is_dir(follow_symlinks=False), e.name),
-                )
+                found, _ = _children(directory, rules)
             except OSError:
                 self.unreadable = True
                 continue
             for entry in found:
-                if entry.name in _NEVER_ENTERED:
-                    continue
-                is_dir = entry.is_dir(follow_symlinks=False)
-                if rules.ignores(entry.path, is_dir):
-                    continue
                 visited += 1
                 if visited > _MAX_VISITS:
                     self.stopped = True
                     return
-                yield entry.path[len(start) :], entry, is_dir
-                if is_dir:
+                yield entry.path[len(start) :], entry
+                if entry.is_dir(follow_symlinks=False):
                     child = Path(entry.path)
                     queue.append((child, rules.inside(child)))
 
@@ -251,11 +240,12 @@ class _Walk:
 def _matching_lines(
     entry: os.DirEntry[str], relative: str, pattern: re.Pattern[str]
 ) -> Iterator[str]:
-    """The lines of a text file that match, as `path:line: text`; none for a file that
-    is binary, over `_MAX_SCAN_BYTES`, not UTF-8, or a symbolic link."""
+    """The lines of a text file that match, as `path:line: text`; none for anything that
+    is not a plain file (a directory, a symbolic link, a named pipe, which would block
+    for ever when read), or is binary, over `_MAX_SCAN_BYTES` or not UTF-8."""
     try:
         if (
-            entry.is_symlink()
+            not entry.is_file(follow_symlinks=False)
             or entry.stat(follow_symlinks=False).st_size > _MAX_SCAN_BYTES
         ):
             return
@@ -273,12 +263,23 @@ def _matching_lines(
             yield f"{relative}:{number}: {line.strip()[:_MAX_MATCH_CHARS]}"
 
 
+def _hits(
+    walk: _Walk, name: str | None, pattern: re.Pattern[str] | None
+) -> Iterator[str]:
+    """The results of a search, one at a time: the entries whose path matches the glob
+    `name`, or, with `pattern`, the matching lines of the files among them."""
+    for relative, entry in walk.entries():
+        if name is not None and not PurePosixPath(relative).full_match(name):
+            continue
+        if pattern is None:
+            yield _marked(relative, entry)
+        else:
+            yield from _matching_lines(entry, relative, pattern)
+
+
 @tool
 def search_files(
-    path: Annotated[
-        str,
-        Field(description="The directory to search (default: the working directory)."),
-    ] = ".",
+    path: Directory = ".",
     name: Annotated[
         str | None,
         Field(
@@ -330,30 +331,10 @@ def search_files(
         )
 
     walk = _Walk(root)
-    results: list[str] = []
-    cut = False
-    for relative, entry, is_dir in walk.entries():
-        if name is not None and not PurePosixPath(relative).full_match(name):
-            continue
-        if pattern is None:
-            found = [
-                f"{relative}/"
-                if is_dir
-                else f"{relative}@"
-                if entry.is_symlink()
-                else relative
-            ]
-        elif is_dir:
-            continue
-        else:
-            found = list(_matching_lines(entry, relative, pattern))
-        for line in found:
-            if len(results) >= limit:
-                cut = True
-                break
-            results.append(line)
-        if cut:
-            break
+    # One more than the limit, to know whether the search was cut.
+    results = list(islice(_hits(walk, name, pattern), limit + 1))
+    cut = len(results) > limit
+    del results[limit:]
 
     if not results:
         results.append("No matches found")

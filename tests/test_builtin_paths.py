@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from ergane.builtin._paths import PathError, default_roots, resolve
+from ergane.builtin._paths import PathError, absolute_path, default_roots, resolve
 
 
 @pytest.fixture
@@ -182,3 +182,29 @@ class TestBadPaths:
     def test_a_nul_byte_is_refused(self):
         with pytest.raises(PathError, match="Not a valid path"):
             resolve("a\0b")
+
+
+class TestAbsolutePath:
+    def test_a_relative_path_starts_at_the_working_directory(self, tmp_path: Path):
+        assert absolute_path("a/b.txt") == tmp_path / "a" / "b.txt"
+
+    def test_dot_dot_is_collapsed_without_looking_at_the_disk(self, tmp_path: Path):
+        assert absolute_path("a/../b/./c.txt") == tmp_path / "b" / "c.txt"
+
+    def test_tilde_is_the_home_directory(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+        assert absolute_path("~/x") == tmp_path / "home" / "x"
+
+    def test_a_symbolic_link_is_not_followed(self, tmp_path: Path):
+        (tmp_path / "real.txt").write_text("")
+        (tmp_path / "link.txt").symlink_to(tmp_path / "real.txt")
+
+        found = absolute_path("link.txt")
+
+        assert found == tmp_path / "link.txt" and found.is_symlink()
+
+    @pytest.mark.parametrize(("path", "why"), [("", "empty"), ("a\0b", "valid path")])
+    def test_a_path_that_is_not_one_is_refused(self, path: str, why: str):
+        with pytest.raises(PathError, match=why):
+            absolute_path(path)

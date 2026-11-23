@@ -23,6 +23,26 @@ import os
 import tempfile
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Annotated
+
+from pydantic import Field
+
+# The parameters that name a file or a directory, as the model reads them: the one wording
+# that every tool shares.
+File = Annotated[
+    str,
+    Field(
+        description="The file: absolute, relative to the working directory, or "
+        "starting with ~."
+    ),
+]
+Directory = Annotated[
+    str,
+    Field(
+        description="The directory: absolute, relative to the working directory, or "
+        "starting with ~ (default: the working directory)."
+    ),
+]
 
 
 class PathError(Exception):
@@ -32,6 +52,28 @@ class PathError(Exception):
 def default_roots() -> tuple[Path, ...]:
     """The directories the file tools may use: the working directory and the temp one."""
     return (Path.cwd().resolve(), Path(tempfile.gettempdir()).resolve())
+
+
+def absolute_path(path: str) -> Path:
+    """The path as written, made absolute and with its `..` collapsed, before any
+    symlink is looked at: `~` is the home directory, a relative path starts at the
+    working directory. It is what `resolve` checks, and what a tool looks at to see
+    whether the model named a symbolic link.
+
+    Raises:
+        PathError: If the path is empty, has a NUL byte, or needs a home directory that
+            does not exist.
+    """
+    if not path.strip():
+        raise PathError("The path is empty")
+    if "\0" in path:
+        raise PathError(f"Not a valid path: {path!r}")
+    try:
+        expanded = Path(path).expanduser()
+    except RuntimeError:  # no home directory to expand "~" to
+        raise PathError(f"Cannot expand {path}: there is no home directory") from None
+    # Collapsed first, so that the path checked is the path returned.
+    return Path(os.path.normpath(Path.cwd() / expanded))
 
 
 def resolve(
@@ -53,18 +95,8 @@ def resolve(
         PathError: If the path is empty, not a path, outside the roots, a broken symlink,
             or cannot be looked at.
     """
-    if not path.strip():
-        raise PathError("The path is empty")
-    if "\0" in path:
-        raise PathError(f"Not a valid path: {path!r}")
+    absolute = absolute_path(path)
     allowed = tuple(default_roots() if roots is None else roots)
-
-    try:
-        expanded = Path(path).expanduser()
-    except RuntimeError:  # no home directory to expand "~" to
-        raise PathError(f"Cannot expand {path}: there is no home directory") from None
-    # Collapsed first, so that the path checked below is the path returned.
-    absolute = Path(os.path.normpath(Path.cwd() / expanded))
 
     missing: list[str] = []
     existing = absolute

@@ -36,3 +36,14 @@ def test_the_built_ins_that_run_commands_or_go_out_ask_first():
 
     for name in ("run_command", "web_fetch", "web_search"):
         assert not by_name[name].read_only, name
+
+
+def test_the_tools_that_name_a_file_or_a_directory_say_it_the_same_way():
+    by_name = {tool.name: tool for tool in tools_in(builtin)}
+
+    def described(tool: str) -> str:
+        return by_name[tool].parameters["properties"]["path"]["description"]
+
+    assert described("read_file") == described("write_file") == described("edit_file")
+    assert described("list_directory") == described("search_files")
+    assert described("read_file") != described("list_directory")

@@ -264,6 +264,31 @@ class TestThePreviews:
 
         assert text.startswith("This edit would fail: Could not find old_text")
 
+    def test_a_directory_is_not_shown_as_a_new_file(self, tmp_path: Path):
+        # The write would fail, so the preview must not describe it as a file to create.
+        (tmp_path / "d").mkdir()
+
+        with pytest.raises(IsADirectoryError, match="is a directory, not a file"):
+            _preview_write("d", "x\n")
+
+    def test_the_question_says_so_for_a_directory(self, tmp_path: Path, capsys):
+        (tmp_path / "d").mkdir()
+        answers = iter(["?", "n"])
+        console = Console()
+        console.choose = lambda question, options: next(answers)
+
+        console.confirm(write_file, json.dumps({"path": "d", "content": "x"}))
+
+        assert "Could not show the change: IsADirectoryError" in capsys.readouterr().out
+
+    def test_what_the_preview_shows_is_what_the_edit_writes(self, tmp_path: Path):
+        (tmp_path / "f.py").write_text("a = 1\nb = 2\nc = 3\n")
+        shown = _preview_edit("f.py", "b = 2", "b = 20")
+        call(edit_file, path="f.py", old_text="b = 2", new_text="b = 20")
+
+        assert "-b = 2" in shown and "+b = 20" in shown
+        assert (tmp_path / "f.py").read_text() == "a = 1\nb = 20\nc = 3\n"
+
     def test_a_path_that_is_refused_raises_for_the_console_to_report(self):
         with pytest.raises(PathError):
             _preview_write("/etc/hosts", "x")
