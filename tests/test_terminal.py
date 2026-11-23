@@ -43,6 +43,7 @@ class TestToolbar:
         assert text.startswith(" m1  ")
         assert text.endswith("% of 10,000")
         assert "~" in text  # nothing has been counted by the server yet
+        assert "▱  ~" in text
         assert "·" not in text
 
     def test_it_names_the_effort_when_there_is_one(self, tmp_path):
@@ -57,6 +58,7 @@ class TestToolbar:
         text = fragment_list_to_text(toolbar(agent, McpHub({}, Path())))
 
         assert text.endswith(" 25% of 10,000") and "~" not in text
+        assert "▱  25%" in text  # a gap that survives a font with wide glyphs
 
     @pytest.mark.parametrize(
         ("counted", "lit", "style"),

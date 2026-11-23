@@ -278,6 +278,7 @@ def toolbar(agent: Agent, hub: McpHub) -> FormattedText:
         ("", "  "),
         (meter, "▰" * lit),
         ("", "▱" * (_METER_CELLS - lit)),
-        ("", f" {estimated}{share}% of {config.max_context_tokens:,}"),
+        # Two spaces: some fonts draw ▰ and ▱ wider than a cell, over the first space.
+        ("", f"  {estimated}{share}% of {config.max_context_tokens:,}"),
     ]
     return FormattedText(bar)
