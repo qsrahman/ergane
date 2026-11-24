@@ -249,6 +249,12 @@ What must stay true:
   freely is one line; a result
   is not shown (the reply says what it found); a server that starts is not announced; the
   banner is one line. Before adding output, ask whether anyone would miss it.
+- A notice has a level (`info`, `warning`, `error`: dim, yellow, red) that the caller
+  gives: the agent's own are routine, and `Repl` and `cli.py` mark the failures and the
+  mistakes. A status line that only reports a call shows plain arguments as `key=value`;
+  the permission question is always the exact JSON that will run. A change to a file is
+  shown as a diff coloured by its lines (`diff-add`, `diff-del`, `diff-hunk`,
+  `diff-file`), whose first line names the file once.
 - **The look is the terminal's own.** Styles use ANSI names (`ansicyan`,
   `ansibrightblack`), never hex, so a theme decides the colours; text must still read
   without them (the toolbar meter writes its percentage too), and `NO_COLOR` is honoured.

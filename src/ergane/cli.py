@@ -167,7 +167,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             print(exc, file=sys.stderr)
             raise SystemExit(1) from None
         if saved is None:
-            console.notice("No saved session for this directory")
+            console.notice("No saved session for this directory", "warning")
     session = terminal_session(COMMANDS, state / "history")
     hub = McpHub(config.mcp_servers, state, all_off="--no-mcp" if no_mcp else None)
     mcp_tools: list[Tool] = []
@@ -189,9 +189,11 @@ def main(argv: Sequence[str] | None = None) -> None:
             tools_in(builtin, console.notice), config.builtin_tools
         )
         for name in unknown:
-            console.notice(f"builtin_tools: ergane has no built-in tool named {name}")
+            console.notice(
+                f"builtin_tools: ergane has no built-in tool named {name}", "warning"
+            )
         for name in agent.add_tools([*own, *mcp_tools]):
-            console.notice(tool_clash(name))
+            console.notice(tool_clash(name), "warning")
         Repl(agent, COMMANDS, session, console, hub, store).run(resume=saved)
     finally:
         hub.close()

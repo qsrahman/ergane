@@ -1,7 +1,12 @@
+import io
+
 import pytest
+from prompt_toolkit.data_structures import Size
+from prompt_toolkit.output.vt100 import Vt100_Output
 
 from ergane.agent import Agent
 from ergane.commands import COMMANDS
+from ergane.console import Console
 from ergane.mcp_hub import ServerUpdate
 from ergane.repl import Repl
 from ergane.sessions import SessionStore
@@ -178,7 +183,7 @@ class TestReplRendering:
 
         out = capsys.readouterr().out
         assert out.endswith(
-            f'> tool_call\n\n▸ read_file  {{"path": "notes.txt"}}\n\n{TEXT}\n\n> /exit\nBye.\n'
+            f"> tool_call\n\n▸ read_file  path=notes.txt\n\n{TEXT}\n\n> /exit\nBye.\n"
         )
 
     def test_a_call_that_asks_is_one_line_and_nothing_else(
@@ -232,7 +237,7 @@ class TestReplRendering:
         run_repl(monkeypatch, agent, ["tool_call", "/exit"])
 
         out = capsys.readouterr().out
-        shown = '▸ read_file  {"path": "notes.txt"}'
+        shown = "▸ read_file  path=notes.txt"
         assert f"\n{shown}\n\n{TEXT}\n\nBye." in out
 
     def test_reports_trimmed_context(self, monkeypatch, make_agent, capsys, streaming):
@@ -449,3 +454,35 @@ class TestSessions:
         )
 
         assert (store.directory / f"{saved.info.id}.jsonl").stat().st_mtime_ns == before
+
+
+class TestHowSeriousANoticeIs:
+    """A failure or a warning has its own colour, where there is one."""
+
+    YELLOW = "\x1b[0;33m"
+    RED = "\x1b[0;31m"
+
+    def run(self, monkeypatch, make_agent, lines):
+        written = io.StringIO()
+        console = Console(
+            output=Vt100_Output(written, lambda: Size(24, 100), term="xterm-256color")
+        )
+        typed = iter(lines)
+        monkeypatch.setattr("builtins.input", lambda _prompt: next(typed))
+        Repl(make_agent(), COMMANDS, console=console).run()
+        return written.getvalue()
+
+    def test_a_mistyped_command_is_a_warning(self, monkeypatch, make_agent):
+        shown = self.run(monkeypatch, make_agent, ["/nope", "/exit"])
+
+        assert f"{self.YELLOW}[Unknown command: /nope." in shown
+
+    def test_a_response_that_failed_is_an_error(self, monkeypatch, make_agent):
+        shown = self.run(monkeypatch, make_agent, ["failed", "/exit"])
+
+        assert f"{self.RED}[Response failed: server_error: boom]" in shown
+
+    def test_a_routine_notice_is_neither(self, monkeypatch, make_agent):
+        shown = self.run(monkeypatch, make_agent, ["/reset", "/exit"])
+
+        assert self.YELLOW not in shown and self.RED not in shown

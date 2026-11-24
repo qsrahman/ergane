@@ -1,11 +1,14 @@
+import io
 from pathlib import Path
 
 import pytest
 from prompt_toolkit.completion import CompleteEvent
+from prompt_toolkit.data_structures import Size
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import fragment_list_to_text, to_formatted_text
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
+from prompt_toolkit.output.vt100 import Vt100_Output
 from prompt_toolkit.styles import default_ui_style, merge_styles
 
 from ergane.agent import Agent
@@ -13,9 +16,12 @@ from ergane.commands import COMMANDS
 from ergane.mcp_hub import McpHub, ServerStatus
 from ergane.repl import Repl
 from ergane.terminal import (  # pyright: ignore[reportPrivateUsage]
+    PLACEHOLDER,
     CommandCompleter,
     _Menu,
+    _tokens,
     choose,
+    erase_blank_prompt,
     terminal_session,
     toolbar,
 )
@@ -41,10 +47,12 @@ class TestToolbar:
         text = self.toolbar(tmp_path, model="m1", max_context_tokens=10000)
 
         assert text.startswith(" m1  ")
-        assert text.endswith("% of 10,000")
+        assert text.endswith(" / 10k")
         assert "~" in text  # nothing has been counted by the server yet
-        assert "▱  ~" in text
-        assert "·" not in text
+        assert "─  ~" in text
+        assert (
+            "·" not in text.split("%")[0]
+        )  # no effort, no servers: nothing to separate
 
     def test_it_names_the_effort_when_there_is_one(self, tmp_path):
         assert " m1 · high  " in self.toolbar(
@@ -57,8 +65,8 @@ class TestToolbar:
 
         text = fragment_list_to_text(toolbar(agent, McpHub({}, Path())))
 
-        assert text.endswith(" 25% of 10,000") and "~" not in text
-        assert "▱  25%" in text  # a gap that survives a font with wide glyphs
+        assert text.endswith(" 25% · 2.5k / 10k") and "~" not in text
+        assert "─  25%" in text  # a gap that survives a font with wide glyphs
 
     @pytest.mark.parametrize(
         ("counted", "lit", "style"),
@@ -78,8 +86,8 @@ class TestToolbar:
         bar = toolbar(agent, McpHub({}, Path()))
 
         gap = next(i for i, fragment in enumerate(bar) if fragment[1] == "  ")
-        assert bar[gap + 1] == (style, "▰" * lit)  # the meter follows the gap
-        assert bar[gap + 2] == ("", "▱" * (10 - lit))
+        assert bar[gap + 1] == (style, "━" * lit)  # the meter follows the gap
+        assert bar[gap + 2] == ("", "─" * (10 - lit))
 
 
 class TestToolbarAndServers:
@@ -459,6 +467,73 @@ class TestTerminalSession:
 
         assert answer is True
         assert history.read_text() == ""  # "y" is not a prompt to recall
+
+
+class TestTokensInTheToolbar:
+    @pytest.mark.parametrize(
+        ("count", "shown"),
+        [
+            (0, "0"),
+            (842, "842"),
+            (999, "999"),
+            (1000, "1.0k"),
+            (3400, "3.4k"),
+            (9999, "10.0k"),  # one decimal, until the number has two digits
+            (10_000, "10k"),
+            (65_536, "66k"),
+        ],
+    )
+    def test_a_count_is_short(self, count, shown):
+        assert _tokens(count) == shown
+
+
+class TestABlankPrompt:
+    """Enter on an empty line leaves the placeholder behind unless it is taken off."""
+
+    def erase(self, columns: int) -> str:
+        written = io.StringIO()
+        output = Vt100_Output(written, lambda: Size(24, columns), term="xterm-256color")
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, Path("history"), input=pipe, output=output
+            )
+            assert session is not None
+            erase_blank_prompt(session)
+        return written.getvalue()
+
+    def test_it_goes_up_to_the_prompt_and_clears_from_there(self, tmp_path):
+        # One line: "❯ " and the placeholder fit in 100 columns.
+        assert self.erase(100).endswith("\x1b[A\x1b[J")
+
+    def test_a_placeholder_that_wrapped_is_cleared_whole(self, tmp_path):
+        assert len("❯ " + PLACEHOLDER) > 40
+        assert self.erase(40).endswith("\x1b[2A\x1b[J")
+
+
+class TestTheReplAndABlankPrompt:
+    def run(self, tmp_path, keys: str, capsys) -> tuple[str, str]:
+        written = io.StringIO()
+        output = Vt100_Output(written, lambda: Size(24, 100), term="xterm-256color")
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, tmp_path / "history", input=pipe, output=output
+            )
+            assert session is not None
+            pipe.send_text(keys)
+            Repl(Agent(make_config()), COMMANDS, session=session).run()
+        return written.getvalue(), capsys.readouterr().out
+
+    def test_an_empty_prompt_is_taken_off_the_screen(self, tmp_path, capsys):
+        with_blank, _ = self.run(tmp_path, "\r/exit\r", capsys)
+        without, _ = self.run(tmp_path, "/exit\r", capsys)
+
+        assert with_blank.count("\x1b[A\x1b[J") == without.count("\x1b[A\x1b[J") + 1
+
+    def test_the_banner_leaves_the_model_to_the_toolbar(self, tmp_path, capsys):
+        _, printed = self.run(tmp_path, "/exit\r", capsys)
+
+        assert printed.startswith("ergane · /help for commands\n\n")
+        assert make_config().model not in printed
 
 
 class TestMenuOfSessions:

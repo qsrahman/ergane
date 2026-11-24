@@ -94,20 +94,16 @@ def _cut(lines: list[str]) -> list[str]:
 
 
 def _diff(before: str, after: str, shown: str) -> str:
-    """A unified diff of two texts, cut to what a terminal can show."""
+    """A unified diff of two texts, cut to what a terminal can show. The file is named
+    once, in a line that starts with `--- `, instead of by the `---` and `+++` pair: it
+    is the same file on both sides."""
     lines = list(
-        difflib.unified_diff(
-            before.splitlines(),
-            after.splitlines(),
-            fromfile=shown,
-            tofile=shown,
-            n=2,
-            lineterm="",
-        )
+        difflib.unified_diff(before.splitlines(), after.splitlines(), n=2, lineterm="")
     )
     if not lines:
         return "No change: the file already has this content"
-    return "\n".join(_cut(lines))
+    # The first two lines are the `---` and `+++` of no file names: left out.
+    return "\n".join(_cut([f"--- {shown}", *lines[2:]]))
 
 
 def _plan_edit(

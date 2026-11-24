@@ -196,7 +196,9 @@ no output (400) and an output with no call:
 with input or output redirected it is the typed line `Allow name {args}? [y/N/a] y`.
 
 - The `▸` line (`Console.call`) is as wide as the terminal at most, the arguments on one
-  line with the middle of long values left out. The permission question is cut the same
+  line with the middle of long values left out. It only reports a call, so plain
+  arguments are `key=value` (`▸ read_file  path=notes.txt`) and anything nested is JSON;
+  the question that follows is always the exact JSON that will run. The permission question is cut the same
   way: it shows the arguments in full if they fit the terminal, otherwise with the middle
   of long values left out, and then offers to print everything and ask again (`?`: the
   menu's fourth option, "Show full arguments", or `[y/N/a/?]` typed). `a` allows the

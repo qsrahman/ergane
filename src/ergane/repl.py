@@ -12,12 +12,18 @@ from prompt_toolkit import PromptSession
 
 from ergane.agent import Agent
 from ergane.commands import Command
-from ergane.console import Console
+from ergane.console import Console, Level
 from ergane.context import as_dicts
 from ergane.errors import TurnError, describe_error
 from ergane.mcp_hub import McpHub, ServerUpdate
 from ergane.sessions import SavedSession, SessionInfo, SessionStore, ago
-from ergane.terminal import PROMPT, CommandCompleter, choose, toolbar
+from ergane.terminal import (
+    PROMPT,
+    CommandCompleter,
+    choose,
+    erase_blank_prompt,
+    toolbar,
+)
 from ergane.tools import tool_clash
 
 
@@ -73,9 +79,8 @@ class Repl:
             resume: A saved session to continue, which is what the conversation is
                 from the start.
         """
-        self.console.write(
-            f"ergane · {self.agent.config.model} · /help for commands\n\n"
-        )
+        # The toolbar names the model, where there is one.
+        self.console.banner(None if self.session else self.agent.config.model)
         if resume is not None:
             self.console.notice(self.restore(resume))
             self.console.blank()
@@ -109,6 +114,8 @@ class Repl:
             if prompt:
                 self.handle(prompt)
                 self.save_session()
+            elif self.session:
+                erase_blank_prompt(self.session)
         self.console.write("Bye.\n")
 
     def save_session(self) -> None:
@@ -129,7 +136,7 @@ class Repl:
                 self.agent.config.model,
             )
         except OSError as exc:
-            self.console.notice(f"Could not save the session: {exc}")
+            self.console.notice(f"Could not save the session: {exc}", "warning")
 
     def restore(self, saved: SavedSession) -> str:
         """Continue a saved session in place of the conversation there is. That one
@@ -155,22 +162,25 @@ class Repl:
         name, _, args = prompt.partition(" ")
         self.attach(wait=False)
         command = self.commands.get(name.lower())
+        level: Level = "info"
         if command:
             try:
                 message = command.handler(self, args.strip())
             except KeyboardInterrupt:
-                message = "Cancelled"
+                message, level = "Cancelled", "warning"
             except Exception as exc:  # noqa: BLE001
                 message = f"Command error: {type(exc).__name__}: {exc}"
+                level = "error"
         # A single word starting with "/" is a mistyped command, not a prompt;
         # longer input such as "/usr/bin is missing" still goes to the model.
         elif prompt.startswith("/") and " " not in prompt:
             message = f"Unknown command: {prompt}. Type /help to list commands."
+            level = "warning"
         else:
             self.ask(prompt)
             return
         if message:
-            self.console.notice(message)
+            self.console.notice(message, level)
             self.console.blank()
 
     def apply(self, update: ServerUpdate) -> None:
@@ -186,7 +196,7 @@ class Repl:
         if update.message:
             self.console.notice(update.message)
         for tool in skipped:
-            self.console.notice(tool_clash(tool))
+            self.console.notice(tool_clash(tool), "warning")
 
     def attach(self, *, wait: bool) -> None:
         """Give the agent the servers that started in the background, and tell of the
@@ -223,10 +233,10 @@ class Repl:
                 on_call=console.call,
             )
         except TurnError as exc:
-            console.notice(str(exc))
+            console.notice(str(exc), "error")
         except KeyboardInterrupt:
-            console.notice("Cancelled")
+            console.notice("Cancelled", "warning")
         except Exception as exc:  # noqa: BLE001
-            console.notice(describe_error(exc))
+            console.notice(describe_error(exc), "error")
         console.end_line()
         console.blank()

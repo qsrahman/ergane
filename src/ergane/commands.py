@@ -85,7 +85,8 @@ def command(name: str, arguments: Arguments = ()) -> Callable[[Handler], Handler
 def help_(repl: Repl, args: str) -> None:
     """List the available commands."""
     repl.console.columns(
-        [(name, cmd.description) for name, cmd in sorted(repl.commands.items())]
+        [(name, cmd.description) for name, cmd in sorted(repl.commands.items())],
+        heading="Commands",
     )
     allow = 'At "Allow …?": y allows, a allows the tool for the session, ? shows it all'
     keys = [("y, a, ?", allow)]
@@ -105,7 +106,7 @@ def help_(repl: Repl, args: str) -> None:
             ("Ctrl-D", "Quit; press twice once there is a conversation"),
             *keys,
         ]
-    repl.console.columns(sorted(keys, key=lambda row: row[0].lower()))
+    repl.console.columns(sorted(keys, key=lambda row: row[0].lower()), heading="Keys")
 
 
 @command("/reset")

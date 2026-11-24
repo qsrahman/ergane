@@ -32,12 +32,30 @@ from ergane.tools import Tool
 _STYLE = Style.from_dict(
     {
         "notice": "dim",
+        "warning": "ansiyellow",
+        "failure": "ansired",
         "call.name": "bold",
         "call.args": "dim",
         "allowed": "dim",
         "denied": "ansired",
+        "title": "bold",
+        "heading": "dim bold",
+        "label": "bold",
+        # The preview of a change: independent names, as a dotted one inherits.
+        "diff-file": "bold",
+        "diff-hunk": "dim",
+        "diff-add": "ansigreen",
+        "diff-del": "ansired",
     }
 )
+
+# How serious a notice is: it is told by colour, and the words still say it.
+Level = Literal["info", "warning", "error"]
+_NOTICE_STYLES = {
+    "info": "class:notice",
+    "warning": "class:warning",
+    "error": "class:failure",
+}
 
 # Asks a question with a menu: the question, and the options as (key, label); gives the
 # key of the one chosen (the first is the default). `Repl` supplies it on a terminal.
@@ -93,16 +111,42 @@ def _room(used: int) -> int:
     return max(shutil.get_terminal_size().columns - used - 1, 20)
 
 
-def _fit(arguments: str, room: int) -> tuple[str, bool]:
+def _pairs(parsed: Any) -> str | None:
+    """`key=value` for each argument of a call whose arguments are all plain values,
+    which reads lighter than JSON; None for anything else (nested values, a list)."""
+    if not isinstance(parsed, dict) or any(
+        isinstance(value, dict | list) for value in parsed.values()
+    ):
+        return None
+
+    def show(value: Any) -> str:
+        if isinstance(value, str) and value and not re.search(r'[\s"]', value):
+            return value
+        return json.dumps(value, ensure_ascii=False)
+
+    return " ".join(f"{key}={show(value)}" for key, value in parsed.items())
+
+
+def _render(parsed: Any, pretty: bool) -> str:
+    """The arguments as one line: `key=value` pairs if `pretty` and they allow it,
+    otherwise JSON."""
+    if pretty and (line := _pairs(parsed)) is not None:
+        return line
+    return json.dumps(parsed, ensure_ascii=False)
+
+
+def _fit(arguments: str, room: int, pretty: bool = False) -> tuple[str, bool]:
     """A tool call's arguments on one line of at most `room` characters.
 
-    The line is the JSON on one line, as it will be run. If that is too long, the
-    long strings are cut in the middle, the longest allowance that fits first;
-    failing that, the line is cut at its end.
+    The line is the JSON on one line, as it will be run (or, when `pretty`, `key=value`
+    pairs, for a line that only reports a call). If that is too long, the long strings
+    are cut in the middle, the longest allowance that fits first; failing that, the
+    line is cut at its end.
 
     Args:
         arguments: The model's arguments, as JSON text.
         room: The most characters the line may have.
+        pretty: Whether to give plain arguments as `key=value` pairs.
 
     Returns:
         The line, and whether anything was left out of it.
@@ -112,10 +156,10 @@ def _fit(arguments: str, room: int) -> tuple[str, bool]:
     except ValueError:
         line = " ".join(arguments.split())  # not JSON: nothing but its whitespace
     else:
-        line = json.dumps(parsed, ensure_ascii=False)
+        line = _render(parsed, pretty)
         if len(line) > room:
             for cap in (64, 40, 24, 16, 8):
-                line = json.dumps(_cut_strings(parsed, cap), ensure_ascii=False)
+                line = _render(_cut_strings(parsed, cap), pretty)
                 if len(line) <= room:
                     return line, True
     if len(line) <= room:
@@ -203,7 +247,9 @@ class Console:
         """Print an empty line."""
         self.write("\n")
 
-    def columns(self, rows: Sequence[tuple[str, str]]) -> None:
+    def columns(
+        self, rows: Sequence[tuple[str, str]], heading: str | None = None
+    ) -> None:
         """Print rows of a label and a text, the texts lined up, and a blank line.
 
         A text longer than the terminal is wrapped at its spaces, the next lines
@@ -211,33 +257,60 @@ class Console:
 
         Args:
             rows: The labels and what to say of each. Each line is indented by two
-                spaces.
+                spaces, and the label is in bold.
+            heading: A line above the rows, dim.
         """
         width = max(len(label) for label, _ in rows)
         indent = " " * (width + 4)
         room = _room(len(indent))
+        if heading:
+            self._emit([("class:heading", f"  {heading}\n")], status=False)
         for label, text in rows:
             lines = textwrap.wrap(
                 text, room, break_long_words=False, break_on_hyphens=False
             ) or [""]
-            self.write(f"  {label:<{width}}  {lines[0]}\n")
+            self._emit(
+                [
+                    ("", "  "),
+                    ("class:label", f"{label:<{width}}"),
+                    ("", f"  {lines[0]}\n"),
+                ],
+                status=False,
+            )
             for line in lines[1:]:
                 self.write(f"{indent}{line}\n")
         self.blank()
+
+    def banner(self, model: str | None) -> None:
+        """Print the line that opens a session: the name in bold, the rest dim. The
+        model is named only where there is no toolbar to show it."""
+        rest = f" · {model}" if model else ""
+        self._emit(
+            [
+                ("class:title", "ergane"),
+                ("class:notice", f"{rest} · /help for commands\n"),
+                ("", "\n"),
+            ],
+            status=False,
+        )
 
     def end_line(self) -> None:
         """Finish the current line, if one was started."""
         if not self.at_line_start:
             self.write("\n")
 
-    def notice(self, text: str) -> None:
+    def notice(self, text: str, level: Level = "info") -> None:
         """Print a bracketed status line.
 
         Args:
             text: The status message; it is flattened to one line, so text from
                 the server cannot break out of the brackets.
+            level: How serious it is, shown by colour: dim for what is routine, yellow
+                for what the user may want to act on, red for what went wrong.
         """
-        self._emit([("class:notice", f"[{' '.join(text.split())}]\n")], status=True)
+        self._emit(
+            [(_NOTICE_STYLES[level], f"[{' '.join(text.split())}]\n")], status=True
+        )
 
     def _call_line(self, name: str, arguments: str, outcome: str, style: str) -> None:
         """Print a tool call as one status line: `▸ name  arguments`, then `outcome`.
@@ -247,11 +320,11 @@ class Console:
         """
         name = " ".join(name.split())  # one line, whatever the server called it
         used = len(f"▸ {name}  ") + (len(f"  {outcome}") if outcome else 0)
-        shown, _ = _fit(arguments, _room(used))
+        shown, _ = _fit(arguments, _room(used), pretty=True)
         self._emit(
             [
                 ("class:call.name", f"▸ {name}"),
-                ("class:call.args", f"  {shown}"),
+                ("class:call.args", f"  {shown}" if shown else ""),
                 (style, f"  {outcome}" if outcome else ""),
                 ("", "\n"),
             ],
@@ -306,18 +379,34 @@ class Console:
         return choose(question, options)
 
     @staticmethod
-    def _everything(tool: Tool, arguments: str) -> str:
-        """What the user asked to see of a call: the change, if the tool can say what it
-        would be, otherwise the arguments in full."""
-        if tool.preview is not None:
+    def _everything(tool: Tool, arguments: str) -> list[tuple[str, str]]:
+        """What the user asked to see of a call, as styled lines: the change, if the tool
+        can say what it would be (a diff, whose lines are coloured by what they do),
+        otherwise the arguments in full."""
+        if tool.preview is None:
             try:
-                return tool.preview(arguments)
-            except Exception as exc:  # noqa: BLE001
-                return f"Could not show the change: {type(exc).__name__}: {exc}"
+                text = json.dumps(json.loads(arguments), indent=2, ensure_ascii=False)
+            except ValueError:
+                text = " ".join(arguments.split())
+            return [("", text + "\n")]
         try:
-            return json.dumps(json.loads(arguments), indent=2, ensure_ascii=False)
-        except ValueError:
-            return " ".join(arguments.split())
+            text = tool.preview(arguments)
+        except Exception as exc:  # noqa: BLE001
+            return [("", f"Could not show the change: {type(exc).__name__}: {exc}\n")]
+        pieces = []
+        for number, line in enumerate(text.split("\n")):
+            if number == 0 and line.startswith("--- "):
+                style = "class:diff-file"
+            elif line.startswith("@@"):
+                style = "class:diff-hunk"
+            elif line.startswith("+"):
+                style = "class:diff-add"
+            elif line.startswith("-"):
+                style = "class:diff-del"
+            else:
+                style = ""
+            pieces.append((style, line + "\n"))
+        return pieces
 
     def confirm(self, tool: Tool, arguments: str) -> bool | Literal["always"]:
         """Ask the user whether a tool that is not read-only may run.
@@ -352,7 +441,11 @@ class Console:
                 answer = self._ask_typed(tool, arguments)
             if answer != "?":
                 break
-            self._emit([("", self._everything(tool, arguments) + "\n")], status=True)
+            # Set apart from the call line above it and from the question below it.
+            self._emit(
+                [("", "\n"), *self._everything(tool, arguments), ("", "\n")],
+                status=True,
+            )
         # A reply to what was typed stands apart from it, as from a status line.
         self.after_status = True
         if self.choose is not None:

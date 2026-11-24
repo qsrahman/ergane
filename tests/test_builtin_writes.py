@@ -262,7 +262,9 @@ class TestThePreviews:
 
         text = _preview_write("a.txt", "one\nTWO\nthree\n")
 
-        assert text.splitlines()[:2] == ["--- a.txt", "+++ a.txt"]
+        # The file is named once, not by a `---` and `+++` pair.
+        assert text.splitlines()[:2] == ["--- a.txt", "@@ -1,3 +1,3 @@"]
+        assert "+++" not in text
         assert "-two" in text and "+TWO" in text
         assert (tmp_path / "a.txt").read_text() == "one\ntwo\nthree\n"
 

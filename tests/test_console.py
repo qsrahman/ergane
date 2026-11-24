@@ -8,7 +8,13 @@ from prompt_toolkit.formatted_text import fragment_list_to_text, to_formatted_te
 from prompt_toolkit.output.vt100 import Vt100_Output
 
 from ergane.agent import Agent
-from ergane.console import Console, _room, sanitize  # pyright: ignore[reportPrivateUsage]
+from ergane.console import (  # pyright: ignore[reportPrivateUsage]
+    Console,
+    _fit,
+    _pairs,
+    _room,
+    sanitize,
+)
 from ergane.errors import TurnError
 from ergane.tools import Tool
 from helpers import make_config, run_repl
@@ -497,7 +503,7 @@ class TestConfirmMenu:
     ):
         self.ask(key)
 
-        assert capsys.readouterr().out == f'▸ save  {{"path": "notes.txt"}}  {line}\n'
+        assert capsys.readouterr().out == f"▸ save  path=notes.txt  {line}\n"
 
     def test_the_decision_is_in_colour_where_there_is_colour(self):
         written = io.StringIO()
@@ -544,12 +550,12 @@ class TestCall:
     def test_a_call_is_a_status_line_with_the_name_and_the_arguments(self, capsys):
         Console().call("read_file", '{"path":"notes.txt"}')
 
-        assert capsys.readouterr().out == '▸ read_file  {"path": "notes.txt"}\n'
+        assert capsys.readouterr().out == "▸ read_file  path=notes.txt\n"
 
     def test_a_name_with_a_line_break_stays_on_the_line(self, capsys):
         Console().call("read\nfile\x1b[2J", "{}")
 
-        assert capsys.readouterr().out == "▸ read file[2J  {}\n"
+        assert capsys.readouterr().out == "▸ read file[2J\n"
 
     def test_the_line_follows_the_width_of_the_terminal(self, monkeypatch, capsys):
         arguments = json.dumps({"text": "x" * 300})
@@ -582,6 +588,9 @@ class TestRoom:
 
 DIM = "\x1b[0;2m"  # what prompt_toolkit writes for dim text
 BOLD = "\x1b[0;1m"
+GREEN = "\x1b[0;32m"
+RED = "\x1b[0;31m"
+YELLOW = "\x1b[0;33m"
 
 
 class TestStyle:
@@ -603,10 +612,26 @@ class TestStyle:
         assert f"{DIM}[Cancelled]" in written.getvalue()
         assert capsys.readouterr().out == ""
 
+    @pytest.mark.parametrize(
+        ("level", "code"), [("info", DIM), ("warning", YELLOW), ("error", RED)]
+    )
+    def test_a_notice_is_coloured_by_how_serious_it_is(
+        self, console, written, level, code
+    ):
+        console.notice("something", level)
+
+        assert f"{code}[something]" in written.getvalue()
+
+    def test_a_notice_reads_the_same_without_colour(self, capsys):
+        for level in ("info", "warning", "error"):
+            Console().notice("Response failed: boom", level)
+
+        assert capsys.readouterr().out == "[Response failed: boom]\n" * 3
+
     def test_a_call_has_its_name_in_bold_and_its_arguments_dim(self, console, written):
         console.call("read_file", '{"path": "notes.txt"}')
 
-        assert f'{BOLD}▸ read_file{DIM}  {{"path": "notes.txt"}}' in written.getvalue()
+        assert f"{BOLD}▸ read_file{DIM}  path=notes.txt" in written.getvalue()
 
     def test_the_fresh_line_comes_before_the_styled_part(
         self, console, written, capsys
@@ -795,3 +820,169 @@ class TestConfirmWithAPreview:
         console.confirm(SAVE, json.dumps({"path": "p" * 200}))
 
         assert "p" * 200 in capsys.readouterr().out
+
+
+def diff_tool(text: str) -> Tool:
+    def change(path: str) -> str:
+        return text
+
+    return Tool.from_function(save, read_only=False, preview=change)
+
+
+DIFF = "--- f.txt\n@@ -1,2 +1,2 @@\n same\n-old\n+new\n[... 4 more lines]"
+
+
+class TestTheChangeIsColoured:
+    @pytest.fixture
+    def written(self):
+        return io.StringIO()
+
+    @pytest.fixture
+    def console(self, written):
+        output = Vt100_Output(written, lambda: Size(24, 80), term="xterm-256color")
+        console = Console(output=output)
+        answers = iter(["?", "y"])  # allowed: no red "denied" to confuse the checks
+        console.choose = lambda question, options: next(answers)
+        return console
+
+    def test_each_kind_of_line_has_its_own_look(self, console, written):
+        console.confirm(diff_tool(DIFF), '{"path": "f.txt"}')
+
+        shown = written.getvalue()
+        assert f"{BOLD}--- f.txt" in shown
+        assert f"{DIM}@@ -1,2 +1,2 @@" in shown
+        assert f"{RED}-old" in shown and f"{GREEN}+new" in shown
+        assert f"{GREEN} same" not in shown and f"{RED} same" not in shown
+
+    def test_only_the_first_line_is_a_header(self, console, written):
+        console.confirm(
+            diff_tool("--- a\n--- not a header, a removed line"), '{"path": "a"}'
+        )
+
+        shown = written.getvalue()
+        assert f"{BOLD}--- a" in shown
+        assert f"{RED}--- not a header" in shown
+
+    def test_a_message_that_is_not_a_diff_is_not_coloured(
+        self, console, written, capsys
+    ):
+        console.confirm(
+            diff_tool("No change: the file already has this content"), '{"path": "a"}'
+        )
+
+        # Plain text is printed, not written as styled text.
+        assert "No change" in capsys.readouterr().out
+        assert RED not in written.getvalue() and GREEN not in written.getvalue()
+
+    def test_the_arguments_in_full_are_not_coloured(self, written):
+        output = Vt100_Output(written, lambda: Size(24, 80), term="xterm-256color")
+        console = Console(output=output)
+        answers = iter(["?", "y"])  # allowed: no red "denied" to confuse the checks
+        console.choose = lambda question, options: next(answers)
+
+        console.confirm(SAVE, json.dumps({"path": "-p" * 100}))
+
+        assert RED not in written.getvalue()
+
+    def test_it_is_set_apart_from_the_call_and_from_the_question(self, capsys):
+        answers = iter(["?", "y"])  # allowed: no red "denied" to confuse the checks
+        console = Console()
+        console.choose = lambda question, options: next(answers)
+        console.write("▸ read_file  path=a\n")
+
+        console.confirm(diff_tool("--- f\n+x"), '{"path": "f"}')
+
+        assert capsys.readouterr().out == (
+            "▸ read_file  path=a\n\n--- f\n+x\n\n▸ save  path=f  allowed\n"
+        )
+
+
+class TestCallLines:
+    @pytest.mark.parametrize(
+        ("arguments", "line"),
+        [
+            ('{"path": "notes.txt"}', "path=notes.txt"),
+            (
+                '{"path": ".", "name": "**/*.py", "limit": 20}',
+                "path=. name=**/*.py limit=20",
+            ),
+            (
+                '{"query": "two words"}',
+                'query="two words"',
+            ),  # quoted, or it would run on
+            ('{"text": ""}', 'text=""'),
+            ('{"on": true, "x": null, "n": 1.5}', "on=true x=null n=1.5"),
+            ('{"say": "a \\"quote\\""}', 'say="a \\"quote\\""'),
+            ('{"text": "line\\nbreak"}', 'text="line\\nbreak"'),
+            ("{}", ""),
+        ],
+    )
+    def test_plain_arguments_are_pairs(self, arguments, line):
+        assert _fit(arguments, 100, pretty=True) == (line, False)
+
+    @pytest.mark.parametrize(
+        "arguments",
+        ['{"todos": [{"content": "a"}]}', '{"a": {"b": 1}}', "[1, 2]", "not json"],
+    )
+    def test_anything_else_stays_as_it_was(self, arguments):
+        assert _pairs(json.loads(arguments) if arguments[0] in "{[" else None) is None
+        assert _fit(arguments, 100, pretty=True) == _fit(arguments, 100)
+
+    def test_the_question_is_always_the_exact_json(self):
+        assert _fit('{"path": "notes.txt"}', 100) == ('{"path": "notes.txt"}', False)
+
+    def test_a_long_value_is_cut_in_the_middle_to_fit(self):
+        line, shortened = _fit(json.dumps({"path": "a" * 100 + "z"}), 40, pretty=True)
+
+        assert (
+            shortened and len(line) <= 40 and "…" in line and line.startswith("path=a")
+        )
+
+    def test_the_lines_of_calls_that_were_decided_are_pairs_too(self, capsys):
+        console = Console()
+        console.choose = lambda question, options: "y"
+
+        console.confirm(SAVE, '{"path": "notes.txt"}')
+
+        assert capsys.readouterr().out == "▸ save  path=notes.txt  allowed\n"
+
+
+class TestHeadingsAndTheBanner:
+    @pytest.fixture
+    def written(self):
+        return io.StringIO()
+
+    @pytest.fixture
+    def console(self, written):
+        output = Vt100_Output(written, lambda: Size(24, 80), term="xterm-256color")
+        return Console(output=output)
+
+    def test_labels_are_bold_and_a_heading_is_dim(self, console, written):
+        console.columns([("/help", "List the commands.")], heading="Commands")
+
+        shown = written.getvalue()
+        assert "Commands" in shown and f"{BOLD}/help" in shown
+        assert shown.index("Commands") < shown.index("/help")
+
+    def test_the_text_is_the_same_without_colour(self, capsys):
+        Console().columns([("/a", "one"), ("/bcd", "two")], heading="Commands")
+
+        assert capsys.readouterr().out == (
+            "  Commands\n  /a   one\n  /bcd  two\n\n".replace("/a   one", "/a    one")
+        )
+
+    def test_the_banner_has_the_name_in_bold(self, console, written):
+        console.banner(None)
+
+        assert f"{BOLD}ergane" in written.getvalue()
+        assert "/help for commands" in written.getvalue()
+
+    def test_the_model_is_named_only_where_there_is_no_toolbar(self, capsys):
+        Console().banner("gpt-5.4-mini")
+        Console().banner(None)
+
+        out = capsys.readouterr().out
+        assert out == (
+            "ergane · gpt-5.4-mini · /help for commands\n\n"
+            "ergane · /help for commands\n\n"
+        )

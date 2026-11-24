@@ -68,6 +68,7 @@ _STYLE = Style.from_dict(
 
 # The prompt at a terminal; redirected input is read with a plain "> ".
 PROMPT = FormattedText([("class:prompt", "❯ ")])
+PLACEHOLDER = "Ask anything, or /help for commands. Alt-Enter adds a line."
 
 # How many cells the context meter in the toolbar has, and the shares of the budget at
 # which it turns yellow and red.
@@ -228,12 +229,7 @@ def terminal_session(
         key_bindings=_KEYS,
         style=_STYLE,
         # A plain string would get no style: only formatted text carries the class.
-        placeholder=[
-            (
-                "class:placeholder",
-                "Ask anything, or /help for commands. Alt-Enter adds a line.",
-            )
-        ],
+        placeholder=[("class:placeholder", PLACEHOLDER)],
         # Ctrl-X Ctrl-E edits a long prompt in $EDITOR and sends it when the editor
         # closes; Ctrl-Z suspends ergane (Ctrl-R, searching the history, is built in).
         enable_open_in_editor=True,
@@ -243,10 +239,30 @@ def terminal_session(
     )
 
 
+def erase_blank_prompt(session: PromptSession[str]) -> None:
+    """Take a prompt that was sent empty off the screen. It still shows its placeholder,
+    so pressing Enter on an empty line would leave a column of them in the scrollback.
+    The cursor is at the start of the line after the prompt."""
+    output = session.app.output
+    width = max(output.get_size().columns, 1)
+    output.cursor_up(-(-(len("❯ ") + len(PLACEHOLDER)) // width))
+    output.erase_down()
+    output.flush()
+
+
+def _tokens(count: int) -> str:
+    """A token count short enough for the toolbar: 842, 3.4k, 66k."""
+    if count < 1000:
+        return str(count)
+    return f"{count / 1000:.1f}k" if count < 10_000 else f"{round(count / 1000)}k"
+
+
 def toolbar(agent: Agent, hub: McpHub) -> FormattedText:
     """The line under the prompt: the model, the effort, the servers and how full
     the context is, as `/context` counts it, with a meter that turns yellow and
-    then red as it fills (the share is written too, for a terminal without colour).
+    then red as it fills (the share is written too, for a terminal without colour, and
+    the meter's two glyphs differ in weight, not only in colour). They are box-drawing
+    characters, which a terminal draws itself, so they fill their cells in any font.
     """
     config = agent.config
     used = agent.request_tokens()
@@ -276,9 +292,11 @@ def toolbar(agent: Agent, hub: McpHub) -> FormattedText:
             bar.append(("class:toolbar.bad", f" · {failed} MCP failed: /servers"))
     bar += [
         ("", "  "),
-        (meter, "▰" * lit),
-        ("", "▱" * (_METER_CELLS - lit)),
-        # Two spaces: some fonts draw ▰ and ▱ wider than a cell, over the first space.
-        ("", f"  {estimated}{share}% of {config.max_context_tokens:,}"),
+        (meter, "━" * lit),
+        ("", "─" * (_METER_CELLS - lit)),
+        (
+            "",
+            f"  {estimated}{share}% · {_tokens(used)} / {_tokens(config.max_context_tokens)}",
+        ),
     ]
     return FormattedText(bar)
