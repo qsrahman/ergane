@@ -162,7 +162,7 @@ def sessions_(repl: Repl, args: str) -> str | None:
             "Continue which session?", [*options, ("q", "Cancel")]
         )
         if ref == "q":
-            return None
+            return "Cancelled"
     else:
         repl.console.columns(
             [(str(n), _described(i, repl.saved)) for n, i in enumerate(found, 1)]

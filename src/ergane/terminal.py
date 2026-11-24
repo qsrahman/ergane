@@ -261,6 +261,28 @@ def _tokens(count: int) -> str:
     return f"{count / 1000:.1f}k" if count < 10_000 else f"{round(count / 1000)}k"
 
 
+def _branch() -> str | None:
+    """The git branch of the working directory (a short commit id on a detached HEAD),
+    read from `.git/HEAD` as a prompt redraws the toolbar too often to run `git`; None
+    outside a repository or when the file holds anything but a plain name."""
+    here = Path.cwd()
+    for directory in (here, *here.parents):
+        git = directory / ".git"
+        try:
+            if git.is_file():  # a linked worktree: "gitdir: PATH"
+                git = Path(git.read_text().removeprefix("gitdir:").strip())
+                git = directory / git
+            head = (git / "HEAD").read_text().strip()
+        except OSError:
+            continue
+        name = head.removeprefix("ref: refs/heads/")
+        if name == head:
+            name = head[:7]  # detached
+        # The file is the repository's, which may not be the user's: no control characters.
+        return name[:30] if name.isprintable() and name else None
+    return None
+
+
 def toolbar(agent: Agent, hub: McpHub) -> FormattedText:
     """The line under the prompt: the model, the effort, the servers and how full
     the context is, as `/context` counts it, with a meter that turns yellow and
@@ -283,6 +305,11 @@ def toolbar(agent: Agent, hub: McpHub) -> FormattedText:
     bar: list[tuple[str, str]] = [("class:toolbar.strong", " " + config.model)]
     if config.reasoning_effort:
         bar.append(("", f" · {config.reasoning_effort}"))
+    if branch := _branch():
+        bar.append(("", f" · git:{branch}"))
+    if allowed := sorted(agent.always_allowed):
+        shown = ", ".join(allowed) if len(allowed) <= 2 else f"{len(allowed)} tools"
+        bar.append(("class:toolbar.warn", f" · always: {shown}"))
     hub.poll()  # servers that have all answered are counted at once
     if hub.starting:
         bar.append(("", " · starting MCP servers"))

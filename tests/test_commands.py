@@ -68,7 +68,7 @@ class TestCommandsWithAgent:
     ):
         run_repl(monkeypatch, make_agent(), self.inputs("/retry"))
 
-        assert "[Nothing to retry]" in capsys.readouterr().out
+        assert "Nothing to retry" in capsys.readouterr().out
         assert fake_server.requests == []
 
     def test_undo_removes_the_last_exchange(self, monkeypatch, make_agent, capsys):
@@ -80,12 +80,12 @@ class TestCommandsWithAgent:
             {"role": "user", "content": "first"},
             {"role": "assistant", "content": TEXT},
         ]
-        assert "[Last exchange removed]" in capsys.readouterr().out
+        assert "Last exchange removed" in capsys.readouterr().out
 
     def test_undo_with_nothing_to_undo(self, monkeypatch, make_agent, capsys):
         run_repl(monkeypatch, make_agent(), self.inputs("/undo"))
 
-        assert "[Nothing to undo]" in capsys.readouterr().out
+        assert "Nothing to undo" in capsys.readouterr().out
 
     def test_retry_after_undo_does_not_remove_an_older_exchange(
         self, monkeypatch, make_agent, fake_server
@@ -124,8 +124,8 @@ class TestCommandsWithAgent:
         run_repl(monkeypatch, make_agent(), lines)
 
         out = capsys.readouterr().out
-        assert "[Model: gpt-4o]" in out
-        assert "[Model: Other-Model]" in out
+        assert "Model: gpt-4o" in out
+        assert "Model: Other-Model" in out
         assert fake_server.requests[-1]["model"] == "Other-Model"
 
     def test_effort_sets_and_clears_the_reasoning_effort(
@@ -136,8 +136,8 @@ class TestCommandsWithAgent:
         run_repl(monkeypatch, make_agent(), lines)
 
         out = capsys.readouterr().out
-        assert "[Reasoning effort: model default]" in out
-        assert "[Reasoning effort: low]" in out
+        assert "Reasoning effort: model default" in out
+        assert "Reasoning effort: low" in out
         first, second = fake_server.requests
         assert first["reasoning"] == {"effort": "low"}
         assert "reasoning" not in second
@@ -165,7 +165,7 @@ class TestCommandsWithAgent:
             {"role": "user", "content": "c"},
             {"role": "assistant", "content": TEXT},
         ]
-        assert "[History reset]" in capsys.readouterr().out
+        assert "History reset" in capsys.readouterr().out
 
     @pytest.mark.parametrize("is_terminal", [True, False])
     def test_clear_clears_the_screen_only_on_a_terminal_and_keeps_the_history(
@@ -218,7 +218,7 @@ class TestCommandRegistry:
 
         run_repl(monkeypatch, make_agent(), ["/PING now", "/exit"])
 
-        assert "[pong now]\n\n" in capsys.readouterr().out
+        assert "pong now\n\n" in capsys.readouterr().out
 
     def test_a_handler_that_returns_nothing_prints_no_notice(
         self, monkeypatch, make_agent, capsys
@@ -392,8 +392,8 @@ class TestCompactCommands:
         run_repl(monkeypatch, agent, ["/compact", "/summary", "/exit"])
 
         out = capsys.readouterr().out
-        assert "[Summarizing earlier messages…]" in out
-        assert "[Summarized " in out and "earlier turns" in out
+        assert "Summarizing earlier messages…" in out
+        assert "Summarized " in out and "earlier turns" in out
         assert "\nNOTES 8\n" in out  # shown by /summary: the 8 turns summarized
         assert agent.context.summary == "## Goal\nNOTES 8"
 
@@ -412,7 +412,7 @@ class TestCompactCommands:
     ):
         run_repl(monkeypatch, make_agent(), ["/compact", "/exit"])
 
-        assert "[Nothing to summarize: the history is short]" in capsys.readouterr().out
+        assert "Nothing to summarize: the history is short" in capsys.readouterr().out
 
     def test_a_summary_that_fails_is_reported_and_changes_nothing(
         self, monkeypatch, make_agent, capsys
@@ -429,7 +429,7 @@ class TestCompactCommands:
     def test_summary_before_there_is_one(self, monkeypatch, make_agent, capsys):
         run_repl(monkeypatch, make_agent(), ["/summary", "/exit"])
 
-        assert "[No summary yet]" in capsys.readouterr().out
+        assert "No summary yet" in capsys.readouterr().out
 
     def test_reset_forgets_the_summary(self, monkeypatch, make_agent):
         agent = self.agent(make_agent, AUTO_COMPACT=False)
@@ -472,7 +472,7 @@ class TestServersCommand:
     def test_it_says_when_there_are_none(self, monkeypatch, make_agent, capsys):
         run_repl(monkeypatch, make_agent(), ["/servers", "/exit"])
 
-        assert "[No MCP servers]" in capsys.readouterr().out
+        assert "No MCP servers" in capsys.readouterr().out
 
     def test_every_server_gets_a_line_with_what_became_of_it(
         self, monkeypatch, make_agent, capsys, tmp_path
@@ -546,7 +546,7 @@ class TestToolsCommand:
     def test_it_says_when_there_are_none(self, monkeypatch, make_agent, capsys):
         run_repl(monkeypatch, make_agent(), ["/tools", "/exit"])
 
-        assert "[Tools: none]" in capsys.readouterr().out
+        assert "Tools: none" in capsys.readouterr().out
 
 
 FAKE = str(Path(__file__).parent / "fake_mcp_server.py")
@@ -573,7 +573,7 @@ class TestReconnectCommand:
     def test_without_servers_it_says_so(self, monkeypatch, make_agent, capsys):
         run_repl(monkeypatch, make_agent(), ["/reconnect", "/exit"])
 
-        assert "[No MCP servers to start]" in capsys.readouterr().out
+        assert "No MCP servers to start" in capsys.readouterr().out
 
     def test_an_unknown_name_is_a_warning(self, make_agent, hub):
         repl = Repl(self.agent_of(make_agent, hub), COMMANDS, hub=hub)
@@ -596,7 +596,7 @@ class TestReconnectCommand:
 
         run_repl(monkeypatch, agent, ["/reconnect", "/exit"], hub=hub)
 
-        assert "[No MCP server failed;" in capsys.readouterr().out
+        assert "No MCP server failed;" in capsys.readouterr().out
 
     def test_a_server_that_failed_is_started_and_the_agent_gets_its_tools(
         self, monkeypatch, make_agent, tmp_path, capsys
@@ -614,7 +614,7 @@ class TestReconnectCommand:
 
             assert "fake__add" in agent.tools
             assert agent.server_notes == {"fake": "Dates are YYYY-MM-DD."}
-            assert "[MCP server 'fake' is running: " in capsys.readouterr().out
+            assert "MCP server 'fake' is running: " in capsys.readouterr().out
         finally:
             hub.close()
 
@@ -627,7 +627,7 @@ class TestReconnectCommand:
         run_repl(monkeypatch, agent, ["/reconnect fake", "/exit"], hub=hub)
 
         assert agent.tools["fake__pid"].call("{}") != before
-        assert "[MCP server 'fake' is running: " in capsys.readouterr().out
+        assert "MCP server 'fake' is running: " in capsys.readouterr().out
 
     def test_a_server_that_fails_again_takes_its_tools_away(
         self, monkeypatch, make_agent, hub, capsys
@@ -679,7 +679,7 @@ class TestServersStartingInTheBackground:
         run_repl(monkeypatch, make_agent(), ["hi", "/exit"], hub=hub)
 
         out = capsys.readouterr().out
-        assert "[Waiting for the MCP servers…]" in out
+        assert "Waiting for the MCP servers…" in out
         assert "did not answer within 0.5 s" in out
         assert out.index("Waiting") < out.index("did not answer")
         assert len(fake_server.requests) == 1  # the turn went on without them
@@ -774,12 +774,12 @@ class TestSessionsCommand:
     def test_it_says_when_sessions_are_not_saved(self, monkeypatch, make_agent, capsys):
         run_repl(monkeypatch, make_agent(), ["/sessions", "/exit"])
 
-        assert "[Sessions are not saved]" in capsys.readouterr().out
+        assert "Sessions are not saved" in capsys.readouterr().out
 
     def test_it_says_when_there_are_none(self, monkeypatch, make_agent, store, capsys):
         run_repl(monkeypatch, make_agent(), ["/sessions", "/exit"], store=store)
 
-        assert "[No saved sessions for this directory]" in capsys.readouterr().out
+        assert "No saved sessions for this directory" in capsys.readouterr().out
 
     def test_without_a_terminal_it_lists_them_by_number_newest_first(
         self, make_agent, store, clock, capsys
@@ -791,7 +791,7 @@ class TestSessionsCommand:
         out = capsys.readouterr().out
         assert f"  1  newer prompt  ·  1 turn  ·  {ago(newer)}  ·  {newer.id}\n" in out
         assert f"  2  older prompt  ·  1 turn  ·  {ago(older)}  ·  {older.id}\n" in out
-        assert "[Continue one with /sessions NUMBER or /sessions ID]" in out
+        assert "Continue one with /sessions NUMBER or /sessions ID" in out
 
     def test_a_number_continues_that_session_in_place_of_the_conversation(
         self, make_agent, store, clock, capsys
@@ -890,6 +890,7 @@ class TestSessionsCommand:
         repl.handle("/sessions")
 
         assert repl.agent.context.items == make_context(1) and repl.saved is None
+        assert "Cancelled" in capsys.readouterr().out  # the menu left nothing else
 
     def test_the_menu_offers_the_newest_ten_and_the_list_all_of_them(
         self, make_agent, store, clock, capsys

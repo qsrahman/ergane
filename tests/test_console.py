@@ -82,7 +82,7 @@ class TestConsole:
         Console().notice("→ ok")
         sys.stdout.flush()
 
-        assert raw.getvalue() == b"[? ok]\n"
+        assert raw.getvalue() == b"? ok\n"
 
     def test_a_reply_after_a_status_line_starts_after_a_blank_line(self, capsys):
         console = Console()
@@ -91,7 +91,7 @@ class TestConsole:
         console.write("Hello")
         console.write(" world")
 
-        assert capsys.readouterr().out == "[read_file({})]\n\nHello world"
+        assert capsys.readouterr().out == "read_file({})\n\nHello world"
 
     def test_a_reply_after_a_blank_line_gets_no_second_one(self, capsys):
         console = Console()
@@ -100,7 +100,7 @@ class TestConsole:
 
         console.write("Hello")
 
-        assert capsys.readouterr().out == "[read_file({})]\n\nHello"
+        assert capsys.readouterr().out == "read_file({})\n\nHello"
 
     def test_a_reply_that_starts_with_its_own_newlines_gets_no_extra_blank(
         self, capsys
@@ -111,7 +111,7 @@ class TestConsole:
         console.write("\n")
         console.write("Hello")
 
-        assert capsys.readouterr().out == "[read_file({})]\n\nHello"
+        assert capsys.readouterr().out == "read_file({})\n\nHello"
 
     def test_text_before_a_status_line_and_the_reply_after_it_are_separate(
         self, capsys
@@ -122,7 +122,7 @@ class TestConsole:
 
         console.write("Done.")
 
-        assert capsys.readouterr().out == "Checking.\n\n[read_file({})]\n\nDone."
+        assert capsys.readouterr().out == "Checking.\n\nread_file({})\n\nDone."
 
     def test_an_empty_piece_does_not_use_up_the_blank_line(self, capsys):
         console = Console()
@@ -131,7 +131,7 @@ class TestConsole:
         console.write("")
         console.write("Hello")
 
-        assert capsys.readouterr().out == "[read_file({})]\n\nHello"
+        assert capsys.readouterr().out == "read_file({})\n\nHello"
 
     def test_a_reply_after_a_question_starts_after_a_blank_line(
         self, monkeypatch, capsys
@@ -170,17 +170,17 @@ class TestConsole:
         console.write("reply")
         console.notice("two")
 
-        assert capsys.readouterr().out == "[one]\n\nreply\n\n[two]\n"
+        assert capsys.readouterr().out == "one\n\nreply\n\ntwo\n"
 
     def test_notice_text_is_sanitized(self, capsys):
         Console().notice("failed: \x1b[2Jboom")
 
-        assert capsys.readouterr().out == "[failed: [2Jboom]\n"
+        assert capsys.readouterr().out == "failed: [2Jboom\n"
 
     def test_notice_text_is_flattened_to_one_line(self, capsys):
         Console().notice("line one\nline two\n\tindented")
 
-        assert capsys.readouterr().out == "[line one line two indented]\n"
+        assert capsys.readouterr().out == "line one line two indented\n"
 
     def test_end_line_and_blank(self, capsys):
         console = Console()
@@ -413,7 +413,7 @@ class TestConfirm:
         console.notice("Cancelled")
 
         # The notice starts a new line: the cursor was mid-line, after "^C".
-        assert capsys.readouterr().out == "\n[Cancelled]\n"
+        assert capsys.readouterr().out == "\nCancelled\n"
 
     def test_end_of_input_ends_the_line_the_question_left_open(
         self, monkeypatch, capsys
@@ -427,7 +427,7 @@ class TestConfirm:
         console.confirm(SAVE, "{}")
         console.notice("Closed")
 
-        assert capsys.readouterr().out == "\n[Closed]\n"
+        assert capsys.readouterr().out == "\nClosed\n"
 
 
 class TestConfirmMenu:
@@ -597,6 +597,7 @@ BOLD = "\x1b[0;1m"
 GREEN = "\x1b[0;32m"
 RED = "\x1b[0;31m"
 YELLOW = "\x1b[0;33m"
+CYAN = "\x1b[0;36m"
 
 
 class TestStyle:
@@ -615,24 +616,32 @@ class TestStyle:
     def test_a_notice_is_dimmed_where_there_is_colour(self, console, written, capsys):
         console.notice("Cancelled")
 
-        assert f"{DIM}[Cancelled]" in written.getvalue()
+        assert f"{DIM}Cancelled" in written.getvalue()
         assert capsys.readouterr().out == ""
 
     @pytest.mark.parametrize(
-        ("level", "code"), [("info", DIM), ("warning", YELLOW), ("error", RED)]
+        ("level", "text", "code"),
+        [
+            ("info", "something", DIM),
+            ("warning", "[something]", YELLOW),
+            ("error", "[something]", RED),
+        ],
     )
     def test_a_notice_is_coloured_by_how_serious_it_is(
-        self, console, written, level, code
+        self, console, written, level, text, code
     ):
         console.notice("something", level)
 
-        assert f"{code}[something]" in written.getvalue()
+        assert f"{code}{text}" in written.getvalue()
 
-    def test_a_notice_reads_the_same_without_colour(self, capsys):
+    def test_the_brackets_tell_a_warning_or_error_without_colour(self, capsys):
         for level in ("info", "warning", "error"):
             Console().notice("Response failed: boom", level)
 
-        assert capsys.readouterr().out == "[Response failed: boom]\n" * 3
+        # The brackets tell what colour does: a notice that is more than routine.
+        assert capsys.readouterr().out == (
+            "Response failed: boom\n[Response failed: boom]\n[Response failed: boom]\n"
+        )
 
     def test_a_call_has_its_name_in_bold_and_its_arguments_dim(self, console, written):
         console.call("read_file", '{"path": "notes.txt"}')
@@ -648,7 +657,7 @@ class TestStyle:
 
         assert capsys.readouterr().out == "partial"
         styled = written.getvalue()
-        assert styled.index("\n") < styled.index(f"{DIM}[Cancelled]")
+        assert styled.index("\n") < styled.index(f"{DIM}Cancelled")
 
     def test_a_reply_is_not_styled(self, console, written, capsys):
         console.write("hello\n")
@@ -668,7 +677,7 @@ class TestStyle:
         # Under pytest stdout is not a terminal.
         Console().notice("Cancelled")
 
-        assert capsys.readouterr().out == "[Cancelled]\n"
+        assert capsys.readouterr().out == "Cancelled\n"
 
     def test_no_color_turns_it_off(self, monkeypatch, written):
         monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
@@ -693,7 +702,7 @@ class TestColumns:
         console.columns([("a", "one")])
         console.notice("done")
 
-        assert capsys.readouterr().out == "  a  one\n\n[done]\n"
+        assert capsys.readouterr().out == "  a  one\n\ndone\n"
 
     def test_a_long_text_wraps_under_its_own_column(self, capsys, monkeypatch):
         monkeypatch.setenv("COLUMNS", "40")
@@ -1003,7 +1012,7 @@ class TestWhatIsPrintedAfterWhat:
 
         console.notice("one")
 
-        assert capsys.readouterr().out == "Checking.\n\n[one]\n"
+        assert capsys.readouterr().out == "Checking.\n\none\n"
 
     def test_a_reply_that_ended_its_line_still_gets_the_blank_line(self, capsys):
         console = Console()
@@ -1011,7 +1020,7 @@ class TestWhatIsPrintedAfterWhat:
 
         console.notice("one")
 
-        assert capsys.readouterr().out == "Checking.\n\n[one]\n"
+        assert capsys.readouterr().out == "Checking.\n\none\n"
 
     def test_a_blank_line_that_is_already_there_is_not_doubled(self, capsys):
         console = Console()
@@ -1020,7 +1029,7 @@ class TestWhatIsPrintedAfterWhat:
 
         console.notice("one")
 
-        assert capsys.readouterr().out == "Checking.\n\n[one]\n"
+        assert capsys.readouterr().out == "Checking.\n\none\n"
 
     def test_status_blocks_after_one_another_have_no_blank_between_them(self, capsys):
         console = Console()
@@ -1031,13 +1040,13 @@ class TestWhatIsPrintedAfterWhat:
         console.call("read_file", '{"path": "a"}')
 
         assert capsys.readouterr().out == (
-            "Checking.\n\n[one]\n[two]\n▸ read_file  path=a\n"
+            "Checking.\n\none\ntwo\n▸ read_file  path=a\n"
         )
 
     def test_nothing_is_set_apart_from_nothing(self, capsys):
         Console().notice("one")
 
-        assert capsys.readouterr().out == "[one]\n"
+        assert capsys.readouterr().out == "one\n"
 
     def test_a_blank_line_between_two_notices_is_not_a_reply_either(self, capsys):
         console = Console()
@@ -1046,7 +1055,7 @@ class TestWhatIsPrintedAfterWhat:
 
         console.notice("b")
 
-        assert capsys.readouterr().out == "[a]\n\n[b]\n"
+        assert capsys.readouterr().out == "a\n\nb\n"
 
     def test_text_of_only_spaces_is_not_a_reply(self, capsys):
         console = Console()
@@ -1055,7 +1064,7 @@ class TestWhatIsPrintedAfterWhat:
 
         console.notice("b")
 
-        assert capsys.readouterr().out == "[a]\n  \n[b]\n"
+        assert capsys.readouterr().out == "a\n  \nb\n"
 
     def test_a_blank_line_before_the_first_notice_is_not_a_reply(self, capsys):
         console = Console()
@@ -1063,7 +1072,7 @@ class TestWhatIsPrintedAfterWhat:
 
         console.notice("Waiting for the MCP servers…")
 
-        assert capsys.readouterr().out == "\n[Waiting for the MCP servers…]\n"
+        assert capsys.readouterr().out == "\nWaiting for the MCP servers…\n"
 
 
 class TestLongNotices:
@@ -1072,7 +1081,9 @@ class TestLongNotices:
     ):
         monkeypatch.setenv("COLUMNS", "40")
 
-        Console().notice("Todos updated: 0/2 completed, 1 in progress. Now: write it")
+        Console().notice(
+            "Todos updated: 0/2 completed, 1 in progress. Now: write it", "warning"
+        )
 
         lines = capsys.readouterr().out.splitlines()
         assert len(lines) > 1
@@ -1090,7 +1101,7 @@ class TestLongNotices:
 
         Console().notice("Cancelled")
 
-        assert capsys.readouterr().out == "[Cancelled]\n"
+        assert capsys.readouterr().out == "Cancelled\n"
 
     def test_a_word_longer_than_the_line_is_broken_rather_than_overflowing(
         self, monkeypatch, capsys
@@ -1122,6 +1133,29 @@ class TestCodeFences:
         # The code and the text around it carry no style of their own.
         assert "uv run pytest" in shown and f"{DIM}uv run pytest" not in shown
         assert f"{DIM}Done." not in shown and f"{DIM}Run it:" not in shown
+
+    def test_bold_and_code_in_a_reply_are_styled(self, console, written):
+        console.write("a **b** and `c`\n")
+
+        shown = written.getvalue()
+        assert f"{BOLD}**" in shown and f"{CYAN}`" in shown
+
+    def test_a_mark_left_open_does_not_colour_the_next_line(self, console, written):
+        console.write("**open\nplain\n")
+
+        assert f"{BOLD}plain" not in written.getvalue()
+
+    def test_a_status_block_closes_the_marks_of_a_reply(self, console, written):
+        console.write("**half")
+        console.notice("n")
+        console.write("plain\n")
+
+        assert f"{BOLD}plain" not in written.getvalue()
+
+    def test_a_reply_without_colour_is_printed_as_written(self, capsys):
+        Console().write("**b** `c`\n# h\n")
+
+        assert capsys.readouterr().out == "**b** `c`\n# h\n"
 
     def test_an_indented_fence_counts(self, console, written):
         console.write("  ```\ncode\n  ```\n")

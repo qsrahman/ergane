@@ -59,6 +59,65 @@ class TestToolbar:
             tmp_path, model="m1", reasoning_effort="high"
         )
 
+    def test_it_names_the_git_branch_of_the_working_directory(
+        self, tmp_path, monkeypatch
+    ):
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/feature/x\n")
+        (tmp_path / "sub").mkdir()
+        monkeypatch.chdir(tmp_path / "sub")  # found from a directory inside it
+
+        assert " · git:feature/x  " in self.toolbar(tmp_path, model="m1")
+
+    def test_a_detached_head_shows_a_short_id(self, tmp_path):
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".git" / "HEAD").write_text("0123456789abcdef\n")
+
+        assert " · git:0123456  " in self.toolbar(tmp_path, model="m1")
+
+    def test_a_linked_worktree_is_followed_to_its_head(self, tmp_path, monkeypatch):
+        (tmp_path / "real").mkdir()
+        (tmp_path / "real" / "HEAD").write_text("ref: refs/heads/wt\n")
+        (tmp_path / ".git").write_text("gitdir: real\n")  # relative to the file
+        (tmp_path / "sub").mkdir()
+        monkeypatch.chdir(tmp_path / "sub")
+
+        assert " · git:wt  " in self.toolbar(tmp_path, model="m1")
+
+    def test_a_head_with_control_characters_is_not_shown(self, tmp_path):
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/a\x1b[2Jb\n")
+
+        assert "git:" not in self.toolbar(tmp_path, model="m1")
+
+    def test_there_is_no_branch_outside_a_repository(self, tmp_path):
+        assert "git:" not in self.toolbar(tmp_path, model="m1")
+
+    def test_it_names_the_tools_allowed_for_the_session(self):
+        agent = Agent(make_config(max_context_tokens=10000))
+        agent.always_allowed.update({"write_file", "run_command"})
+
+        text = fragment_list_to_text(toolbar(agent, McpHub({}, Path())))
+
+        assert " · always: run_command, write_file  " in text
+
+    def test_the_allowed_tools_are_in_the_same_order_every_time(self):
+        for first, second in [("b", "a"), ("y", "x"), ("t", "s"), ("n", "m")] * 4:
+            agent = Agent(make_config(max_context_tokens=10000))
+            agent.always_allowed.update({first, second})
+
+            text = fragment_list_to_text(toolbar(agent, McpHub({}, Path())))
+
+            assert f" · always: {min(first, second)}, {max(first, second)}  " in text
+
+    def test_many_allowed_tools_are_counted(self):
+        agent = Agent(make_config(max_context_tokens=10000))
+        agent.always_allowed.update({"a", "b", "c"})
+
+        text = fragment_list_to_text(toolbar(agent, McpHub({}, Path())))
+
+        assert " · always: 3 tools  " in text
+
     def test_the_count_of_the_server_is_not_marked_as_an_estimate(self):
         agent = Agent(make_config(max_context_tokens=10000))
         anchor(agent, 2500)
@@ -214,7 +273,7 @@ class TestTerminalSession:
         prompts, _ = self.read(tmp_path, "\x04x\r/exit\r", conversation=True)
 
         assert prompts == ["x"]
-        assert "[Press Ctrl-D again, or type /exit, to quit]" in capsys.readouterr().out
+        assert "Press Ctrl-D again, or type /exit, to quit" in capsys.readouterr().out
 
     def test_two_ctrl_d_in_a_row_quit(self, tmp_path, capsys):
         self.read(tmp_path, "\x04\x04", conversation=True)

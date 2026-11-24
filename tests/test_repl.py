@@ -70,7 +70,7 @@ class TestRepl:
 
     def test_one_ctrl_c_at_the_prompt_does_not_quit(self, repl, capsys):
         assert repl([KeyboardInterrupt(), "hi", "/exit"]) == ["hi"]
-        assert "[Press Ctrl-C again, or type /exit, to quit]" in capsys.readouterr().out
+        assert "Press Ctrl-C again, or type /exit, to quit" in capsys.readouterr().out
 
     def test_typing_between_two_ctrl_c_starts_the_count_again(self, repl, capsys):
         inputs = [KeyboardInterrupt(), "hi", KeyboardInterrupt(), "there", "/exit"]
@@ -258,7 +258,7 @@ class TestReplRendering:
         run_repl(monkeypatch, agent, ["hi", "/exit"])
 
         out = capsys.readouterr().out
-        assert f"[Context trimmed: oldest turns dropped]\n\n{TEXT}\n" in out
+        assert f"Context trimmed: oldest turns dropped\n\n{TEXT}\n" in out
 
 
 def test_stream_error_notice_follows_the_partial_reply(monkeypatch, make_agent, capsys):

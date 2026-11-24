@@ -4,6 +4,7 @@ the REPL, and closes the servers whatever happens."""
 import argparse
 import sys
 from collections.abc import Sequence
+from functools import partial
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any, NoReturn
@@ -177,7 +178,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             # the user types; the first turn waits for them if they are not up.
             hub.begin()
         else:
-            mcp_tools = hub.start(console.notice)
+            mcp_tools = hub.start(partial(console.notice, level="warning"))
     except KeyboardInterrupt:
         raise SystemExit(130) from None
 

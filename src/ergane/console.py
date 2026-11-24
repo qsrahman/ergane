@@ -27,6 +27,7 @@ from prompt_toolkit.formatted_text import AnyFormattedText, FormattedText
 from prompt_toolkit.output import Output
 from prompt_toolkit.styles import Style
 
+from ergane.markdown import Markdown
 from ergane.tools import Tool
 
 # The look of what is not a reply: the colours are the terminal's own (ANSI names).
@@ -48,6 +49,8 @@ _STYLE = Style.from_dict(
         "diff-add": "ansigreen",
         "diff-del": "ansired",
         "fence": "dim",
+        "md-bold": "bold",
+        "md-code": "ansicyan",
         "todo-done": "dim",
         "todo-active": "bold",
     }
@@ -218,7 +221,7 @@ class Console:
         # Newlines at the end of what was printed, at most 2: the cursor starts as if
         # after a blank line, so that nothing is set apart from nothing.
         self.trailing = 2
-        self._line = ""  # the line of a reply that is being written
+        self._markdown = Markdown()  # the reply that is being written
         # Text the terminal's encoding cannot show is replaced, not an error that
         # would end the turn halfway through a reply.
         if isinstance(sys.stdout, io.TextIOWrapper):
@@ -241,7 +244,7 @@ class Console:
         if status:
             # Never inside a line of reply, and a blank line after one.
             lead = "\n" * max((2 if self.after_text else 1) - self.trailing, 0)
-            self._line = ""
+            self._markdown.reset()
         elif self.after_status and text.strip():
             lead = "\n"  # a reply stands apart from the status lines
         else:
@@ -278,15 +281,7 @@ class Console:
         Args:
             text: Text to print, such as a piece of a streamed reply.
         """
-        pieces = []
-        for part in re.findall(r"[^\n]*\n|[^\n]+", text):
-            line = self._line + part
-            # A fence of a code block, and its language, are dimmed: the code is the
-            # text, and the marks around it are not.
-            pieces.append(
-                ("class:fence" if line.lstrip().startswith("```") else "", part)
-            )
-            self._line = "" if part.endswith("\n") else line
+        pieces = self._markdown.feed(text)
         self._emit(pieces, status=False)
 
     def blank(self) -> None:
@@ -369,16 +364,18 @@ class Console:
             self.write("\n")
 
     def notice(self, text: str, level: Level = "info") -> None:
-        """Print a bracketed status line.
+        """Print a status line.
 
         Args:
             text: The status message; it is flattened to one line, so text from
-                the server cannot break out of the brackets.
-            level: How serious it is, shown by colour: dim for what is routine, yellow
-                for what the user may want to act on, red for what went wrong.
+                the server cannot pass for something else.
+            level: How serious it is: dim and plain for what is routine, and in
+                brackets, yellow or red, for what the user may want to act on or what
+                went wrong (the brackets say so without colour).
         """
+        flat = " ".join(text.split())
         lines = textwrap.wrap(
-            f"[{' '.join(text.split())}]",
+            flat if level == "info" else f"[{flat}]",
             _room(0),
             subsequent_indent=" ",
             break_on_hyphens=False,

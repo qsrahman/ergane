@@ -147,6 +147,9 @@ The modules, in dependency order (each imports only from those above it):
   wins, here and wherever tools are added). It reads its settings from `Config`, each
   where it is used (as do `Responder` and `Compactor`), and imports nothing of MCP (a
   test pins this).
+- `markdown.py`: `Markdown`, the light styling of a streamed reply (`**bold**`, `` `code` ``,
+  `#` headings, dim fences) a piece at a time; the marks stay in the text. Imports nothing of
+  ergane.
 - `console.py`: all terminal output, `sanitize()`, and the permission question. A status
   line is styled pieces (prompt_toolkit's), printed by prompt_toolkit where there is
   colour; the question is a typed line, or a menu when `Repl` gives the console `choose`.
@@ -250,7 +253,8 @@ What must stay true:
   is not shown (the reply says what it found); a server that starts is not announced; the
   banner is one line. Before adding output, ask whether anyone would miss it.
 - A notice has a level (`info`, `warning`, `error`: dim, yellow, red) that the caller
-  gives: the agent's own are routine, and `Repl` and `cli.py` mark the failures and the
+  gives; only a warning or an error is in brackets, so that colour is not the only thing
+  that tells them from a routine line: the agent's own are routine, and `Repl` and `cli.py` mark the failures and the
   mistakes. A status line that only reports a call shows plain arguments as `key=value`;
   the permission question is always the exact JSON that will run. A change to a file is
   shown as a diff coloured by its lines (`diff-add`, `diff-del`, `diff-hunk`,

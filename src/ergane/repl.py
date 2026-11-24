@@ -216,7 +216,9 @@ class Repl:
             wait: Whether to wait for the servers that have not answered yet. A turn
                 waits (it needs the tools); a command does not.
         """
-        for update in self.hub.take(self.console.notice, wait=wait):
+        for update in self.hub.take(
+            partial(self.console.notice, level="warning"), wait=wait
+        ):
             self.apply(update)
 
     def ask(self, prompt: str) -> None:

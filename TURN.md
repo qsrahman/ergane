@@ -42,7 +42,7 @@ that `Repl.ask` hands it, which are methods of `Console`:
 | Callback    | Is                | Carries                                                       |
 |-------------|-------------------|---------------------------------------------------------------|
 | `on_text`   | `Console.write`   | the reply, as it arrives                                      |
-| `on_notice` | `Console.notice`  | status in brackets, wrapped at the terminal's width: a trim, a retry, a dropped result, a repeat warning |
+| `on_notice` | `Console.notice`  | status line (in brackets when it is a warning or an error), wrapped at the terminal's width: a trim, a retry, a dropped result, a repeat warning |
 | `confirm`   | `Console.confirm` | the permission question; returns whether the call may run     |
 | `on_call`   | `Console.call`    | a call that runs without asking, as one line                  |
 | `on_todos`  | `Console.todos`   | the model's checklist after it changed, with the finished steps dim and the current one bold |
