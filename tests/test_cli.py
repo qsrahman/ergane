@@ -388,13 +388,15 @@ class TestMcpServers:
 
         # The banner is the first line: nothing was said of the server.
         first_line = capsys.readouterr().out.splitlines()[0]
-        assert first_line == "ergane · banner-model · /help for commands"
+        assert first_line.startswith("ergane · banner-model · ")
+        assert first_line.endswith(" · /help for commands")
 
     def test_a_server_that_fails_does_not_stop_ergane(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
     ):
         write_config_json(tmp_path, {"broken": {"command": "/no/such/server"}})
         monkeypatch.setattr("builtins.input", lambda _prompt: "/exit")
+        monkeypatch.setenv("COLUMNS", "500")  # the failure is one line, not wrapped
 
         main([])
 

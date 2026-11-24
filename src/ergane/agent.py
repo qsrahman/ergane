@@ -137,6 +137,7 @@ class _Callbacks:
     on_notice: Callable[[str], None]
     on_call: Callable[[str, str], None]
     confirm: Callable[[Tool, str], bool | Literal["always"]]
+    on_todos: Callable[[str], None]
 
 
 @dataclass
@@ -210,6 +211,7 @@ class Agent:
             [Tool, str], bool | Literal["always"]
         ] = lambda tool, arguments: False,
         on_call: Callable[[str, str], None] = lambda name, arguments: None,
+        on_todos: Callable[[str], None] = lambda report: None,
     ) -> None:
         """Send one user message, passing the reply text to on_text.
 
@@ -237,7 +239,9 @@ class Agent:
                 tool call that runs without asking, before it runs, to show it.
                 A call that is asked about is shown by `confirm`, and a result is
                 not shown at all: it goes to the model, and the reply says what it
-                found.
+                found. The `todo` tool's call is not shown either: `on_todos` is.
+            on_todos: Called with `TodoList.report()` after a round that changed the
+                model's checklist, for the user to follow it.
 
         Raises:
             TurnError: If the response is incomplete, failed, refused or has no
@@ -249,7 +253,7 @@ class Agent:
                 (see above) before any of these is raised, except the budget one.
             KeyboardInterrupt: On Ctrl-C, after the turn is kept (see above).
         """
-        io = _Callbacks(on_text, on_notice, on_call, confirm)
+        io = _Callbacks(on_text, on_notice, on_call, confirm, on_todos)
         self.compactor.compact_if_due(
             self.request_tokens()
             + estimate_tokens({"role": "user", "content": prompt}),
@@ -377,7 +381,7 @@ class Agent:
             )
             self._run_tools(calls, turn.items, io)
             if self.todos.revision != listed:
-                io.on_notice(self.todos.summary())
+                io.on_todos(self.todos.report())
             self._watch_loop(turn, calls, io)
         except KeyboardInterrupt:
             # A call that was running, or had not run yet, has no output: say so, or
@@ -734,7 +738,8 @@ class Agent:
             tool = offered.get(call.name)
             problem = tool.check(call.arguments) if tool else None
             if tool is not None and problem is None and tool.read_only:
-                io.on_call(call.name, call.arguments)
+                if tool is not self._todo_tool:  # the list is shown by `on_todos`
+                    io.on_call(call.name, call.arguments)
                 together.append((call, _Running(tool, call.arguments, self._slots)))
                 continue
             settle()  # what came before is answered first

@@ -103,7 +103,7 @@ The modules, in dependency order (each imports only from those above it):
   and the `${NAME}` placeholders (`fill_placeholders`).
 - `todos.py`: `TodoList` and its `todo` tool (whole-list replace, one `in_progress` at a
   time, held in memory, not saved with a session). The agent offers it only when it has
-  another tool, shows a change as one notice, and puts a list with open steps into the
+  another tool, shows a change as a checklist (`on_todos`, not a notice), and puts a list with open steps into the
   instructions of each request, since old tool results are dropped from the history.
 - `builtin/`: ergane's own tools, each module only `@tool` functions (and the helpers
   they share, whose names start with `_`, which `tools_in` skips). In dependency order:
@@ -254,7 +254,11 @@ What must stay true:
   mistakes. A status line that only reports a call shows plain arguments as `key=value`;
   the permission question is always the exact JSON that will run. A change to a file is
   shown as a diff coloured by its lines (`diff-add`, `diff-del`, `diff-hunk`,
-  `diff-file`), whose first line names the file once.
+  `diff-file`), whose first line names the file once. Notices wrap at the terminal's
+  width with a hanging indent, a status block after reply text is set apart by a blank
+  line (`Console.after_text` and `trailing` keep track), and the dimmed fence lines of
+  a code block are found a line at a time (`Console._line`). A command returns `Warn`
+  or `Fail` (strings) to say how it went wrong.
 - **The look is the terminal's own.** Styles use ANSI names (`ansicyan`,
   `ansibrightblack`), never hex, so a theme decides the colours; text must still read
   without them (the toolbar meter writes its percentage too), and `NO_COLOR` is honoured.

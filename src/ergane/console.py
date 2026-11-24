@@ -19,6 +19,7 @@ import shutil
 import sys
 import textwrap
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any, Literal
 
 from prompt_toolkit import print_formatted_text
@@ -46,6 +47,9 @@ _STYLE = Style.from_dict(
         "diff-hunk": "dim",
         "diff-add": "ansigreen",
         "diff-del": "ansired",
+        "fence": "dim",
+        "todo-done": "dim",
+        "todo-active": "bold",
     }
 )
 
@@ -103,6 +107,18 @@ def _cut_strings(value: Any, cap: int) -> Any:
     if isinstance(value, dict):
         return {key: _cut_strings(item, cap) for key, item in value.items()}
     return value
+
+
+def _short(directory: Path) -> str:
+    """A directory for the banner: under the home directory as `~/…`, and only its last
+    two parts, after `…/`, when it would be long."""
+    try:
+        text = "~/" + directory.relative_to(Path.home()).as_posix()
+    except ValueError:
+        text = directory.as_posix()
+    if len(text) > 40:
+        text = "…/" + "/".join(directory.parts[-2:])
+    return text
 
 
 def _room(used: int) -> int:
@@ -196,6 +212,13 @@ class Console:
         )
         self.at_line_start = True
         self.after_status = False  # whether the last output was a status block
+        # Whether the last thing printed, since the last status block, was text with
+        # something in it (a reply): a status block after it is set apart by a blank line.
+        self.after_text = False
+        # Newlines at the end of what was printed, at most 2: the cursor starts as if
+        # after a blank line, so that nothing is set apart from nothing.
+        self.trailing = 2
+        self._line = ""  # the line of a reply that is being written
         # Text the terminal's encoding cannot show is replaced, not an error that
         # would end the turn halfway through a reply.
         if isinstance(sys.stdout, io.TextIOWrapper):
@@ -215,12 +238,17 @@ class Console:
         if not text:
             return
         styled = self.color and any(style for style, _ in pieces)  # not a reply
-        if status and not self.at_line_start:
-            pieces.insert(0, ("", "\n"))  # never inside a line of reply
-            text = "\n" + text
-        elif self.after_status and not status and text.strip():
-            pieces.insert(0, ("", "\n"))  # a reply stands apart from the status lines
-            text = "\n" + text
+        if status:
+            # Never inside a line of reply, and a blank line after one.
+            lead = "\n" * max((2 if self.after_text else 1) - self.trailing, 0)
+            self._line = ""
+        elif self.after_status and text.strip():
+            lead = "\n"  # a reply stands apart from the status lines
+        else:
+            lead = ""
+        if lead:
+            pieces.insert(0, ("", lead))
+            text = lead + text
         if styled:
             print_formatted_text(
                 FormattedText(pieces),
@@ -233,7 +261,16 @@ class Console:
         else:
             print(text, end="", flush=True)
         self.at_line_start = text.endswith("\n")
+        newlines = len(text) - len(text.rstrip("\n"))
+        # Text that is only newlines adds to those before it.
+        self.trailing = min(
+            self.trailing + newlines if not text.strip("\n") else newlines, 2
+        )
         self.after_status = status
+        if status:
+            self.after_text = False
+        elif text.strip():
+            self.after_text = True
 
     def write(self, text: str) -> None:
         """Print plain text as it is, without adding a newline.
@@ -241,7 +278,16 @@ class Console:
         Args:
             text: Text to print, such as a piece of a streamed reply.
         """
-        self._emit([("", text)], status=False)
+        pieces = []
+        for part in re.findall(r"[^\n]*\n|[^\n]+", text):
+            line = self._line + part
+            # A fence of a code block, and its language, are dimmed: the code is the
+            # text, and the marks around it are not.
+            pieces.append(
+                ("class:fence" if line.lstrip().startswith("```") else "", part)
+            )
+            self._line = "" if part.endswith("\n") else line
+        self._emit(pieces, status=False)
 
     def blank(self) -> None:
         """Print an empty line."""
@@ -281,10 +327,13 @@ class Console:
                 self.write(f"{indent}{line}\n")
         self.blank()
 
-    def banner(self, model: str | None) -> None:
+    def banner(self, model: str | None, directory: Path | None = None) -> None:
         """Print the line that opens a session: the name in bold, the rest dim. The
-        model is named only where there is no toolbar to show it."""
+        model is named only where there is no toolbar to show it, and the directory is
+        the one the file tools work in (shortened, if it is long)."""
         rest = f" · {model}" if model else ""
+        if directory is not None:
+            rest += f" · {_short(directory)}"
         self._emit(
             [
                 ("class:title", "ergane"),
@@ -293,6 +342,26 @@ class Console:
             ],
             status=False,
         )
+
+    def todos(self, report: str) -> None:
+        """Print the model's checklist after it changed it: a dim heading, then a line
+        for each step, the finished ones dim and the one under way bold.
+
+        Args:
+            report: `TodoList.report()`: the heading, then one line to a step, each
+                starting with its mark (`[x]`, `[>]`, `[ ]` or `[-]`).
+        """
+        heading, _, steps = report.partition("\n")
+        pieces = [("class:heading", heading + "\n")]
+        for line in steps.splitlines():
+            mark = line[:3]
+            style = {
+                "[x]": "class:todo-done",
+                "[-]": "class:todo-done",
+                "[>]": "class:todo-active",
+            }.get(mark, "")
+            pieces.append((style, line + "\n"))
+        self._emit(pieces, status=True)
 
     def end_line(self) -> None:
         """Finish the current line, if one was started."""
@@ -308,9 +377,13 @@ class Console:
             level: How serious it is, shown by colour: dim for what is routine, yellow
                 for what the user may want to act on, red for what went wrong.
         """
-        self._emit(
-            [(_NOTICE_STYLES[level], f"[{' '.join(text.split())}]\n")], status=True
+        lines = textwrap.wrap(
+            f"[{' '.join(text.split())}]",
+            _room(0),
+            subsequent_indent=" ",
+            break_on_hyphens=False,
         )
+        self._emit([(_NOTICE_STYLES[level], "\n".join(lines) + "\n")], status=True)
 
     def _call_line(self, name: str, arguments: str, outcome: str, style: str) -> None:
         """Print a tool call as one status line: `▸ name  arguments`, then `outcome`.
@@ -348,12 +421,14 @@ class Console:
         more = shortened or tool.preview is not None
         prompt = f"{before}{shown}? [y/N/a{'/?' if more else ''}] "
         self.at_line_start = False  # the prompt leaves the cursor after it
+        self.trailing = 0
         try:
             answer = input(sanitize(prompt)).strip().lower()
         except EOFError:
             print()  # no Enter ended the line
             answer = ""
         self.at_line_start = True
+        self.trailing = 1
         return {"y": "y", "yes": "y", "a": "a", "always": "a", "?": "?"}.get(
             answer, "n"
         )
@@ -450,6 +525,7 @@ class Console:
         self.after_status = True
         if self.choose is not None:
             self.at_line_start = True  # the menu was erased
+            self.trailing = 1
             decided = {"y": "allowed", "a": "always allowed"}.get(answer, "denied")
             style = "class:allowed" if answer in ("y", "a") else "class:denied"
             self._call_line(tool.name, arguments, decided, style)
@@ -464,3 +540,5 @@ class Console:
             print("\033[2J\033[3J\033[H", end="", flush=True)
             self.at_line_start = True
             self.after_status = False
+            self.after_text = False
+            self.trailing = 2

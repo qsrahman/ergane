@@ -90,6 +90,21 @@ class TestTodoTool:
         assert todos.items == []
 
 
+class TestTheReportForTheUser:
+    def test_it_is_a_heading_with_the_count_and_the_checklist(self):
+        todos = TodoList()
+        call(todos, ("a", "completed"), ("b", "in_progress"), ("c", "pending"))
+
+        assert todos.report() == "Todos 1/3 done\n[x] a\n[>] b\n[ ] c"
+
+    def test_a_list_that_was_cleared_says_so(self):
+        todos = TodoList()
+        call(todos, ("a", "pending"))
+        call(todos)
+
+        assert todos.report() == "Todos cleared"
+
+
 class TestTodoNotes:
     def test_a_list_with_open_steps_is_written_out(self):
         todos = TodoList()
@@ -165,19 +180,20 @@ class TestAgentWithTodos:
             return call(agent.todos, ("a", "in_progress"))
 
         agent.add_tools([tool_with(read_file)])
-        notices: list[str] = []
+        reports: list[str] = []
 
-        agent.run_turn("tool_call", on_notice=notices.append)
+        agent.run_turn("tool_call", on_todos=reports.append)
 
-        assert notices == ["Todos updated: 0/1 completed, 1 in progress. Now: a"]
+        assert reports == ["Todos 0/1 done\n[>] a"]
 
     def test_a_round_that_leaves_the_list_alone_shows_nothing(self, make_agent):
         agent = make_agent(tools=[tool_with(read_file)])
         notices: list[str] = []
+        reports: list[str] = []
 
-        agent.run_turn("tool_call", on_notice=notices.append)
+        agent.run_turn("tool_call", on_notice=notices.append, on_todos=reports.append)
 
-        assert notices == []
+        assert notices == [] and reports == []
 
     def test_reset_and_restore_forget_the_list(self, make_agent):
         agent = make_agent(tools=[tool_with(read_file)])
@@ -230,12 +246,12 @@ class TestTheTodoToolThroughTheModel:
         self, make_agent, fake_server, streaming
     ):
         agent = self.agent(make_agent, streaming)
-        notices: list[str] = []
+        reports: list[str] = []
         shown: list[str] = []
 
         agent.run_turn(
             "tool_todo",
-            on_notice=notices.append,
+            on_todos=reports.append,
             on_call=lambda name, arguments: shown.append(name),
         )
 
@@ -246,11 +262,10 @@ class TestTheTodoToolThroughTheModel:
             "Todos updated: 0/2 completed, 1 in progress, 1 pending. Now: write it"
         )
         assert agent.todos.render() == "[>] write it\n[ ] test it"
-        # It runs without asking, shown as a line, and the user is told of the change.
-        assert shown == ["todo"]
-        assert notices == [
-            "Todos updated: 0/2 completed, 1 in progress, 1 pending. Now: write it"
-        ]
+        # It runs without asking and is not shown as a call line: the user is shown the
+        # checklist instead.
+        assert shown == []
+        assert reports == ["Todos 0/2 done\n[>] write it\n[ ] test it"]
         # The call and its output are in the history, with the reply.
         items = agent.context.items
         assert [i.get("type") for i in items[1:3]] == [

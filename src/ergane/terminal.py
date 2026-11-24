@@ -22,6 +22,7 @@ from prompt_toolkit.input import Input
 from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
+from prompt_toolkit.lexers import SimpleLexer
 from prompt_toolkit.output import Output
 from prompt_toolkit.shortcuts.choice_input import ChoiceInput
 from prompt_toolkit.styles import Style
@@ -54,6 +55,7 @@ _STYLE = Style.from_dict(
         "toolbar.meter": "fg:default",
         "toolbar.warn": "ansiyellow",
         "toolbar.bad": "ansired",
+        "typed": "bold",
         "selected-option": "ansicyan bold",
         "number": "ansibrightblack",
         "completion-menu": "fg:default bg:default",
@@ -68,7 +70,7 @@ _STYLE = Style.from_dict(
 
 # The prompt at a terminal; redirected input is read with a plain "> ".
 PROMPT = FormattedText([("class:prompt", "❯ ")])
-PLACEHOLDER = "Ask anything, or /help for commands. Alt-Enter adds a line."
+PLACEHOLDER = "Ask anything, or /help for commands"
 
 # How many cells the context meter in the toolbar has, and the shares of the budget at
 # which it turns yellow and red.
@@ -225,6 +227,8 @@ def terminal_session(
         history=_history_file(history),
         completer=CommandCompleter(commands),
         auto_suggest=AutoSuggestFromHistory(),
+        # What is typed stays bold in the scrollback, so a prompt stands out from its reply.
+        lexer=SimpleLexer("class:typed"),
         prompt_continuation=_continuation,
         key_bindings=_KEYS,
         style=_STYLE,

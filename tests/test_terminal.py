@@ -506,8 +506,8 @@ class TestABlankPrompt:
         assert self.erase(100).endswith("\x1b[A\x1b[J")
 
     def test_a_placeholder_that_wrapped_is_cleared_whole(self, tmp_path):
-        assert len("❯ " + PLACEHOLDER) > 40
-        assert self.erase(40).endswith("\x1b[2A\x1b[J")
+        assert len("❯ " + PLACEHOLDER) > 30
+        assert self.erase(30).endswith("\x1b[2A\x1b[J")
 
 
 class TestTheReplAndABlankPrompt:
@@ -532,8 +532,25 @@ class TestTheReplAndABlankPrompt:
     def test_the_banner_leaves_the_model_to_the_toolbar(self, tmp_path, capsys):
         _, printed = self.run(tmp_path, "/exit\r", capsys)
 
-        assert printed.startswith("ergane · /help for commands\n\n")
+        banner = printed.splitlines()[0]
+        assert banner.startswith("ergane · ") and banner.endswith("/help for commands")
         assert make_config().model not in printed
+
+
+class TestWhatIsTyped:
+    def test_it_is_bold_so_a_prompt_stands_out_from_its_reply(self, tmp_path):
+        written = io.StringIO()
+        output = Vt100_Output(written, lambda: Size(24, 100), term="xterm-256color")
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, tmp_path / "history", input=pipe, output=output
+            )
+            assert session is not None
+            pipe.send_text("hello\r")
+
+            assert session.prompt("> ") == "hello"
+
+        assert "\x1b[0;1mhello" in written.getvalue()
 
 
 class TestMenuOfSessions:

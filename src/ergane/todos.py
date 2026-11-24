@@ -104,6 +104,14 @@ class TodoList:
                 text += f". Now: {item.content}"
         return text
 
+    def report(self) -> str:
+        """The list for the user after a change: a heading with the count, then the
+        checklist."""
+        if not self.items:
+            return "Todos cleared"
+        done = sum(item.status == "completed" for item in self.items)
+        return f"Todos {done}/{len(self.items)} done\n{self.render()}"
+
     def render(self) -> str:
         """The list as a checklist, one step to a line."""
         return "\n".join(f"{_MARKS[i.status]} {i.content}" for i in self.items)

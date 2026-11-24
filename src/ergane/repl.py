@@ -11,7 +11,7 @@ from pathlib import Path
 from prompt_toolkit import PromptSession
 
 from ergane.agent import Agent
-from ergane.commands import Command
+from ergane.commands import Command, Fail, Warn
 from ergane.console import Console, Level
 from ergane.context import as_dicts
 from ergane.errors import TurnError, describe_error
@@ -80,7 +80,9 @@ class Repl:
                 from the start.
         """
         # The toolbar names the model, where there is one.
-        self.console.banner(None if self.session else self.agent.config.model)
+        self.console.banner(
+            None if self.session else self.agent.config.model, Path.cwd()
+        )
         if resume is not None:
             self.console.notice(self.restore(resume))
             self.console.blank()
@@ -171,6 +173,11 @@ class Repl:
             except Exception as exc:  # noqa: BLE001
                 message = f"Command error: {type(exc).__name__}: {exc}"
                 level = "error"
+            else:
+                if isinstance(message, Fail):
+                    level = "error"
+                elif isinstance(message, Warn):
+                    level = "warning"
         # A single word starting with "/" is a mistyped command, not a prompt;
         # longer input such as "/usr/bin is missing" still goes to the model.
         elif prompt.startswith("/") and " " not in prompt:
@@ -231,6 +238,7 @@ class Repl:
                 on_notice=console.notice,
                 confirm=console.confirm,
                 on_call=console.call,
+                on_todos=console.todos,
             )
         except TurnError as exc:
             console.notice(str(exc), "error")

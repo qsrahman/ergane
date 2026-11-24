@@ -42,9 +42,10 @@ that `Repl.ask` hands it, which are methods of `Console`:
 | Callback    | Is                | Carries                                                       |
 |-------------|-------------------|---------------------------------------------------------------|
 | `on_text`   | `Console.write`   | the reply, as it arrives                                      |
-| `on_notice` | `Console.notice`  | one-line status: a trim, a retry, a dropped result, a todo change, a repeat warning |
+| `on_notice` | `Console.notice`  | status in brackets, wrapped at the terminal's width: a trim, a retry, a dropped result, a repeat warning |
 | `confirm`   | `Console.confirm` | the permission question; returns whether the call may run     |
 | `on_call`   | `Console.call`    | a call that runs without asking, as one line                  |
+| `on_todos`  | `Console.todos`   | the model's checklist after it changed, with the finished steps dim and the current one bold |
 
 ## 1. The prompt (`Repl`)
 
@@ -224,10 +225,10 @@ with input or output redirected it is the typed line `Allow name {args}? [y/N/a]
   same output item, and a model that takes none is refused once, then remembered
   (`Agent.no_pictures`, §8).
 - **The `todo` tool** (`todos.py`) is offered with any other tool (`Agent.offered`; with
-  none, the chat stays plain), runs without asking and shows as a `▸ todo` line. Every
+  none, the chat stays plain), runs without asking and has no `▸` line. Every
   call sends the whole list; two steps `in_progress` come back as an error and change
-  nothing. After a round that changed the list, one notice says so (`[Todos updated: 2/5
-  completed, 1 in progress. Now: …]`). `/todo` shows the list.
+  nothing. After a round that changed the list, `on_todos` shows it (`Todos 2/5 done` and
+  a line to a step). `/todo` shows the list.
 - After the calls, the items grow by the model's own output (its reasoning and its
   `function_call` items, and any text it said first), then one output per call. The
   next round sends all of that back.

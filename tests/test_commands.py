@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ergane.commands import COMMANDS, Command, command
+from ergane.commands import COMMANDS, Command, Warn, command
 from ergane.config import LocalMcpServer
 from ergane.context import as_dicts, estimate_tokens
 from ergane.mcp_hub import McpHub, ServerStatus
@@ -575,6 +575,13 @@ class TestReconnectCommand:
 
         assert "[No MCP servers to start]" in capsys.readouterr().out
 
+    def test_an_unknown_name_is_a_warning(self, make_agent, hub):
+        repl = Repl(self.agent_of(make_agent, hub), COMMANDS, hub=hub)
+
+        result = COMMANDS["/reconnect"].handler(repl, "nope")
+
+        assert isinstance(result, Warn) and "No MCP server 'nope'" in result
+
     def test_an_unknown_name_is_reported(self, monkeypatch, make_agent, hub, capsys):
         agent = self.agent_of(make_agent, hub)
 
@@ -739,6 +746,31 @@ class TestSessionsCommand:
     def repl(self, make_agent, store) -> Repl:
         return Repl(make_agent(STREAMING=False), COMMANDS, store=store)
 
+    def test_a_session_that_cannot_be_found_is_a_warning(self, make_agent, store):
+        self.saved(store, "first")
+        repl = self.repl(make_agent, store)
+
+        result = COMMANDS["/sessions"].handler(repl, "no-such-id")
+
+        assert isinstance(result, Warn)
+
+    def test_the_menu_shows_the_end_of_an_id_and_the_typed_list_all_of_it(
+        self, monkeypatch, make_agent, store
+    ):
+        [info] = self.saved(store, "first")
+        repl = self.repl(make_agent, store)
+        offered: list[str] = []
+
+        def choose(question, options):
+            offered.extend(label for _, label in options)
+            return "q"
+
+        repl.console.choose = choose
+        COMMANDS["/sessions"].handler(repl, "")
+
+        assert offered[0].endswith(info.id.rsplit("-", 1)[-1])
+        assert info.id not in offered[0]
+
     def test_it_says_when_sessions_are_not_saved(self, monkeypatch, make_agent, capsys):
         run_repl(monkeypatch, make_agent(), ["/sessions", "/exit"])
 
@@ -832,7 +864,7 @@ class TestSessionsCommand:
 
         assert [key for key, _ in offered] == [newer.id, older.id, "q"]
         assert offered[0][1].startswith("newer prompt  ·  1 turn  ·  ")
-        assert offered[1][1].endswith(f"{older.id} (current)")
+        assert offered[1][1].endswith(f"{older.id.rsplit('-', 1)[-1]} (current)")
         assert offered[2] == ("q", "Cancel")
 
     def test_the_choice_in_the_menu_is_continued_and_saved_over_afterwards(

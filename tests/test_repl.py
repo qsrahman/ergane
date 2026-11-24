@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 
 import pytest
 from prompt_toolkit.data_structures import Size
@@ -7,6 +8,7 @@ from prompt_toolkit.output.vt100 import Vt100_Output
 from ergane.agent import Agent
 from ergane.commands import COMMANDS
 from ergane.console import Console
+from ergane.errors import TurnError
 from ergane.mcp_hub import ServerUpdate
 from ergane.repl import Repl
 from ergane.sessions import SessionStore
@@ -29,7 +31,12 @@ class TestRepl:
             prompts: list[str] = []
 
             def fake_run_turn(
-                prompt: str, on_text=None, on_notice=None, confirm=None, on_call=None
+                prompt: str,
+                on_text=None,
+                on_notice=None,
+                confirm=None,
+                on_call=None,
+                on_todos=None,
             ) -> None:
                 prompts.append(prompt)
                 if turn:
@@ -87,7 +94,7 @@ class TestRepl:
     ):
         agent = Agent(make_config())
 
-        def turn(prompt: str, on_text, on_notice, confirm, on_call) -> None:
+        def turn(prompt: str, on_text, on_notice, confirm, on_call, on_todos) -> None:
             on_text("line\n")
 
         monkeypatch.setattr(agent, "run_turn", turn)
@@ -100,14 +107,14 @@ class TestRepl:
     ):
         agent = Agent(make_config())
 
-        def turn(prompt: str, on_text, on_notice, confirm, on_call) -> None:
+        def turn(prompt: str, on_text, on_notice, confirm, on_call, on_todos) -> None:
             on_text("partial")
             raise KeyboardInterrupt
 
         monkeypatch.setattr(agent, "run_turn", turn)
         run_repl(monkeypatch, agent, ["hi", "/exit"])
 
-        assert "partial\n[Cancelled]\n" in capsys.readouterr().out
+        assert "partial\n\n[Cancelled]\n" in capsys.readouterr().out
 
     def test_turn_errors_are_reported_and_loop_continues(self, repl, capsys):
         def turn(prompt: str, _context) -> None:
@@ -208,14 +215,18 @@ class TestReplRendering:
 
         self.run(agent)
 
-        assert capsys.readouterr().out.startswith(
-            "ergane · gpt-4o · /help for commands\n\n> /exit\n"
-        )
+        banner, blank, typed = capsys.readouterr().out.splitlines()[:3]
+        # The directory the file tools work in is named, shortened if it is long.
+        assert banner.startswith("ergane · gpt-4o · ")
+        assert banner.endswith(" · /help for commands")
+        assert Path.cwd().name in banner
+        assert (blank, typed) == ("", "> /exit")
 
     def test_an_api_error_is_one_line_with_what_to_check(
         self, monkeypatch, make_agent, capsys, streaming
     ):
         agent = make_agent(STREAMING=streaming)
+        monkeypatch.setenv("COLUMNS", "200")
         self.terminal(monkeypatch, ["status_429", "/exit"])
 
         self.run(agent)
@@ -254,7 +265,7 @@ def test_stream_error_notice_follows_the_partial_reply(monkeypatch, make_agent, 
     run_repl(monkeypatch, make_agent(STREAMING=True), ["error_event", "/exit"])
 
     out = capsys.readouterr().out
-    assert f"Hello\n[Stream error: server_error: {STREAM_ERROR}]\n" in out
+    assert f"Hello\n\n[Stream error: server_error: {STREAM_ERROR}]\n" in out
 
 
 class TestReplConfirm:
@@ -462,14 +473,14 @@ class TestHowSeriousANoticeIs:
     YELLOW = "\x1b[0;33m"
     RED = "\x1b[0;31m"
 
-    def run(self, monkeypatch, make_agent, lines):
+    def run(self, monkeypatch, make_agent, lines, agent=None):
         written = io.StringIO()
         console = Console(
             output=Vt100_Output(written, lambda: Size(24, 100), term="xterm-256color")
         )
         typed = iter(lines)
         monkeypatch.setattr("builtins.input", lambda _prompt: next(typed))
-        Repl(make_agent(), COMMANDS, console=console).run()
+        Repl(agent or make_agent(), COMMANDS, console=console).run()
         return written.getvalue()
 
     def test_a_mistyped_command_is_a_warning(self, monkeypatch, make_agent):
@@ -481,6 +492,33 @@ class TestHowSeriousANoticeIs:
         shown = self.run(monkeypatch, make_agent, ["failed", "/exit"])
 
         assert f"{self.RED}[Response failed: server_error: boom]" in shown
+
+    def test_a_level_a_command_asks_for_is_used(self, monkeypatch, make_agent):
+        shown = self.run(monkeypatch, make_agent, ["/effort extreme", "/exit"])
+
+        assert f"{self.YELLOW}[Unknown effort: extreme." in shown
+
+    def test_a_command_that_failed_is_an_error(self, monkeypatch, make_agent):
+        def fails(self, notice, focus=None):
+            raise TurnError("the summary was empty")
+
+        monkeypatch.setattr(Agent, "compact", fails)
+
+        shown = self.run(monkeypatch, make_agent, ["/compact", "/exit"])
+
+        assert f"{self.RED}[Could not summarize: the summary was empty]" in shown
+
+    def test_the_todo_command_shows_the_checklist_styled(self, monkeypatch, make_agent):
+        agent = make_agent()
+        agent.todos.tool().call(
+            '{"todos": [{"content": "a", "status": "in_progress"},'
+            ' {"content": "b", "status": "completed"}]}'
+        )
+
+        shown = self.run(monkeypatch, make_agent, ["/todo", "/exit"], agent)
+
+        assert "Todos 1/2 done" in shown
+        assert "\x1b[0;1m[>] a" in shown and "\x1b[0;2m[x] b" in shown
 
     def test_a_routine_notice_is_neither(self, monkeypatch, make_agent):
         shown = self.run(monkeypatch, make_agent, ["/reset", "/exit"])

@@ -1,6 +1,7 @@
 import io
 import json
 import sys
+from pathlib import Path
 
 import pytest
 from prompt_toolkit.data_structures import Size
@@ -49,7 +50,12 @@ class TestSanitize:
         agent = Agent(make_config())
 
         def fail(
-            prompt: str, on_text=None, on_notice=None, confirm=None, on_call=None
+            prompt: str,
+            on_text=None,
+            on_notice=None,
+            confirm=None,
+            on_call=None,
+            on_todos=None,
         ) -> None:
             raise TurnError("Response failed: \x1b[2Jboom")
 
@@ -116,7 +122,7 @@ class TestConsole:
 
         console.write("Done.")
 
-        assert capsys.readouterr().out == "Checking.\n[read_file({})]\n\nDone."
+        assert capsys.readouterr().out == "Checking.\n\n[read_file({})]\n\nDone."
 
     def test_an_empty_piece_does_not_use_up_the_blank_line(self, capsys):
         console = Console()
@@ -164,7 +170,7 @@ class TestConsole:
         console.write("reply")
         console.notice("two")
 
-        assert capsys.readouterr().out == "[one]\n\nreply\n[two]\n"
+        assert capsys.readouterr().out == "[one]\n\nreply\n\n[two]\n"
 
     def test_notice_text_is_sanitized(self, capsys):
         Console().notice("failed: \x1b[2Jboom")
@@ -528,7 +534,7 @@ class TestConfirmMenu:
 
         self.ask("y", console=console)
 
-        assert capsys.readouterr().out.startswith("partial\n▸ save")
+        assert capsys.readouterr().out.startswith("partial\n\n▸ save")
 
     def test_a_reply_after_the_decision_starts_after_a_blank_line(self, capsys):
         console = Console()
@@ -888,7 +894,7 @@ class TestTheChangeIsColoured:
         answers = iter(["?", "y"])  # allowed: no red "denied" to confuse the checks
         console = Console()
         console.choose = lambda question, options: next(answers)
-        console.write("▸ read_file  path=a\n")
+        console.call("read_file", '{"path": "a"}')
 
         console.confirm(diff_tool("--- f\n+x"), '{"path": "f"}')
 
@@ -985,4 +991,225 @@ class TestHeadingsAndTheBanner:
         assert out == (
             "ergane · gpt-5.4-mini · /help for commands\n\n"
             "ergane · /help for commands\n\n"
+        )
+
+
+class TestWhatIsPrintedAfterWhat:
+    """A status block is set apart from a reply above it by a blank line."""
+
+    def test_a_status_block_after_a_reply_is_set_apart_by_a_blank_line(self, capsys):
+        console = Console()
+        console.write("Checking.")
+
+        console.notice("one")
+
+        assert capsys.readouterr().out == "Checking.\n\n[one]\n"
+
+    def test_a_reply_that_ended_its_line_still_gets_the_blank_line(self, capsys):
+        console = Console()
+        console.write("Checking.\n")
+
+        console.notice("one")
+
+        assert capsys.readouterr().out == "Checking.\n\n[one]\n"
+
+    def test_a_blank_line_that_is_already_there_is_not_doubled(self, capsys):
+        console = Console()
+        console.write("Checking.\n")
+        console.blank()
+
+        console.notice("one")
+
+        assert capsys.readouterr().out == "Checking.\n\n[one]\n"
+
+    def test_status_blocks_after_one_another_have_no_blank_between_them(self, capsys):
+        console = Console()
+        console.write("Checking.")
+
+        console.notice("one")
+        console.notice("two")
+        console.call("read_file", '{"path": "a"}')
+
+        assert capsys.readouterr().out == (
+            "Checking.\n\n[one]\n[two]\n▸ read_file  path=a\n"
+        )
+
+    def test_nothing_is_set_apart_from_nothing(self, capsys):
+        Console().notice("one")
+
+        assert capsys.readouterr().out == "[one]\n"
+
+    def test_a_blank_line_between_two_notices_is_not_a_reply_either(self, capsys):
+        console = Console()
+        console.notice("a")
+        console.blank()
+
+        console.notice("b")
+
+        assert capsys.readouterr().out == "[a]\n\n[b]\n"
+
+    def test_text_of_only_spaces_is_not_a_reply(self, capsys):
+        console = Console()
+        console.notice("a")
+        console.write("  ")
+
+        console.notice("b")
+
+        assert capsys.readouterr().out == "[a]\n  \n[b]\n"
+
+    def test_a_blank_line_before_the_first_notice_is_not_a_reply(self, capsys):
+        console = Console()
+        console.blank()
+
+        console.notice("Waiting for the MCP servers…")
+
+        assert capsys.readouterr().out == "\n[Waiting for the MCP servers…]\n"
+
+
+class TestLongNotices:
+    def test_a_long_notice_wraps_at_spaces_with_a_hanging_indent(
+        self, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("COLUMNS", "40")
+
+        Console().notice("Todos updated: 0/2 completed, 1 in progress. Now: write it")
+
+        lines = capsys.readouterr().out.splitlines()
+        assert len(lines) > 1
+        assert all(len(line) <= 39 for line in lines)
+        assert lines[0].startswith("[Todos") and all(
+            l.startswith(" ") for l in lines[1:]
+        )
+        # No word was broken: joined again, it is the notice.
+        assert " ".join(line.strip() for line in lines) == (
+            "[Todos updated: 0/2 completed, 1 in progress. Now: write it]"
+        )
+
+    def test_a_notice_that_fits_stays_on_one_line(self, monkeypatch, capsys):
+        monkeypatch.setenv("COLUMNS", "40")
+
+        Console().notice("Cancelled")
+
+        assert capsys.readouterr().out == "[Cancelled]\n"
+
+    def test_a_word_longer_than_the_line_is_broken_rather_than_overflowing(
+        self, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("COLUMNS", "30")
+
+        Console().notice("x" * 100)
+
+        assert all(len(line) <= 29 for line in capsys.readouterr().out.splitlines())
+
+
+class TestCodeFences:
+    @pytest.fixture
+    def written(self):
+        return io.StringIO()
+
+    @pytest.fixture
+    def console(self, written):
+        output = Vt100_Output(written, lambda: Size(24, 80), term="xterm-256color")
+        return Console(output=output)
+
+    def test_the_marks_around_code_are_dimmed_and_the_code_is_not(
+        self, console, written
+    ):
+        console.write("Run it:\n```bash\nuv run pytest\n```\nDone.\n")
+
+        shown = written.getvalue()
+        assert f"{DIM}```bash" in shown and f"{DIM}```\r\n" in shown
+        # The code and the text around it carry no style of their own.
+        assert "uv run pytest" in shown and f"{DIM}uv run pytest" not in shown
+        assert f"{DIM}Done." not in shown and f"{DIM}Run it:" not in shown
+
+    def test_an_indented_fence_counts(self, console, written):
+        console.write("  ```\ncode\n  ```\n")
+
+        assert written.getvalue().count(DIM) >= 2
+
+    def test_a_fence_that_arrives_in_pieces_is_dimmed_from_where_it_is_known(
+        self, console, written
+    ):
+        console.write("``")
+        console.write("`python\n")
+
+        assert f"{DIM}`python" in written.getvalue()
+
+    def test_a_backtick_in_the_middle_of_a_line_is_not_a_fence(self, console, written):
+        console.write("use `x` here, not ```\n")
+
+        assert DIM not in written.getvalue()
+
+    def test_without_colour_the_text_is_the_same(self, capsys):
+        Console().write("a\n```py\nb\n```\n")
+
+        assert capsys.readouterr().out == "a\n```py\nb\n```\n"
+
+
+class TestTheChecklist:
+    @pytest.fixture
+    def written(self):
+        return io.StringIO()
+
+    @pytest.fixture
+    def console(self, written):
+        output = Vt100_Output(written, lambda: Size(24, 80), term="xterm-256color")
+        return Console(output=output)
+
+    REPORT = "Todos 1/4 done\n[x] read\n[>] write\n[ ] test\n[-] drop"
+
+    def test_finished_steps_are_dim_the_current_one_is_bold(self, console, written):
+        console.todos(self.REPORT)
+
+        shown = written.getvalue()
+        assert f"{DIM}[x] read" in shown and f"{DIM}[-] drop" in shown
+        assert f"{BOLD}[>] write" in shown
+        assert f"{DIM}[ ] test" not in shown and f"{BOLD}[ ] test" not in shown
+
+    def test_the_heading_comes_first(self, console, written):
+        console.todos(self.REPORT)
+
+        assert written.getvalue().index("Todos 1/4 done") < written.getvalue().index(
+            "[x]"
+        )
+
+    def test_without_colour_it_is_the_same_text(self, capsys):
+        Console().todos(self.REPORT)
+
+        assert capsys.readouterr().out == self.REPORT + "\n"
+
+    def test_a_cleared_list_is_one_line(self, capsys):
+        Console().todos("Todos cleared")
+
+        assert capsys.readouterr().out == "Todos cleared\n"
+
+
+class TestTheBannerNamesTheDirectory:
+    def test_a_directory_under_home_is_shown_from_it(self, monkeypatch, capsys):
+        monkeypatch.setattr("pathlib.Path.home", lambda: Path("/home/me"))
+
+        Console().banner(None, Path("/home/me/code/app"))
+
+        assert capsys.readouterr().out == "ergane · ~/code/app · /help for commands\n\n"
+
+    def test_a_long_one_keeps_its_last_two_parts(self, monkeypatch, capsys):
+        monkeypatch.setattr("pathlib.Path.home", lambda: Path("/home/me"))
+
+        Console().banner(
+            None, Path("/home/me/projects/work/clients/acme/platform/services/billing")
+        )
+
+        assert (
+            capsys.readouterr().out
+            == "ergane · …/services/billing · /help for commands\n\n"
+        )
+
+    def test_one_outside_home_is_shown_whole(self, monkeypatch, capsys):
+        monkeypatch.setattr("pathlib.Path.home", lambda: Path("/home/me"))
+
+        Console().banner("m", Path("/srv/app"))
+
+        assert (
+            capsys.readouterr().out == "ergane · m · /srv/app · /help for commands\n\n"
         )

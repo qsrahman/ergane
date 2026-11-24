@@ -28,6 +28,15 @@ Arguments = tuple[str, ...] | Callable[["Repl"], Iterable[str]]
 _NAME = re.compile(r"/[a-z][a-z0-9-]*")
 
 
+class Warn(str):
+    """What a command returns when it did not do what was asked and the user can fix
+    that (a name that is not there): shown as a warning, not as a plain notice."""
+
+
+class Fail(str):
+    """What a command returns when it failed: shown as an error."""
+
+
 @dataclass(frozen=True)
 class Command:
     """A slash command: what it does and the description /help shows."""
@@ -121,11 +130,15 @@ def reset(repl: Repl, args: str) -> str:
 _MENU_SESSIONS = 10
 
 
-def _described(info: SessionInfo, current: SessionInfo | None) -> str:
-    """A session in one line: what it was about, how long, when, and its id."""
+def _described(
+    info: SessionInfo, current: SessionInfo | None, short_id: bool = False
+) -> str:
+    """A session in one line: what it was about, how long, when, and its id (in a menu
+    only the end of it, which tells sessions of one title apart)."""
     turns = f"{info.turns} turn{'s' if info.turns != 1 else ''}"
     mark = " (current)" if current is not None and current.id == info.id else ""
-    return f"{info.title}  ·  {turns}  ·  {ago(info)}  ·  {info.id}{mark}"
+    shown = info.id.rsplit("-", 1)[-1] if short_id else info.id
+    return f"{info.title}  ·  {turns}  ·  {ago(info)}  ·  {shown}{mark}"
 
 
 @command("/sessions")
@@ -141,7 +154,10 @@ def sessions_(repl: Repl, args: str) -> str | None:
         number = int(args) if args.isdigit() else 0
         ref = found[number - 1].id if 1 <= number <= len(found) else args
     elif repl.console.choose is not None:
-        options = [(i.id, _described(i, repl.saved)) for i in found[:_MENU_SESSIONS]]
+        options = [
+            (i.id, _described(i, repl.saved, short_id=True))
+            for i in found[:_MENU_SESSIONS]
+        ]
         ref = repl.console.choose(
             "Continue which session?", [*options, ("q", "Cancel")]
         )
@@ -155,7 +171,7 @@ def sessions_(repl: Repl, args: str) -> str | None:
     try:
         return repl.restore(store.load(ref))
     except SessionError as exc:
-        return str(exc)
+        return Warn(str(exc))
 
 
 @command("/clear")
@@ -215,7 +231,7 @@ def effort(repl: Repl, args: str) -> str:
                 args.lower()
             )
         except ValidationError:
-            return f"Unknown effort: {args}. Use {', '.join(EFFORTS)} or default."
+            return Warn(f"Unknown effort: {args}. Use {', '.join(EFFORTS)} or default.")
     return f"Reasoning effort: {config.reasoning_effort or 'model default'}"
 
 
@@ -225,9 +241,9 @@ def compact_(repl: Repl, args: str) -> str | None:
     try:
         done = repl.agent.compact(repl.console.notice, args or None)
     except TurnError as exc:
-        return f"Could not summarize: {exc}"
+        return Fail(f"Could not summarize: {exc}")
     except Exception as exc:  # noqa: BLE001
-        return describe_error(exc)
+        return Fail(describe_error(exc))
     return None if done else "Nothing to summarize: the history is short"
 
 
@@ -248,7 +264,7 @@ def todo(repl: Repl, args: str) -> str | None:
     todos = repl.agent.todos
     if not todos.items:
         return "No todos"
-    repl.console.write(f"{todos.render()}\n")
+    repl.console.todos(todos.report())
     repl.console.blank()
     return None
 
@@ -297,7 +313,7 @@ def reconnect(repl: Repl, args: str) -> str | None:
     repl.attach(wait=True)  # the ones still starting are not "failed" yet
     if args:
         if args not in hub.configs:
-            return f"No MCP server {args!r}; /servers lists them"
+            return Warn(f"No MCP server {args!r}; /servers lists them")
         names = [args]
     else:
         names = [s.name for s in hub.statuses.values() if s.state == "failed"]
