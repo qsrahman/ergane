@@ -211,7 +211,8 @@ with input or output redirected it is the typed line `Allow name {args}? [y/N/a]
   `edit_file` do, and the menu's "Show the change" option prints the diff of exactly the
   edit that would be made, or says why it would fail. The other built-ins that ask are
   `run_command`, `web_fetch` and `web_search`; `read_file`, `list_directory` and
-  `search_files` only read.
+  `search_files` only read. (`search_files` runs `rg`: at start, a tool whose program is not
+  installed is left out and the user is told, so the model never sees it.)
 - **Read-only calls that follow one another run at the same time**, each on a thread of its
   own (at most `MAX_PARALLEL_CALLS`, 8): they change nothing, so they cannot depend on one
   another, and a batch takes as long as its slowest call, not the sum. Any other call is a
@@ -381,7 +382,9 @@ code, change the prompt.
 
 `Console` keeps the screen tidy with one rule in one place (`_emit`): a status line
 (a notice, a call, the permission question) always starts on a fresh line, and plain
-text that follows one, such as the reply, starts after a blank line. A status line is
+text that follows one, such as the reply, starts after a blank line. The reply is printed as
+the model wrote it, with light colour for `**bold**`, `` `code` ``, headings and the fences of
+code blocks (`Markdown` in `markdown.py`; the marks stay in the text). A status line is
 made of styled pieces: prompt_toolkit prints them on a terminal with colour, and only
 their text is printed when output is redirected or `NO_COLOR` is set.
 
@@ -457,6 +460,8 @@ the model still answered.
 |---------------------------------------|--------------------------------------------------------------|
 | reading input, commands, `ask`           | `Repl` in [`repl.py`](src/ergane/repl.py), [`commands.py`](src/ergane/commands.py) |
 | the prompt, the toolbar, the permission menu | [`terminal.py`](src/ergane/terminal.py) |
+| a reply's light styling                | `Markdown` in [`markdown.py`](src/ergane/markdown.py), used by `Console.write` |
+| tools that need a program (`rg`)       | `Tool.requires`, `without_missing_programs` in [`tools.py`](src/ergane/tools.py); [`builtin/_rg.py`](src/ergane/builtin/_rg.py) |
 | saved sessions                        | `SessionStore` in [`sessions.py`](src/ergane/sessions.py); `Repl.save_session` and `restore` |
 | the turn, the rounds, the stops       | `Agent.run_turn`, `_ask`, `_run_round` in [`agent.py`](src/ergane/agent.py) |
 | the request and the stream            | `Responder` in [`responses.py`](src/ergane/responses.py)    |

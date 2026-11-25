@@ -8,7 +8,9 @@ A minimal terminal chat agent built on the OpenAI [Responses API](https://platfo
 - Streaming output, which can be turned off
 - Client-side conversation history that stays within a configurable context budget: when it gets long, the oldest turns are summarized by the model (the newest are kept as they are), and a long tool result is shortened to its start and end when it does not fit
 - Works with any OpenAI-compatible base URL
-- Tool calling: the model can call the tools of your [MCP servers](#mcp-servers), sees their errors, and can correct itself
+- Tool calling: the model can call [built-in tools](#tools) (read, list and search files, edit and write them, run commands, fetch a web page, search the web) and the tools of your [MCP servers](#mcp-servers), sees their errors, and can correct itself; a tool that changes anything asks first, with the change shown as a diff
+- Conversations are [saved](#sessions) after each prompt and can be continued (`--resume`, `/sessions`)
+- A terminal that stays out of the way: colours from your terminal's own theme (and none with `NO_COLOR`), a toolbar with the model, the git branch and how full the context is, a few `/` commands
 
 ## Requirements
 
@@ -286,7 +288,7 @@ A tool runs without asking unless it says `@tool(read_only=False)`, which it mus
 }
 ```
 
-For files and a shell, [workshop-mcp](https://github.com/qsrahman/workshop-mcp) is a server made to go with `ergane`. It is a Node program that `npx` fetches on first use:
+`ergane` has file, shell and web [tools of its own](#tools), so an MCP server is for what they do not do. As an example of one that overlaps, [workshop-mcp](https://github.com/qsrahman/workshop-mcp) is a server made to go with `ergane` (a Node program that `npx` fetches on first use); its tools are offered as `workshop__NAME` next to the built-in ones, so set `builtin_tools` to the names you still want, or `false`, if you would rather the model had only one set:
 
 ```json
 {
@@ -299,7 +301,7 @@ For files and a shell, [workshop-mcp](https://github.com/qsrahman/workshop-mcp) 
 }
 ```
 
-`--no-fetch` leaves out its `fetch_url`; drop the flag if you want the model to read web pages, since `ergane` has no tool for that of its own. Without a directory in `args` it can reach any file you can, and its shell is on, so every call asks first (leave `read_only` unset); `--read-only`, `--no-shell` and directories narrow it, as its README says. It starts in the directory where you run `ergane`.
+`--no-fetch` leaves out its `fetch_url`, which `web_fetch` already does. Without a directory in `args` it can reach any file you can, and its shell is on, so every call asks first (leave `read_only` unset); `--read-only`, `--no-shell` and directories narrow it, as its README says. It starts in the directory where you run `ergane`.
 
 | Key         | Description                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------ |
@@ -356,6 +358,10 @@ The tests run against a local fake of the Responses API. They ignore your `confi
 - When the next request would pass `compact_at` of `max_context_tokens` (instructions, tool definitions and history together), the oldest turns are summarized and the newest kept; see [Long conversations](#long-conversations). Turns that still do not fit are dropped, oldest first. Tokens are estimated at about 4 bytes of UTF-8 per token, which works with any backend's tokenizer.
 
 [TURN.md](TURN.md) follows one turn through the code: what is sent, what is kept, what you see, and every way a turn can end.
+
+## Versions
+
+The version is the one `ergane --version` prints. What changed in each is in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

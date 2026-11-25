@@ -22,6 +22,10 @@ dependencies = [
     "pydantic>=2.14.1",
 ]
 
+[project.urls]
+Repository = "https://github.com/qsrahman/ergane"
+Changelog = "https://github.com/qsrahman/ergane/blob/main/CHANGELOG.md"
+
 [project.scripts]
 ergane = "ergane.cli:main"
 

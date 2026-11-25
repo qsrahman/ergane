@@ -30,6 +30,14 @@ The package is built with `uv_build` (needs `src/ergane/__init__.py`); `uv sync`
 it editable; the script is `ergane.cli:main`. Tests import modules directly
 (`from ergane.agent import Agent`).
 
+## Versions
+
+`version` in `pyproject.toml` is the only place the version is written (`ergane --version`
+reads it from the installed package). Every change that a user could notice (a flag, a
+`config.json` key, what a tool or command does, a requirement) is a line under
+Unreleased in [CHANGELOG.md](CHANGELOG.md), in the same commit. To release, follow the
+steps at the top of that file.
+
 ## Tests
 
 - `tests/fake_api.py` is a fake Responses API run on a local port by the `fake_server`
@@ -93,7 +101,8 @@ The modules, in dependency order (each imports only from those above it):
   `check`, `runner`, `read_only`, `preview`: what the user may ask to see before
   allowing a call, a diff for a write). `Tool.call` never raises (except Ctrl-C): a bad call
   or an exception comes back as text for the model, and output is cut at
-  `MAX_OUTPUT_CHARS`. `tools_in(package)` finds the tools of a package: a `@tool`
+  `MAX_OUTPUT_CHARS`. A tool that runs a program says so (`requires`), and is left out when
+  it is not installed (`without_missing_programs`). `tools_in(package)` finds the tools of a package: a `@tool`
   function in a module of `builtin/` is offered with nothing else to edit; [TOOLS.md](TOOLS.md)
   is the guide to writing one.
 - `config.py`: `Config`, `load_config()`, `EFFORTS`, the XDG directories, the model of a
@@ -157,7 +166,9 @@ The modules, in dependency order (each imports only from those above it):
 - `commands.py`: the `@command` registry and the slash commands (imports `Repl` for type
   checking only).
 - `terminal.py`: the prompt_toolkit side: `terminal_session` (the prompt, history,
-  completion and key bindings, and their styles), `toolbar` (the line under the prompt)
+  completion and key bindings, and their styles), `toolbar` (the line under the prompt:
+  model, effort, git branch, tools allowed for the session, servers and the context
+  meter, the least important left out when the terminal is narrow, never the meter)
   and `choose` (the menu of the permission question). Imports `Repl` for type checking
   only.
 - `repl.py`: `Repl`, the input loop: it saves the conversation after each prompt
@@ -272,7 +283,8 @@ What must stay true:
   `diff-file`), whose first line names the file once. Notices wrap at the terminal's
   width with a hanging indent, a status block after reply text is set apart by a blank
   line (`Console.after_text` and `trailing` keep track), and the dimmed fence lines of
-  a code block are found a line at a time (`Console._line`). A command returns `Warn`
+  a code block, and a reply's `**bold**`, `` `code` `` and `#` headings, are found a line
+  at a time (`Markdown`, `markdown.py`). A command returns `Warn`
   or `Fail` (strings) to say how it went wrong.
 - **The look is the terminal's own.** Styles use ANSI names (`ansicyan`,
   `ansibrightblack`), never hex, so a theme decides the colours; text must still read
@@ -284,7 +296,8 @@ What must stay true:
   `print_formatted_text` only on a terminal with colour: it ends lines with `\r\n`, which
   a file or a pipe would keep.
 - Output is a plain terminal: the system prompt forbids LaTeX in favor of Unicode math
-  and says Markdown is not rendered. Keep those if editing the prompt.
+  and says Markdown is not rendered (a reply's marks are only coloured, and stay in the
+  text). Keep those if editing the prompt.
 - The system prompt follows OpenAI's guidance for agentic coding models and depends on how
   the program behaves: the user sees each tool call but not its result, a denied call
   comes back as `The user denied this call.`, tool results are untrusted text, and a

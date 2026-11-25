@@ -6,13 +6,15 @@ shell, fetch and search tools), ergane's own `tools` branch (a `fetch_url` port)
 tools of opencode, pi and codex. The decisions at the end were settled in a round of
 questions and answers, and each is recorded there with what follows from it.
 
-**Status.** Phases 0 to 6 are built on the `builtin-tools` branch (5 and 6 await approval).
-Phase 7 (docs and the model evaluation) is planned below. The build departed from this plan in four places, all recorded in
-Decisions: `read_file` was split into `read_file` and `list_directory` (1); ergane's own
-config and state directories are not refused (2); `web_fetch`'s charset sniffing, address
-tables and depth guard were replaced by `UnicodeDammit`, `is_global` and a
-`RecursionError` catch; and tool descriptions were tightened after OpenAI's guidance
-(see `TOOLS.md`).
+**Status.** All seven phases are built and merged into `main`; the `builtin-tools` branch is
+gone. Since then `search_files` has moved onto ripgrep (decision 15). The build departed
+from this plan in five places, all recorded in Decisions: `read_file` was split into
+`read_file` and `list_directory` (1); ergane's own config and state directories are not
+refused (2); `web_fetch`'s charset sniffing, address tables and depth guard were replaced
+by `UnicodeDammit`, `is_global` and a `RecursionError` catch; tool descriptions were
+tightened after OpenAI's guidance (see `TOOLS.md`); and content search runs `rg` (15).
+The sections below are the plan as it was made, kept as the record; where the code has
+moved on, the Decisions table and the code are right.
 
 ## What the other agents do
 
@@ -73,7 +75,7 @@ What this changes in the plan:
 |---|---|---|---|
 | `read_file` | `path`, `offset`, `limit` | no | A text file only (UTF-8, no NUL bytes; a directory is an error that names `list_directory`); capped at about 16,000 characters with the offset to continue from; a missing path suggests the nearest name. Pictures come later (see Build order) |
 | `list_directory` | `path` | no | One entry per line, directories first and ending in `/`, symlinks in `@`; what `.gitignore` excludes, and `.git`, are left out and counted; capped, and says when it stopped |
-| `search_files` | `path`, `name`, `contains`, `limit` | no | `name` is a glob over paths, `contains` a regular expression over file contents; at least one; results are paths, or `path:line: text`; `.gitignore` is honoured, repository root down |
+| `search_files` | `path`, `name`, `contains`, `limit` | no | Runs ripgrep (`builtin/_rg.py`) and is not offered without it. `name` is a glob written like a line of a `.gitignore`, matched against files only; `contains` a regular expression (Rust syntax) over file contents; at least one; results are paths, or `path:line: text`; `.gitignore` is honoured, repository root down |
 | `write_file` | `path`, `content` | yes | Creates parent directories; refuses a symlink or a non-regular file |
 | `edit_file` | `path`, `old_text`, `new_text`, `replace_all` | yes | `old_text` must match once unless `replace_all`; exact, then normalized; one line back |
 | `run_command` | `command`, `cwd`, `timeout_s` | yes | A fresh process each call, stdin closed, process group killed on timeout, head and tail of the output |
@@ -200,7 +202,7 @@ running it).
 
 | Need | Use | Instead of |
 |---|---|---|
-| Name globs with `**` (`search_files`) | `PurePath.full_match`, `glob.translate` | `minimatch`, or `wcmatch` (+2 packages) |
+| Name globs (`search_files`) | `pathspec`, which is there for the ignore rules: a name is matched like a line of a `.gitignore` | `minimatch`, or `wcmatch` (+2 packages); ripgrep's `--glob`, which puts back what `.gitignore` excludes |
 | Unified diff and closest lines (`edit_file`, previews) | `difflib` | the `diff` package and a mismatch engine |
 | Kill the process tree on timeout (`run_command`) | `subprocess` with `start_new_session=True`, then `os.killpg` | `psutil` |
 | Safe writes | `os.open` with `O_NOFOLLOW` or `O_EXCL` | `filelock`, `atomicwrites` |
@@ -373,6 +375,7 @@ Each phase is its own commit, with tests and a mutation check. Start with phases
 - `builtin_tools`: `false`, a list, and `--no-builtin` each give the right tools, and with
   none and no MCP server the request has no tools and `SYSTEM_PROMPT_NO_TOOLS`.
 - `.gitignore`: an ignored file is neither listed (by `list_directory` or `search_files`) nor found, a deeper file overrides a shallower one, and `.git` is never shown.
+- `search_files` and `_rg`: tests need `rg` and are skipped without it; with `rg` missing the tool is not offered and the user is told.
 
 ## Decisions
 
@@ -395,3 +398,4 @@ plan to.
 | 12 | Ignore rules in `search_files` and directory listings | Honour `.gitignore` with `pathspec`, from the repository root down | One more dependency; a listing counts what it left out |
 | 13 | `run_command` environment | Inherit everything except `OPENAI_API_KEY` | Git credentials and toolchains work; variables exported for MCP servers are inherited and the docs say so |
 | 14 | Long command output | Head and tail with a note, and the whole saved to a file in the temp directory that the result names | First decided as no file; reversed after reading pi and opencode, which both save it: the middle of a build log is otherwise lost and the command must be run again. The files are not deleted |
+| 15 | Content search and file names | `search_files` runs ripgrep and is left out, with a warning, when `rg` is not installed (`Tool.requires`) | Removed the walk, the per-line matching, the `regex` dependency and its timeout (about 150 lines). `name` finds files only and is matched like a `.gitignore` line; `contains` is Rust regex syntax; `list_directory` keeps `pathspec`. The PyPI `ripgrep` package was looked at and rejected: wheels for two platforms only, a source build elsewhere, and no upstream publisher |
