@@ -215,9 +215,14 @@ Optional or to reconsider:
   `.gitignore` files from the root of the repository down to the directory (a deeper file
   overrides a shallower one), and never show `.git`. A listing says how many entries it
   left out. A file that is ignored can still be read by its name.
-- **`ripgrep`** (`rg`) is installed on this machine, and `opencode`, `pi` and `codex` all rely
-  on it, but none can assume it on another machine. `search_files` is pure Python; using
-  `rg` when present is a later optimization.
+- **`ripgrep`** (`rg`): `opencode`, `pi` and `codex` all rely on it. `search_files` now runs it
+  (`builtin/_rg.py`) and is not offered when `rg` is not installed (`Tool.requires`), which
+  removed the walk, the per-line matching, the `regex` dependency and its timeout (about
+  150 lines). `list_directory` keeps `pathspec` and its own rules, since `rg --files` lists no
+  directories. Costs: `name` finds files only (no directories, no symbolic links), is
+  matched like a line of a `.gitignore` (with `pathspec`: `rg`'s `--glob` would put back
+  ignored files), and `contains` is Rust regex syntax. Outside a git repository rg uses no
+  `.gitignore` at all, where `list_directory` uses the directory's own.
 - **`trafilatura`** would replace `beautifulsoup4`, `markdownify` and the page-furniture code,
   but a dry run shows 14 new packages. Extraction quality is untested. Consider it only if
   the branch's output is poor on pages that matter.

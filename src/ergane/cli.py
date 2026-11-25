@@ -20,7 +20,13 @@ from ergane.mcp_hub import McpHub
 from ergane.repl import Repl
 from ergane.sessions import SessionError, SessionStore
 from ergane.terminal import terminal_session
-from ergane.tools import Tool, pick_tools, tool_clash, tools_in
+from ergane.tools import (
+    Tool,
+    pick_tools,
+    tool_clash,
+    tools_in,
+    without_missing_programs,
+)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -189,6 +195,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         own, unknown = pick_tools(
             tools_in(builtin, console.notice), config.builtin_tools
         )
+        own, missing = without_missing_programs(own)
+        for tool in missing:
+            console.notice(
+                f"{tool.name} is off: {tool.requires} is not installed (see Requirements "
+                "in the README)",
+                "warning",
+            )
         for name in unknown:
             console.notice(
                 f"builtin_tools: ergane has no built-in tool named {name}", "warning"

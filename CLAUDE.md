@@ -58,7 +58,8 @@ it editable; the script is `ergane.cli:main`. Tests import modules directly
 - A behaviour change gets a mutation check: break the code, see the test fail. Run it
   with a script that always restores the file (a `| head` that closes the pipe early
   once left a mutated file behind).
-- The built-ins have a `test_builtin_*.py` each, on `tmp_path` (the autouse fixture makes
+- The tests of `search_files` and `_rg` need `rg` installed and are skipped without it.
+  The built-ins have a `test_builtin_*.py` each, on `tmp_path` (the autouse fixture makes
   it the working directory). The fetch and search tests serve from a local HTTP server
   and never touch the network; `test_builtin_shell.py` points `tempfile.tempdir` at
   `tmp_path` so that saved output does not pile up in the real temp directory.
@@ -109,8 +110,8 @@ The modules, in dependency order (each imports only from those above it):
   they share, whose names start with `_`, which `tools_in` skips). In dependency order:
   `_paths` (`resolve`: the one place a model's path becomes a real one), `_text`
   (what counts as text; the line, character and head-and-tail cuts), `_images` (which
-  files are pictures), `_edit` (the text of an edit, pure), then `files` (`read_file`,
-  `list_directory`, `search_files`), `writes` (`write_file`, `edit_file`), `shell`
+  files are pictures), `_edit` (the text of an edit, pure), `_rg` (the one place `rg` is
+  started), then `files` (`read_file`, `list_directory`, `search_files`), `writes` (`write_file`, `edit_file`), `shell`
   (`run_command`), `fetch` (`web_fetch`) and `search` (`web_search`). A tool that needs
   a setting a test changes is made by a `make_*_tool` factory (the fetch and search
   ones), since tools cannot see `Config`. [TOOLS.md](TOOLS.md) is the guide; `PLAN.md`
@@ -220,10 +221,20 @@ What must stay true:
 - **A tool that is not `read_only` asks, and these are:** `write_file`, `edit_file`,
   `run_command`, `web_fetch` and `web_search` (a page the model read can tell it what to
   fetch or search). The three that only read run on threads and cannot be stopped by
-  Ctrl-C, so each is bounded without help: output caps, a 30 s search deadline, a 0.5 s
-  limit per line for the `regex` package (the stdlib `re` backtracks without end),
-  reads in chunks (a file of one huge line must not be read whole), and content search
-  only in plain files (a named pipe would block for ever).
+  Ctrl-C, so each is bounded without help: output caps, reads in chunks (a file of one
+  huge line must not be read whole), and, for `search_files`, `rg` (`builtin/_rg.py`)
+  stopped with its process group after the records wanted or 30 s. `rg` matches with an
+  automaton, so no pattern backtracks, and it reads only plain files (a named pipe would
+  block for ever).
+- **`search_files` is `rg` and needs it installed** (`Tool.requires`): a tool whose
+  program is missing is not offered and a warning at start says so
+  (`without_missing_programs`). `_rg.FLAGS` make it read what `list_directory` reads:
+  `.gitignore` files only (never `.ignore`, `.rgignore`, `.git/info/exclude`, the global
+  ignore file or `RIPGREP_CONFIG_PATH`: a project's files must not hide a file from the
+  model), dotfiles but not `.git`, no symbolic link followed. The model's `name` is
+  matched in Python with `pathspec` (`rg`'s own `--glob` would put back what `.gitignore`
+  excludes), and its pattern is only ever the argument of `-e`, after which the path
+  follows `--`.
 - **`run_command` leaves nothing running and tells nothing secret:** each call is a
   fresh `sh -c` in its own process group, stopped whole on a timeout, an overflow or
   Ctrl-C; stdin is closed; `OPENAI_API_KEY` is not in its environment; only its `cwd` is

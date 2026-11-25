@@ -15,6 +15,7 @@ import functools
 import importlib
 import inspect
 import pkgutil
+import shutil
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from types import ModuleType
@@ -101,6 +102,9 @@ class Tool:
     # nothing and may raise (the console says so). None: the arguments are all there is
     # to show.
     preview: Callable[[str], str] | None = None
+    # A program the tool runs, which must be installed: without it the tool is not
+    # offered (`without_missing_programs`), so the model never calls what cannot work.
+    requires: str | None = None
 
     @classmethod
     def from_function(
@@ -108,6 +112,7 @@ class Tool:
         function: Callable[..., str | ToolOutput],
         read_only: bool = True,
         preview: Callable[..., str] | None = None,
+        requires: str | None = None,
     ) -> Tool:
         """Describe a function as a tool.
 
@@ -118,6 +123,7 @@ class Tool:
             preview: A function with the same parameters as `function`, which returns
                 what the call would change, as text for the user to read before
                 allowing it (a diff, say). It must change nothing.
+            requires: The program the tool needs, such as `rg`; see `Tool.requires`.
 
         Returns:
             The tool.
@@ -176,6 +182,7 @@ class Tool:
                 if preview
                 else None
             ),
+            requires=requires,
         )
 
     def param(self) -> FunctionToolParam:
@@ -226,7 +233,10 @@ class Tool:
 def tool(function: Callable[..., str | ToolOutput], /) -> Tool: ...
 @overload
 def tool(
-    *, read_only: bool = True, preview: Callable[..., str] | None = None
+    *,
+    read_only: bool = True,
+    preview: Callable[..., str] | None = None,
+    requires: str | None = None,
 ) -> Callable[[Callable[..., str | ToolOutput]], Tool]: ...
 def tool(
     function: Callable[..., str | ToolOutput] | None = None,
@@ -234,6 +244,7 @@ def tool(
     *,
     read_only: bool = True,
     preview: Callable[..., str] | None = None,
+    requires: str | None = None,
 ) -> Tool | Callable[[Callable[..., str | ToolOutput]], Tool]:
     """Make a function a tool: `@tool`, or `@tool(read_only=False)`.
 
@@ -247,6 +258,7 @@ def tool(
         read_only: Whether the tool only reads (default True).
         preview: What the user may ask to see before allowing a call (see
             `Tool.from_function`).
+        requires: A program the tool needs, which the tool is not offered without.
 
     Returns:
         The Tool, or a decorator that returns it.
@@ -257,7 +269,7 @@ def tool(
     """
 
     def make(function: Callable[..., str | ToolOutput]) -> Tool:
-        return Tool.from_function(function, read_only, preview)
+        return Tool.from_function(function, read_only, preview, requires)
 
     return make if function is None else make(function)
 
@@ -321,6 +333,20 @@ def pick_tools(
         [tool for tool in tools if tool.name in wanted],
         [name for name in wanted if name not in known],
     )
+
+
+def without_missing_programs(tools: Sequence[Tool]) -> tuple[list[Tool], list[Tool]]:
+    """Split tools by whether the program they need, if any, is on the `PATH`.
+
+    Returns:
+        The tools that can run, and the ones that cannot, for the user to be told of.
+    """
+    ready: list[Tool] = []
+    missing: list[Tool] = []
+    for tool in tools:
+        found = tool.requires is None or shutil.which(tool.requires)
+        (ready if found else missing).append(tool)
+    return ready, missing
 
 
 def tool_clash(name: str) -> str:

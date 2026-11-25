@@ -219,6 +219,8 @@ class TestBuiltinTools:
                 f'def {name}() -> str:\n    """Say {name}."""\n    return "{name}"\n'
             )
         monkeypatch.syspath_prepend(str(tmp_path))
+        for loaded in [m for m in sys.modules if m.split(".")[0] == "pick_builtin"]:
+            monkeypatch.delitem(sys.modules, loaded)  # from another test's directory
         monkeypatch.setenv("OPENAI_API_KEY", "test")
         monkeypatch.setattr("ergane.cli.Repl", RecordingRepl)
         monkeypatch.setattr(
@@ -257,6 +259,37 @@ class TestBuiltinTools:
         assert RecordingRepl.agent is not None
         assert list(RecordingRepl.agent.tools) == ["alpha"]
         assert "no built-in tool named nope" in capsys.readouterr().out
+
+    def test_a_tool_whose_program_is_missing_is_not_offered_and_the_user_is_told(
+        self, tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
+    ):
+        (tmp_path / "pick_builtin" / "delta.py").write_text(
+            "from ergane.tools import tool\n\n"
+            '@tool(requires="no-such-program-ergane")\n'
+            'def delta() -> str:\n    """Say delta."""\n    return "delta"\n'
+        )
+        importlib.invalidate_caches()
+
+        main([])
+
+        assert RecordingRepl.agent is not None
+        assert list(RecordingRepl.agent.tools) == ["alpha", "beta", "gamma"]
+        out = capsys.readouterr().out
+        assert "[delta is off: no-such-program-ergane is not installed" in out
+
+    def test_a_missing_program_is_not_mentioned_when_no_tool_was_asked_for(
+        self, tmp_path: Path, capsys
+    ):
+        (tmp_path / "pick_builtin" / "delta.py").write_text(
+            "from ergane.tools import tool\n\n"
+            '@tool(requires="no-such-program-ergane")\n'
+            'def delta() -> str:\n    """Say delta."""\n    return "delta"\n'
+        )
+        write_config_json(tmp_path, {}, builtin_tools=["alpha"])
+
+        main([])
+
+        assert "delta is off" not in capsys.readouterr().out
 
     def test_the_flag_beats_the_file(self, tmp_path: Path):
         write_config_json(tmp_path, {}, builtin_tools=["alpha"])

@@ -2,27 +2,26 @@
 
 All three only read, so they run without asking, on threads, several at once: they keep no
 state. Every path goes through `_paths.resolve` first and the path it returns is the one
-opened. A search never follows a symbolic link, so a link inside the working directory
-cannot lead it out of the directories `resolve` allows.
+opened. `search_files` is `rg` (see `_rg`), which never follows a symbolic link, so a link
+inside the working directory cannot lead it out of the directories `resolve` allows, and
+which leaves out what `list_directory` leaves out. It needs `rg` installed: without it the
+tool is not offered.
 
 Results stay under `MAX_TEXT_CHARS` so that the footer that says where to continue is
 never what the generic cut at 20 KiB removes.
 """
 
 import os
-import time
-from collections import deque
-from collections.abc import Iterator
-from itertools import islice
-from pathlib import Path, PurePosixPath
+from collections.abc import Callable
+from pathlib import Path
 from typing import Annotated
 
 import pathspec
-import regex
 from pydantic import Field
 
 from ergane.builtin._images import picture_type, read_picture
 from ergane.builtin._paths import Directory, File, not_found, resolve
+from ergane.builtin._rg import PROGRAM, SEARCH_SECONDS, find
 from ergane.builtin._text import (
     MAX_TEXT_CHARS,
     count_lines,
@@ -33,17 +32,8 @@ from ergane.builtin._text import (
 from ergane.tools import ToolOutput, tool
 
 _SNIFF_BYTES = 8192
-# A file over this is not searched for content: it is a data file, not source.
-_MAX_SCAN_BYTES = 1_000_000
 # A matching line is cut here, so one minified file cannot fill the result.
 _MAX_MATCH_CHARS = 300
-# How many entries one search looks at before it gives up, and for how long.
-_MAX_VISITS = 100_000
-_SEARCH_SECONDS = 30
-# Matching one line may take this long before the pattern is called too slow. `re`
-# backtracks without limit: `(a+)+$` on a line of 46 `a`s and a `!` never ends, on a
-# thread that Ctrl-C cannot stop. The `regex` package can be given a time limit.
-_LINE_SECONDS = 0.5
 _NEVER_ENTERED = frozenset({".git"})
 
 
@@ -220,89 +210,34 @@ def list_directory(path: Directory = ".") -> str:
     return text + note
 
 
-class _Walk:
-    """A breadth-first walk of a directory that leaves out what git ignores.
+def _named(name: str) -> Callable[[bytes], bool]:
+    """A test of a record of `rg`'s output (a path, or a path then NUL and a match) for a
+    path that `name` matches, as a line of a `.gitignore` would: `rg`'s own `--glob`
+    would put back the files that `.gitignore` excludes.
 
-    The `.gitignore` files of the repository that holds the directory are used, from its
-    root down (see `_Rules`); `.git` is never entered, and a symbolic link is listed but
-    never followed. Entries are yielded as (path relative to the start, entry).
-    `stopped` says that the walk gave up after `_MAX_VISITS` entries or
-    `_SEARCH_SECONDS`, and `unreadable` that a directory could not be read.
+    Raises:
+        ValueError: If the pattern is not a valid glob.
     """
-
-    def __init__(self, root: Path) -> None:
-        self.root = root
-        self.stopped = False
-        self.out_of_time = False
-        self.unreadable = False
-
-    def entries(self) -> Iterator[tuple[str, os.DirEntry[str]]]:
-        start = os.fspath(self.root) + os.sep
-        queue = deque([(self.root, _Rules.above(self.root).inside(self.root))])
-        visited = 0
-        deadline = time.monotonic() + _SEARCH_SECONDS
-        while queue:
-            directory, rules = queue.popleft()
-            try:
-                found, _ = _children(directory, rules)
-            except OSError:
-                self.unreadable = True
-                continue
-            for entry in found:
-                visited += 1
-                if visited > _MAX_VISITS:
-                    self.stopped = True
-                    return
-                if time.monotonic() > deadline:
-                    self.out_of_time = True
-                    return
-                yield entry.path[len(start) :], entry
-                if entry.is_dir(follow_symlinks=False):
-                    child = Path(entry.path)
-                    queue.append((child, rules.inside(child)))
-
-
-def _matching_lines(
-    entry: os.DirEntry[str], relative: str, pattern: regex.Pattern[str]
-) -> Iterator[str]:
-    """The lines of a text file that match, as `path:line: text`; none for anything that
-    is not a plain file (a directory, a symbolic link, a named pipe, which would block
-    for ever when read), or is binary, over `_MAX_SCAN_BYTES` or not UTF-8."""
     try:
-        if (
-            not entry.is_file(follow_symlinks=False)
-            or entry.stat(follow_symlinks=False).st_size > _MAX_SCAN_BYTES
-        ):
-            return
-        data = Path(entry.path).read_bytes()
-    except OSError:
-        return
-    if not is_text(data[:_SNIFF_BYTES]):
-        return
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError:
-        return
-    for number, line in enumerate(text.splitlines(), 1):
-        if pattern.search(line, timeout=_LINE_SECONDS):
-            yield f"{relative}:{number}: {line.strip()[:_MAX_MATCH_CHARS]}"
+        spec = pathspec.GitIgnoreSpec.from_lines([name])
+    except ValueError as exc:
+        raise ValueError(f"name is not a valid glob: {exc}") from None
+
+    def matches(record: bytes) -> bool:
+        path = record.split(b"\0", 1)[0].decode("utf-8", "replace")
+        return spec.match_file(path.removeprefix("./"))
+
+    return matches
 
 
-def _hits(
-    walk: _Walk, name: str | None, pattern: regex.Pattern[str] | None
-) -> Iterator[str]:
-    """The results of a search, one at a time: the entries whose path matches the glob
-    `name`, or, with `pattern`, the matching lines of the files among them."""
-    for relative, entry in walk.entries():
-        if name is not None and not PurePosixPath(relative).full_match(name):
-            continue
-        if pattern is None:
-            yield _marked(relative, entry)
-        else:
-            yield from _matching_lines(entry, relative, pattern)
+def _reason(stderr: str) -> str:
+    """Why `rg` refused a pattern: its `error:` line, or else its first line."""
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    errors = [line for line in lines if line.startswith("error: ")]
+    return (errors or lines)[0].removeprefix("error: ")
 
 
-@tool
+@tool(requires=PROGRAM)
 def search_files(
     path: Directory = ".",
     name: Annotated[
@@ -310,8 +245,9 @@ def search_files(
         Field(
             min_length=1,
             max_length=500,
-            description="A glob for the path of each entry relative to path, for "
-            "example '**/*.py' or 'src/*.ts'.",
+            description="A glob for the path of each file relative to path, written "
+            "as a line of a .gitignore: '*.py' at any depth, '/*.py' only directly "
+            "under path, 'src/**/*.ts' anywhere inside src.",
         ),
     ] = None,
     contains: Annotated[
@@ -319,8 +255,9 @@ def search_files(
         Field(
             min_length=1,
             max_length=500,
-            description="A regular expression to look for in the text of files; "
-            "start it with (?i) to ignore case.",
+            description="A regular expression (Rust syntax: no lookaround or "
+            "backreferences) to look for in the text of files; start it with (?i) to "
+            "ignore case.",
         ),
     ] = None,
     limit: Annotated[
@@ -330,62 +267,81 @@ def search_files(
     """Find files by name, by content, or both, under a directory. Give at least one of
     name and contains.
 
-    name is a case-sensitive glob matched against each path relative to path: '*.py'
-    matches only directly under path, '**/*.py' at any depth. contains is a regular
-    expression searched in the text of each file (binary files and files over 1 MB are
-    skipped). The result is relative paths, directories ending in /, or path:line: text
-    when contains is given, and says when it stopped at limit. Files that .gitignore
-    excludes, .git and symbolic links are skipped. Only works inside the working
-    directory and the system temp directory. To read a file, use read_file.
+    name is a case-sensitive glob in .gitignore style matched against each file's path
+    relative to path: '*.py' matches at any depth, '/*.py' only directly under path.
+    contains is a regular expression searched in the text of each file. The result is
+    relative paths of files, or path:line: text when contains is given, and says when it
+    stopped at limit. Binary files, files over 1 MB, files that .gitignore excludes, .git
+    and symbolic links are skipped. Only works inside the working directory and the
+    system temp directory. To read a file, use read_file; to see a directory, use
+    list_directory.
     """
     if name is None and contains is None:
         raise ValueError("Give name, contains, or both")
-    pattern = None
-    if contains is not None:
-        try:
-            pattern = regex.compile(contains)
-        except regex.error as exc:
-            raise ValueError(
-                f"contains is not a valid regular expression: {exc}"
-            ) from None
     root = resolve(path)
     if not root.is_dir():
         raise NotADirectoryError(
             f"{path} is not a directory; to read a file, use read_file"
         )
 
-    walk = _Walk(root)
-    # One more than the limit, to know whether the search was cut.
-    try:
-        results = list(islice(_hits(walk, name, pattern), limit + 1))
-    except TimeoutError:
+    keep = None if name is None else _named(name)
+    if contains is None:
+        found = find(["--files", "--null", "--"], root, b"\0", limit, keep)
+    else:
+        found = find(
+            [
+                "--line-number",
+                "--no-heading",
+                "--with-filename",
+                "--null",
+                "--trim",
+                f"--max-columns={_MAX_MATCH_CHARS}",
+                "--max-columns-preview",
+                "-e",
+                contains,
+                "--",
+            ],
+            root,
+            b"\n",
+            limit,
+            keep,
+        )
+    if (
+        found.returncode == 2
+        and not found.records
+        and "regex parse error" in found.stderr
+    ):
         raise ValueError(
-            "contains took too long to match a line (a pattern such as (a+)+$ can "
-            "backtrack without end); make it simpler"
-        ) from None
-    cut = len(results) > limit
-    del results[limit:]
+            f"contains is not a valid regular expression: {_reason(found.stderr)}"
+        )
+
+    results = []
+    for record in found.records:
+        text = record.decode("utf-8", "replace").removeprefix("./")
+        if contains is None:
+            results.append(text)
+        else:
+            file, _, rest = text.partition("\0")
+            number, _, line = rest.partition(":")
+            results.append(f"{file}:{number}: {line}")
 
     if not results:
         results.append("No matches found")
     notes = []
-    if cut:
+    if found.cut:
         notes.append(
             f"[... stopped after {limit} results; narrow the search with path, name "
             "or limit]"
         )
-    if walk.stopped:
+    if found.timed_out:
         notes.append(
-            f"[... gave up after looking at {_MAX_VISITS} entries; search a subdirectory]"
-        )
-    if walk.out_of_time:
-        notes.append(
-            f"[... gave up after {_SEARCH_SECONDS} seconds; search a subdirectory or "
+            f"[... gave up after {SEARCH_SECONDS} seconds; search a subdirectory or "
             "use a more specific name or pattern]"
         )
-    if walk.unreadable:
+    elif found.returncode == 2:
         notes.append(
-            "[some directories could not be read, so results in them are missing]"
+            "[some files or directories could not be read, so results in them are "
+            "missing]"
         )
     text, end = take_lines(results, 0, None, MAX_TEXT_CHARS - 500)
     if end < len(results):

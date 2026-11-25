@@ -14,6 +14,7 @@ A minimal terminal chat agent built on the OpenAI [Responses API](https://platfo
 
 - Python 3.14+
 - [uv](https://docs.astral.sh/uv/)
+- [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) on your `PATH`, for the `search_files` tool: `brew install ripgrep`, `sudo apt install ripgrep`, or see its [installation page](https://github.com/BurntSushi/ripgrep#installation). Without it ergane still runs: `search_files` is not offered to the model, and a warning at start says so. The other tools do not need it, and the model can still search with `run_command` (`grep`) if you allow that.
 
 ## Setup
 
@@ -233,7 +234,7 @@ The model can call tools. A tool that only reads runs at once, and `ergane` prin
 | ---- | ---------- | ------------ |
 | `read_file` | no | A text file (capped at about 16,000 characters, with the offset to continue from), or a png, jpeg, webp or gif picture for the model to look at (up to about 3.7 MB). A model without vision is refused once, and ergane sends it no more pictures for the rest of the session. |
 | `list_directory` | no | A directory's entries. What the repository's `.gitignore` files exclude, and `.git`, are left out and counted (a file you name is still read). |
-| `search_files` | no | Files by name (a glob), by content (a regular expression), or both, with the same `.gitignore` rules. A pattern that takes too long on one line is refused, and a search gives up after 30 seconds. |
+| `search_files` | no | Files by name (a glob written like a line of a `.gitignore`: `*.py` at any depth, `/*.py` only at the top), by content (a regular expression in ripgrep's Rust syntax, so no lookaround or backreferences, and none that can run for ever), or both, with the same `.gitignore` rules as `list_directory`. It lists files, never directories, and skips binary files, files over 1 MB and symbolic links. It runs [ripgrep](https://github.com/BurntSushi/ripgrep), and is not offered if `rg` is not installed. A search gives up after 30 seconds. |
 | `write_file` | yes | Creates or overwrites a file, and keeps an existing UTF-8 byte order mark. |
 | `edit_file` | yes | Replaces text in a file: the text must match once unless `replace_all` is set, and trailing whitespace and typographic quotes, dashes and spaces are forgiven. |
 | `run_command` | yes | Runs a shell command: stdin closed, stopped with its child processes after `timeout_s` (120 seconds by default). Output past about 16,000 characters keeps its start and end, and the whole of it is saved in the system temp directory in a file the result names, for `read_file` (those files are not deleted). |

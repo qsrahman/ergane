@@ -1,7 +1,7 @@
 import base64
 import json
 import os
-import time
+import shutil
 import tracemalloc
 from pathlib import Path
 
@@ -397,34 +397,41 @@ class TestTheListingLeavesOutWhatGitIgnores:
         assert "a.txt" in call(list_directory, path=".")
 
 
-class TestTheListingAndTheSearchAgree:
-    """They both start from what a directory shows, so what one leaves out the other
-    does too, whatever is in the directory."""
+needs_rg = pytest.mark.skipif(shutil.which("rg") is None, reason="needs ripgrep")
 
-    def test_the_same_entries_in_the_same_order(self, tmp_path: Path):
+
+def repository(root: Path) -> None:
+    """Make `root` a git repository, which is where `.gitignore` files count."""
+    write(root / ".git" / "HEAD", "")
+
+
+@needs_rg
+class TestTheListingAndTheSearchAgree:
+    """They leave out the same files: what `.gitignore` excludes, and `.git`."""
+
+    def test_the_same_files_are_left_out(self, tmp_path: Path):
+        repository(tmp_path)
         write(tmp_path / ".gitignore", "*.log\nbuild/\n!keep.log\n")
-        write(tmp_path / ".git" / "HEAD", "")
         write(tmp_path / "keep.log", "")
         write(tmp_path / "drop.log", "")
         write(tmp_path / "build" / "out.o", "")
         write(tmp_path / "src" / "a.py", "")
         write(tmp_path / "Zeta.txt", "")
         write(tmp_path / "alpha.txt", "")
-        (tmp_path / "real_dir").mkdir()
-        (tmp_path / "link").symlink_to(tmp_path / "alpha.txt")
-        (tmp_path / "dirlink").symlink_to(tmp_path / "real_dir")
 
-        listed = call(list_directory, path=".")
-        entries = listed.split("\n[")[0].splitlines()  # without the note at the end
+        listed = call(list_directory, path=".").split("\n[")[0].splitlines()
+        files = sorted(entry for entry in listed if not entry.endswith("/"))
         searched = call(search_files, name="*").splitlines()
+        top = [path for path in searched if "/" not in path]
 
-        assert entries == searched
-        assert "link@" in entries and "dirlink@" in entries and "src/" in entries
-        assert "keep.log" in entries  # brought back by the negation
-        for left_out in ("drop.log", "build/", ".git/"):
-            assert left_out not in entries
+        assert files == sorted(top)
+        assert "keep.log" in searched  # brought back by the negation
+        for left_out in ("drop.log", "build/out.o", ".git/HEAD"):
+            assert left_out not in searched
+        assert "src/a.py" in searched
 
 
+@needs_rg
 class TestSearchByName:
     @pytest.fixture(autouse=True)
     def tree(self, tmp_path: Path) -> None:
@@ -434,49 +441,70 @@ class TestSearchByName:
         write(tmp_path / "src" / "notes.txt", "")
         write(tmp_path / ".hidden.py", "")
 
-    def test_a_star_matches_only_directly_under_the_path(self):
-        assert call(search_files, name="*.py").splitlines() == [".hidden.py", "top.py"]
-
-    def test_a_double_star_matches_at_any_depth(self):
-        assert call(search_files, name="**/*.py").splitlines() == [
+    def test_a_star_matches_at_any_depth_as_in_a_gitignore(self):
+        assert call(search_files, name="*.py").splitlines() == [
             ".hidden.py",
+            "src/a.py",
+            "src/deep/b.py",
             "top.py",
+        ]
+
+    def test_a_leading_slash_matches_only_directly_under_the_path(self):
+        assert call(search_files, name="/*.py").splitlines() == [".hidden.py", "top.py"]
+
+    def test_a_glob_with_a_directory_is_relative_to_the_path(self):
+        assert call(search_files, name="src/**/*.py").splitlines() == [
             "src/a.py",
             "src/deep/b.py",
         ]
 
     def test_paths_are_relative_to_the_search_directory(self):
-        assert call(search_files, path="src", name="**/*.py").splitlines() == [
+        assert call(search_files, path="src", name="*.py").splitlines() == [
             "a.py",
             "deep/b.py",
         ]
 
-    def test_directories_end_in_a_slash(self):
-        assert call(search_files, name="**/deep") == "src/deep/"
+    def test_a_directory_name_finds_the_files_in_it_as_in_a_gitignore(self):
+        # Only files are ever listed: a directory is for `list_directory`.
+        assert call(search_files, name="deep") == "src/deep/b.py"
 
     def test_matching_is_case_sensitive(self):
         assert call(search_files, name="*.PY") == "No matches found"
 
     def test_no_match_says_so(self):
-        assert call(search_files, name="**/*.rs") == "No matches found"
+        assert call(search_files, name="*.rs") == "No matches found"
 
     def test_the_limit_stops_the_result_and_says_so(self):
-        result = call(search_files, name="**/*.py", limit=2)
+        result = call(search_files, name="*.py", limit=2)
 
-        assert result.splitlines()[:2] == [".hidden.py", "top.py"]
+        assert result.splitlines()[:2] == [".hidden.py", "src/a.py"]
         assert "stopped after 2 results" in result
 
-    def test_a_symbolic_link_is_listed_but_never_followed(self, tmp_path: Path):
+    def test_a_symbolic_link_is_never_followed_or_listed(self, tmp_path: Path):
         outside = tmp_path.parent / f"{tmp_path.name}-outside"
         write(outside / "secret.py", "")
         (tmp_path / "escape").symlink_to(outside)
+        (tmp_path / "alias.py").symlink_to(tmp_path / "top.py")
 
-        result = call(search_files, name="**/*.py")
+        result = call(search_files, name="*.py")
 
-        assert "secret.py" not in result
-        assert call(search_files, name="escape") == "escape@"
+        assert "secret.py" not in result and "alias.py" not in result
+
+    def test_a_named_pipe_is_not_listed(self, tmp_path: Path):
+        os.mkfifo(tmp_path / "pipe")
+
+        assert call(search_files, name="pipe") == "No matches found"
+
+    def test_a_bad_glob_is_explained(self):
+        assert "name is not a valid glob" in call(search_files, name="\\")
+
+    def test_a_name_that_looks_like_a_flag_is_a_glob(self, tmp_path: Path):
+        write(tmp_path / "--files", "")
+
+        assert call(search_files, name="--files") == "--files"
 
 
+@needs_rg
 class TestSearchByContent:
     @pytest.fixture(autouse=True)
     def tree(self, tmp_path: Path) -> None:
@@ -491,42 +519,42 @@ class TestSearchByContent:
         ]
 
     def test_it_is_a_regular_expression(self):
-        assert call(search_files, contains=r"def \w+\(").strip() == "a.py:3: def run():"
+        assert call(search_files, contains=r"def \w+\(") == "a.py:3: def run():"
 
-    def test_a_pattern_that_backtracks_without_end_is_refused_not_waited_for(
-        self, tmp_path: Path
-    ):
-        # With `re` this never returned, on a thread that Ctrl-C cannot stop.
+    def test_the_text_of_a_line_loses_its_indentation(self):
+        assert "a.py:4: return os.getcwd()" in call(search_files, contains="getcwd")
+
+    def test_a_colon_in_a_path_or_a_line_is_kept(self, tmp_path: Path):
+        write(tmp_path / "a:b.txt", "x: y: needle: z\n")
+
+        assert "a:b.txt:1: x: y: needle: z" in call(search_files, contains="needle")
+
+    def test_a_pattern_that_would_backtrack_without_end_finishes(self, tmp_path: Path):
+        # With Python's `re` this never returned, on a thread that Ctrl-C cannot stop.
         write(tmp_path / "trap.txt", "a" * 46 + "!\n")
-        started = time.monotonic()
 
-        result = call(search_files, contains=r"(a|aa)+$", name="trap.txt")
+        assert call(search_files, contains=r"(a|aa)+$", name="trap.txt") == (
+            "No matches found"
+        )
 
-        assert time.monotonic() - started < 10
-        assert "took too long to match a line" in result
-
-    def test_a_search_that_runs_out_of_time_returns_what_it_has(
+    def test_a_search_that_runs_out_of_time_says_so(
         self, monkeypatch: pytest.MonkeyPatch
     ):
-        monkeypatch.setattr("ergane.builtin.files._SEARCH_SECONDS", -1)
+        monkeypatch.setattr("ergane.builtin._rg.SEARCH_SECONDS", -1)
+        monkeypatch.setattr("ergane.builtin.files.SEARCH_SECONDS", -1)
 
-        result = call(search_files, contains="os")
+        assert "gave up after -1 seconds" in call(search_files, contains="os")
 
-        assert "gave up after -1 seconds" in result
-
-    def test_a_case_insensitive_pattern_still_works(self):
+    def test_a_case_insensitive_pattern_works_with_an_inline_flag(self):
         assert "a.py:1: import os" in call(search_files, contains=r"(?i)IMPORT OS")
 
     def test_name_narrows_the_files_that_are_searched(self):
-        result = call(search_files, name="**/*.py", contains="os")
+        result = call(search_files, name="*.py", contains="os")
 
         assert "notes.txt" not in result and "a.py:1: import os" in result
 
     def test_a_binary_file_is_skipped(self):
         assert "data.bin" not in call(search_files, contains="os")
-
-    def test_matching_ignores_case_with_an_inline_flag(self):
-        assert "a.py:1" in call(search_files, contains="(?i)IMPORT OS")
 
     def test_the_limit_counts_matching_lines(self):
         result = call(search_files, contains="os", limit=2)
@@ -543,7 +571,7 @@ class TestSearchByContent:
             if "wide.js" in l
         )
 
-        assert len(line) < 400
+        assert len(line) < 400 and "omitted end of long line" in line
 
     def test_a_file_over_a_megabyte_is_skipped(self, tmp_path: Path):
         write(tmp_path / "huge.txt", "needle\n" + "x" * 1_100_000)
@@ -566,13 +594,18 @@ class TestSearchByContent:
 
         assert call(search_files, contains="needle") == "a.txt:1: needle"
 
-    def test_a_named_pipe_is_listed_by_name_like_any_entry(self, tmp_path: Path):
-        os.mkfifo(tmp_path / "pipe")
-
-        assert call(search_files, name="pipe") == "pipe"
-
     def test_a_bad_regular_expression_is_explained(self):
-        assert "not a valid regular expression" in call(search_files, contains="(")
+        result = call(search_files, contains="(")
+
+        assert "not a valid regular expression: unclosed group" in result
+
+    def test_a_lookaround_is_explained_not_silently_missed(self):
+        assert "look-around" in call(search_files, contains="(?<=a)b")
+
+    def test_a_pattern_that_looks_like_a_flag_is_a_pattern(self, tmp_path: Path):
+        write(tmp_path / "flags.txt", "use --files here\n")
+
+        assert call(search_files, contains="--files") == "flags.txt:1: use --files here"
 
     def test_the_output_stays_under_the_generic_cut(self, tmp_path: Path):
         write(
@@ -584,9 +617,20 @@ class TestSearchByContent:
 
         assert len(result) < MAX_OUTPUT_CHARS and "narrow the search" in result
 
+    def test_the_order_is_the_same_every_time(self, tmp_path: Path):
+        for number in range(30):
+            write(tmp_path / f"f{number:02d}.txt", "needle\n")
 
+        first = call(search_files, contains="needle")
+
+        assert [call(search_files, contains="needle") for _ in range(3)] == [first] * 3
+        assert first.splitlines()[:2] == ["f00.txt:1: needle", "f01.txt:1: needle"]
+
+
+@needs_rg
 class TestWhatIsLeftOut:
     def test_gitignore_hides_files_and_directories(self, tmp_path: Path):
+        repository(tmp_path)
         write(tmp_path / ".gitignore", "*.log\nbuild/\n/dist\n")
         write(tmp_path / "keep.py", "")
         write(tmp_path / "app.log", "")
@@ -594,15 +638,14 @@ class TestWhatIsLeftOut:
         write(tmp_path / "dist" / "x.py", "")
         write(tmp_path / "src" / "dist" / "y.py", "")
 
-        assert call(search_files, name="**/*").splitlines() == [
-            "src/",
+        assert call(search_files, name="*").splitlines() == [
             ".gitignore",
             "keep.py",
-            "src/dist/",
             "src/dist/y.py",
         ]
 
     def test_a_negation_brings_a_file_back(self, tmp_path: Path):
+        repository(tmp_path)
         write(tmp_path / ".gitignore", "*.log\n!keep.log\n")
         write(tmp_path / "a.log", "")
         write(tmp_path / "keep.log", "")
@@ -612,13 +655,15 @@ class TestWhatIsLeftOut:
     def test_a_gitignore_below_the_path_applies_to_its_own_directory_only(
         self, tmp_path: Path
     ):
+        repository(tmp_path)
         write(tmp_path / "sub" / ".gitignore", "*.tmp\n")
         write(tmp_path / "sub" / "a.tmp", "")
         write(tmp_path / "b.tmp", "")
 
-        assert call(search_files, name="**/*.tmp") == "b.tmp"
+        assert call(search_files, name="*.tmp") == "b.tmp"
 
     def test_gitignored_files_are_not_searched_for_content(self, tmp_path: Path):
+        repository(tmp_path)
         write(tmp_path / ".gitignore", "secret.txt\n")
         write(tmp_path / "secret.txt", "needle\n")
         write(tmp_path / "open.txt", "needle\n")
@@ -628,14 +673,14 @@ class TestWhatIsLeftOut:
     def test_the_rules_of_the_repository_above_the_searched_directory_apply(
         self, tmp_path: Path
     ):
-        write(tmp_path / ".git" / "HEAD", "")
+        repository(tmp_path)
         write(tmp_path / ".gitignore", "__pycache__/\n")
         write(tmp_path / "src" / "a.py", "needle\n")
         write(tmp_path / "src" / "__pycache__" / "a.py", "needle\n")
 
         assert call(search_files, path="src", contains="needle") == "a.py:1: needle"
-        assert (
-            call(search_files, path="src", name="**/__pycache__") == "No matches found"
+        assert call(search_files, path="src", name="__pycache__/*") == (
+            "No matches found"
         )
 
     def test_the_git_directory_is_never_entered(self, tmp_path: Path):
@@ -643,9 +688,43 @@ class TestWhatIsLeftOut:
         write(tmp_path / "a.txt", "needle\n")
 
         assert call(search_files, contains="needle") == "a.txt:1: needle"
-        assert call(search_files, name="**/config") == "No matches found"
+        assert call(search_files, name="config") == "No matches found"
+
+    def test_dotfiles_are_searched(self, tmp_path: Path):
+        write(tmp_path / ".env.example", "needle\n")
+
+        assert call(search_files, contains="needle") == ".env.example:1: needle"
+
+    @pytest.mark.parametrize(
+        ("file", "text"),
+        [
+            (".ignore", "hidden.txt\n"),
+            (".rgignore", "hidden.txt\n"),
+            (".git/info/exclude", "hidden.txt\n"),
+        ],
+    )
+    def test_only_gitignore_files_hide_anything(
+        self, tmp_path: Path, file: str, text: str
+    ):
+        # What `list_directory` reads, and no more: a project's own `.ignore` files for
+        # other tools are not a way to hide a file from the model.
+        repository(tmp_path)
+        write(tmp_path / file, text)
+        write(tmp_path / "hidden.txt", "needle\n")
+
+        assert call(search_files, contains="needle") == "hidden.txt:1: needle"
+
+    def test_the_users_ripgrep_configuration_is_not_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        write(tmp_path / "rc", "--glob=!*.txt\n")
+        monkeypatch.setenv("RIPGREP_CONFIG_PATH", str(tmp_path / "rc"))
+        write(tmp_path / "a.txt", "needle\n")
+
+        assert call(search_files, contains="needle") == "a.txt:1: needle"
 
 
+@needs_rg
 class TestSearchArguments:
     def test_neither_name_nor_contains_is_an_error(self):
         assert "Give name, contains, or both" in call(search_files)
@@ -663,6 +742,9 @@ class TestSearchArguments:
     def test_it_runs_without_asking(self):
         assert search_files.read_only
 
+    def test_it_needs_ripgrep_to_be_offered(self):
+        assert search_files.requires == "rg"
+
     def test_an_unreadable_directory_is_reported_not_fatal(self, tmp_path: Path):
         write(tmp_path / "ok" / "a.txt", "")
         locked = tmp_path / "locked"
@@ -672,8 +754,15 @@ class TestSearchArguments:
         try:
             if os.access(locked, os.R_OK):  # running as root: nothing to test
                 pytest.skip("directory permissions do not apply")
-            result = call(search_files, name="**/*.txt")
+            result = call(search_files, name="*.txt")
         finally:
             locked.chmod(0o755)
 
         assert "ok/a.txt" in result and "could not be read" in result
+
+    def test_without_ripgrep_a_call_says_so_instead_of_failing_oddly(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("PATH", "")
+
+        assert "rg is not installed" in call(search_files, name="*")
