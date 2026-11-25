@@ -22,7 +22,6 @@ from ergane.sessions import SessionError, SessionStore
 from ergane.terminal import terminal_session
 from ergane.tools import (
     Tool,
-    pick_tools,
     tool_clash,
     tools_in,
     without_missing_programs,
@@ -192,19 +191,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         # The banner is separated from the notices of servers that failed by the
         # console itself, which is why it is the same one.
         agent = Agent(config, server_notes=hub.instructions())
-        own, unknown = pick_tools(
-            tools_in(builtin, console.notice), config.builtin_tools
+        own, missing = without_missing_programs(
+            tools_in(builtin, console.notice) if config.builtin_tools else []
         )
-        own, missing = without_missing_programs(own)
         for tool in missing:
             console.notice(
                 f"{tool.name} is off: {tool.requires} is not installed (see Requirements "
                 "in the README)",
                 "warning",
-            )
-        for name in unknown:
-            console.notice(
-                f"builtin_tools: ergane has no built-in tool named {name}", "warning"
             )
         for name in agent.add_tools([*own, *mcp_tools]):
             console.notice(tool_clash(name), "warning")

@@ -36,9 +36,9 @@ The first release. ergane began on 2026-10-16 as `muagent`, and was renamed on 2
 - Built-in tools: `read_file` (text, and png, jpeg, webp and gif pictures for models that
   take them), `list_directory`, `search_files` (by name, by content or both, on
   [ripgrep](https://github.com/BurntSushi/ripgrep)), `write_file`, `edit_file`,
-  `run_command`, `web_fetch` and `web_search` (DuckDuckGo, no key). `builtin_tools` and
-  `--no-builtin` choose which are offered; a tool whose program is missing is left out
-  with a warning.
+  `run_command`, `web_fetch` and `web_search` (DuckDuckGo, no key). `builtin_tools`
+  (`true` or `false`) and `--no-builtin` offer all of them or none; a tool whose program is
+  missing is left out with a warning.
 - A `todo` tool for tasks of three or more steps, shown as a checklist, and `/todo`.
 - A tool that changes anything asks first, in a menu with the change shown as a diff;
   "always allow" lasts for the session. Calls that only read run at the same time.

@@ -13,7 +13,6 @@ from ergane.tools import (
     Image,
     Tool,
     ToolOutput,
-    pick_tools,
     tool,
     tool_clash,
     tools_in,
@@ -466,45 +465,6 @@ class TestToolsIn:
 
 def test_a_tool_left_out_for_its_name_is_reported_by_it():
     assert tool_clash("add") == "Tool add is defined twice; only the first is offered"
-
-
-class TestPickTools:
-    @staticmethod
-    def three() -> list[Tool]:
-        def make(name: str) -> Tool:
-            def function() -> str:
-                """Say it."""
-                return name
-
-            function.__name__ = name
-            return Tool.from_function(function)
-
-        return [make("alpha"), make("beta"), make("gamma")]
-
-    def test_true_is_all_of_them(self):
-        tools = self.three()
-
-        assert pick_tools(tools, True) == (tools, [])
-
-    def test_false_is_none(self):
-        assert pick_tools(self.three(), False) == ([], [])
-
-    def test_names_pick_those_in_the_order_the_tools_came(self):
-        tools = self.three()
-
-        chosen, unknown = pick_tools(tools, ["gamma", "alpha"])
-
-        assert [t.name for t in chosen] == ["alpha", "gamma"]
-        assert unknown == []
-
-    def test_a_name_that_no_tool_has_is_returned(self):
-        chosen, unknown = pick_tools(self.three(), ["beta", "nope", "nada"])
-
-        assert [t.name for t in chosen] == ["beta"]
-        assert unknown == ["nope", "nada"]
-
-    def test_an_empty_list_is_none(self):
-        assert pick_tools(self.three(), []) == ([], [])
 
 
 class TestPreview:

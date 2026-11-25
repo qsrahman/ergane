@@ -241,24 +241,17 @@ class TestBuiltinTools:
         assert RecordingRepl.agent is not None
         assert RecordingRepl.agent.tools == {}
 
-    def test_a_list_in_the_file_offers_only_those(self, tmp_path: Path):
-        write_config_json(tmp_path, {}, builtin_tools=["gamma", "alpha"])
-
-        main([])
-
-        assert RecordingRepl.agent is not None
-        assert list(RecordingRepl.agent.tools) == ["alpha", "gamma"]
-
-    def test_a_name_that_is_not_a_tool_is_reported_and_the_rest_are_offered(
-        self, tmp_path: Path, capsys
+    @pytest.mark.parametrize("value", [["alpha"], "alpha", 5])
+    def test_a_list_or_anything_but_true_or_false_is_refused_naming_the_key(
+        self, tmp_path: Path, capsys, value: object
     ):
-        write_config_json(tmp_path, {}, builtin_tools=["alpha", "nope"])
+        write_config_json(tmp_path, {}, builtin_tools=value)
 
-        main([])
+        with pytest.raises(SystemExit) as exc:
+            main([])
 
-        assert RecordingRepl.agent is not None
-        assert list(RecordingRepl.agent.tools) == ["alpha"]
-        assert "no built-in tool named nope" in capsys.readouterr().out
+        assert exc.value.code == 1
+        assert "builtin_tools" in capsys.readouterr().err
 
     def test_a_tool_whose_program_is_missing_is_not_offered_and_the_user_is_told(
         self, tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
@@ -285,14 +278,14 @@ class TestBuiltinTools:
             '@tool(requires="no-such-program-ergane")\n'
             'def delta() -> str:\n    """Say delta."""\n    return "delta"\n'
         )
-        write_config_json(tmp_path, {}, builtin_tools=["alpha"])
+        write_config_json(tmp_path, {}, builtin_tools=False)
 
         main([])
 
         assert "delta is off" not in capsys.readouterr().out
 
     def test_the_flag_beats_the_file(self, tmp_path: Path):
-        write_config_json(tmp_path, {}, builtin_tools=["alpha"])
+        write_config_json(tmp_path, {}, builtin_tools=True)
 
         main(["--no-builtin"])
 

@@ -66,7 +66,7 @@ Each setting comes from the first of these that sets it: **its command-line flag
 | `auto_compact`       | `--auto-compact`, `--no-auto-compact` | `true`   | Summarize the oldest turns when the history gets long (see [Long conversations](#long-conversations)). |
 | `compact_at`         | `--compact-at SHARE`     | `0.75`                | Share of `max_context_tokens` at which to summarize. |
 | `keep_recent_tokens` | `--keep-recent-tokens N` | `15000`               | About how many tokens of the newest turns stay as they are (at most half of where summarizing starts). |
-| `builtin_tools`      | `--no-builtin` (offer none) | `true`             | Which of ergane's own [tools](#tools) are offered: `true` for all, `false` for none, or a list of names such as `["read_file"]`. |
+| `builtin_tools`      | `--no-builtin` (offer none) | `true`             | Whether ergane's own [tools](#tools) are offered: `true` for all of them, `false` for none. There is nothing in between: a list of names is an error. |
 | `mcpServers`         | `--no-mcp` (start none)  | none                  | The [MCP servers](#mcp-servers). |
 
 ### Command-line options
@@ -122,17 +122,6 @@ Each is a whole file. Only `api_key` is required, and `OPENAI_API_KEY` in the en
 }
 ```
 
-**Only the tools that read** (the files and the web, no writing and no shell):
-
-```json
-{
-  "api_key": "${OPENAI_API_KEY}",
-  "builtin_tools": ["read_file", "list_directory", "search_files"]
-}
-```
-
-The names are `read_file`, `list_directory`, `search_files`, `write_file`, `edit_file`, `run_command`, `web_fetch` and `web_search`; a name ergane does not have is reported at start and left out. `true` offers all of them (the default) and `false` none.
-
 **Long conversations, tuned:** summarize earlier, and keep less verbatim:
 
 ```json
@@ -153,7 +142,7 @@ or turn summarizing off, so that old turns are only dropped when the budget need
 }
 ```
 
-**A plain chat with no tools, replies in one piece:**
+**No built-in tools, replies in one piece** (`builtin_tools` is `true` or `false`, nothing in between):
 
 ```json
 {
@@ -288,7 +277,7 @@ A tool runs without asking unless it says `@tool(read_only=False)`, which it mus
 }
 ```
 
-`ergane` has file, shell and web [tools of its own](#tools), so an MCP server is for what they do not do. As an example of one that overlaps, [workshop-mcp](https://github.com/qsrahman/workshop-mcp) is a server made to go with `ergane` (a Node program that `npx` fetches on first use); its tools are offered as `workshop__NAME` next to the built-in ones, so set `builtin_tools` to the names you still want, or `false`, if you would rather the model had only one set:
+`ergane` has file, shell and web [tools of its own](#tools), so an MCP server is for what they do not do. As an example of one that overlaps, [workshop-mcp](https://github.com/qsrahman/workshop-mcp) is a server made to go with `ergane` (a Node program that `npx` fetches on first use); its tools are offered as `workshop__NAME` next to the built-in ones, so set `builtin_tools` to `false` if you would rather the model had only its set:
 
 ```json
 {

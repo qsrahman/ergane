@@ -313,28 +313,6 @@ def tools_in(
     return list(found.values())
 
 
-def pick_tools(
-    tools: Sequence[Tool], wanted: bool | Sequence[str]
-) -> tuple[list[Tool], list[str]]:
-    """The tools a setting asks for: all of them (True), none (False), or the named ones.
-
-    Args:
-        tools: The tools there are.
-        wanted: The `builtin_tools` setting.
-
-    Returns:
-        The chosen tools, in the order they came, and the names that were asked for but
-        that no tool has.
-    """
-    if isinstance(wanted, bool):
-        return (list(tools) if wanted else []), []
-    known = {tool.name for tool in tools}
-    return (
-        [tool for tool in tools if tool.name in wanted],
-        [name for name in wanted if name not in known],
-    )
-
-
 def without_missing_programs(tools: Sequence[Tool]) -> tuple[list[Tool], list[Tool]]:
     """Split tools by whether the program they need, if any, is on the `PATH`.
 
