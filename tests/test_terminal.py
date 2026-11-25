@@ -118,6 +118,55 @@ class TestToolbar:
 
         assert " · always: 3 tools  " in text
 
+    def bar(self, monkeypatch, columns: int) -> str:
+        monkeypatch.setenv("COLUMNS", str(columns))
+        agent = Agent(
+            make_config(model="m1", reasoning_effort="high", max_context_tokens=10000)
+        )
+        agent.always_allowed.update({"write_file", "run_command"})
+        text = fragment_list_to_text(toolbar(agent, McpHub({}, Path())))
+        assert len(text) < columns  # never as wide as the terminal
+        assert text.endswith("% · 0 / 10k") or "~" in text  # the meter is always there
+        return text
+
+    def test_what_does_not_fit_is_left_out_but_never_the_meter(
+        self, tmp_path, monkeypatch
+    ):
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/a-long-branch-name\n")
+        # Dropped in turn: the branch, the effort, the tools allowed.
+        assert "git:a-long-branch-name · always: run_command" in self.bar(
+            monkeypatch, 120
+        )
+        assert " m1 · high · always: run_command, write_file  " in self.bar(
+            monkeypatch, 90
+        )
+        assert " m1 · always: run_command, write_file  " in self.bar(monkeypatch, 70)
+        assert self.bar(monkeypatch, 45).startswith(" m1  ──")
+
+    def test_the_line_stops_one_short_of_the_width_so_that_it_does_not_wrap(
+        self, tmp_path, monkeypatch
+    ):
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+        full = len(self.bar(monkeypatch, 200))
+
+        assert "git:main" in self.bar(monkeypatch, full + 1)
+        assert "git:main" not in self.bar(monkeypatch, full)
+
+    def test_a_failed_server_outlasts_the_tools_allowed_and_the_effort(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("COLUMNS", "60")
+        agent = Agent(make_config(model="m1", reasoning_effort="high"))
+        agent.always_allowed.update({"write_file", "run_command"})
+        hub = McpHub({}, Path())
+        hub.statuses["x"] = ServerStatus("x", "failed", "no", log=None)
+
+        text = fragment_list_to_text(toolbar(agent, hub))
+
+        assert "1 MCP failed: /servers" in text and "always" not in text
+
     def test_the_count_of_the_server_is_not_marked_as_an_estimate(self):
         agent = Agent(make_config(max_context_tokens=10000))
         anchor(agent, 2500)

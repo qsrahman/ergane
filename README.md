@@ -66,7 +66,120 @@ Each setting comes from the first of these that sets it: **its command-line flag
 | `builtin_tools`      | `--no-builtin` (offer none) | `true`             | Which of ergane's own [tools](#tools) are offered: `true` for all, `false` for none, or a list of names such as `["read_file"]`. |
 | `mcpServers`         | `--no-mcp` (start none)  | none                  | The [MCP servers](#mcp-servers). |
 
-Two more flags: `--config FILE` reads another file (there is no variable for it, so that a project's environment cannot point ergane at a file of its own), `--resume [ID]` continues a [saved session](#sessions), `--version` prints the version, and `--help` lists them all. A file you name that does not exist is an error; the default one may be missing, if the environment and flags give the key.
+### Command-line options
+
+Every setting in the table above has a flag, and a flag beats the file for that run. A flag that is not given leaves the setting to the file and the defaults. The rest do things no file key can:
+
+| Flag | Effect |
+| ---- | ------ |
+| `--config FILE` | Read `FILE` instead of `~/.config/ergane/config.json`. There is no variable for it, so that a project's environment cannot point ergane at a file of its own. A file you name that does not exist is an error; the default one may be missing, if the environment and the flags give the key. |
+| `--resume [ID]` | Continue a [saved session](#sessions) of this directory: the one whose id starts with `ID`, or the last one if there is no `ID`. |
+| `--no-builtin` | Offer none of ergane's own [tools](#tools), for this run. Same as `"builtin_tools": false`. |
+| `--no-mcp` | Start none of the [MCP servers](#mcp-servers) of the file, for this run (`/servers` lists them as off). |
+| `--streaming`, `--no-streaming` | Stream the reply as it arrives, or wait for the whole of it. |
+| `--auto-compact`, `--no-auto-compact` | Summarize old turns when the history gets long, or never. |
+| `--reasoning-effort default` | Send no reasoning setting, over a `reasoning_effort` in the file. |
+| `--version` | Print the version and exit. |
+| `--help`, `-h` | List the flags and exit. |
+
+```bash
+ergane                                    # the file's settings
+ergane --model gpt-5.5 --reasoning-effort high
+ergane --base-url http://localhost:11434/v1 --model gpt-oss:20b
+ergane --config ~/work/ergane-work.json --no-mcp
+ergane --resume                           # the last session of this directory
+ergane --resume 20261124                  # the one whose id starts with this
+ergane --no-builtin --no-mcp              # a plain chat, with no tool at all
+```
+
+A mistake in the settings (a bad value, a key that is not a setting, a missing key, a `${NAME}` that is not set) is printed one line each, naming the file and the key, and ergane exits with status 1 before it starts.
+
+### Examples of `config.json`
+
+Each is a whole file. Only `api_key` is required, and `OPENAI_API_KEY` in the environment makes even that optional.
+
+**OpenAI, with the key kept in the environment:**
+
+```json
+{
+  "api_key": "${OPENAI_API_KEY}",
+  "model": "gpt-5.4-mini",
+  "reasoning_effort": "low"
+}
+```
+
+**A local model through Ollama** (any OpenAI-compatible server; the key can be any text the server ignores, and a model that does not reason must not have `reasoning_effort`):
+
+```json
+{
+  "api_key": "ollama",
+  "base_url": "http://localhost:11434/v1",
+  "model": "gpt-oss:20b",
+  "max_context_tokens": 32768
+}
+```
+
+**Only the tools that read** (the files and the web, no writing and no shell):
+
+```json
+{
+  "api_key": "${OPENAI_API_KEY}",
+  "builtin_tools": ["read_file", "list_directory", "search_files"]
+}
+```
+
+The names are `read_file`, `list_directory`, `search_files`, `write_file`, `edit_file`, `run_command`, `web_fetch` and `web_search`; a name ergane does not have is reported at start and left out. `true` offers all of them (the default) and `false` none.
+
+**Long conversations, tuned:** summarize earlier, and keep less verbatim:
+
+```json
+{
+  "api_key": "${OPENAI_API_KEY}",
+  "max_context_tokens": 100000,
+  "compact_at": 0.6,
+  "keep_recent_tokens": 8000
+}
+```
+
+or turn summarizing off, so that old turns are only dropped when the budget needs the room:
+
+```json
+{
+  "api_key": "${OPENAI_API_KEY}",
+  "auto_compact": false
+}
+```
+
+**A plain chat with no tools, replies in one piece:**
+
+```json
+{
+  "api_key": "${OPENAI_API_KEY}",
+  "builtin_tools": false,
+  "streaming": false
+}
+```
+
+**With MCP servers** (one that ergane starts, one it connects to, narrowed to two tools and allowed to run without asking; the keys of a server are in the [table below](#mcp-servers)):
+
+```json
+{
+  "api_key": "${OPENAI_API_KEY}",
+  "mcpServers": {
+    "git": {
+      "command": "uvx",
+      "args": ["mcp-server-git", "--repository", "."],
+      "tools": ["git_status", "git_diff_unstaged"],
+      "read_only": true
+    },
+    "docs": {
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "Bearer ${DOCS_TOKEN}" },
+      "call_timeout": 60
+    }
+  }
+}
+```
 
 ## Usage
 
@@ -76,7 +189,7 @@ ergane
 
 From a checkout that is not installed as a command: `uv run ergane` (or `uv run python -m ergane`).
 
-Type a prompt at `❯` and press Enter. Up and Down recall earlier prompts, which are kept in `~/.local/state/ergane/history` (or `$XDG_STATE_HOME/ergane/history`) in plain text; delete the file to forget them. The directory (which also holds the server logs) is made readable by you only (`0700`, the file `0600`), since a prompt can hold whatever you pasted. Paste several lines and they stay one prompt; press Enter to send it. To add a line by hand, press Alt-Enter (Esc, then Enter) or Ctrl-J (the new lines start with `· `); Shift-Enter does it too in a terminal that sends it as its own key (kitty's keyboard protocol, or xterm's modifyOtherKeys), but most send a plain Enter for it, and then it sends the prompt. Commands are completed with a line saying what they do. The line under the prompt shows the model, the effort, the git branch of the working directory, the tools you allowed for the session (`always: …`) and how full the context is, as a meter that turns yellow and then red, with the tokens used and the budget (`~` while it is an estimate). A notice is plain and dim when it is routine; when you may want to act on it it is yellow, and when something went wrong red, and both are in brackets, which say so without colour. In a reply, `**bold**` is bold, `` `code` `` is cyan and a `#` heading line is bold, the marks left in the text; a line of a code block is not touched. Pressing Enter on an empty line sends nothing and leaves nothing on the screen. The question before a change to a file can show the change as a diff, with added lines green and removed lines red. Colours are your terminal's own, and `NO_COLOR` turns them off. Ctrl-R searches the earlier prompts, Ctrl-X Ctrl-E edits the prompt in `$EDITOR` and sends it when the editor closes, and Ctrl-Z suspends ergane. The question before a tool runs is a menu of its own (see below), which is not kept in the history. When input or output is redirected (`echo hi | ergane`), plain `input()` reads the prompts instead. To quit, use `/exit`, `/quit`, Ctrl-D, or Ctrl-C twice on an empty prompt. A stray Ctrl-C must not end a conversation, so on an empty line it takes two, and once there is a conversation Ctrl-D must be pressed twice too (it quits at once when there is none, or when input is redirected). The conversation is [saved](#sessions) after each prompt, so quitting loses nothing. A single Ctrl-C clears what you have typed, or, on an empty line, asks you to press it again. `/help` lists the keys as well as the commands.
+Type a prompt at `❯` and press Enter. Up and Down recall earlier prompts, which are kept in `~/.local/state/ergane/history` (or `$XDG_STATE_HOME/ergane/history`) in plain text; delete the file to forget them. The directory (which also holds the server logs) is made readable by you only (`0700`, the file `0600`), since a prompt can hold whatever you pasted. Paste several lines and they stay one prompt; press Enter to send it. To add a line by hand, press Alt-Enter (Esc, then Enter) or Ctrl-J (the new lines start with `· `); Shift-Enter does it too in a terminal that sends it as its own key (kitty's keyboard protocol, or xterm's modifyOtherKeys), but most send a plain Enter for it, and then it sends the prompt. Commands are completed with a line saying what they do. The line under the prompt shows the model, the effort, the git branch of the working directory, the tools you allowed for the session (`always: …`) and how full the context is, as a meter that turns yellow and then red, with the tokens used and the budget (`~` while it is an estimate). On a narrow terminal the line drops the branch, then the effort, then the tools you allowed, so that the meter is never cut off. A notice is plain and dim when it is routine; when you may want to act on it it is yellow, and when something went wrong red, and both are in brackets, which say so without colour. In a reply, `**bold**` is bold, `` `code` `` is cyan and a `#` heading line is bold, the marks left in the text; a line of a code block is not touched. Pressing Enter on an empty line sends nothing and leaves nothing on the screen. The question before a change to a file can show the change as a diff, with added lines green and removed lines red. Colours are your terminal's own, and `NO_COLOR` turns them off. Ctrl-R searches the earlier prompts, Ctrl-X Ctrl-E edits the prompt in `$EDITOR` and sends it when the editor closes, and Ctrl-Z suspends ergane. The question before a tool runs is a menu of its own (see below), which is not kept in the history. When input or output is redirected (`echo hi | ergane`), plain `input()` reads the prompts instead. To quit, use `/exit`, `/quit`, Ctrl-D, or Ctrl-C twice on an empty prompt. A stray Ctrl-C must not end a conversation, so on an empty line it takes two, and once there is a conversation Ctrl-D must be pressed twice too (it quits at once when there is none, or when input is redirected). The conversation is [saved](#sessions) after each prompt, so quitting loses nothing. A single Ctrl-C clears what you have typed, or, on an empty line, asks you to press it again. `/help` lists the keys as well as the commands.
 
 | Command           | Effect                                                                           |
 | ----------------- | -------------------------------------------------------------------------------- |

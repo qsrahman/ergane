@@ -6,6 +6,7 @@ The question before a tool runs is a menu of the same library (`choose`), and th
 under the prompt is `toolbar`. `repl.py` is the loop that uses them.
 """
 
+import shutil
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -285,7 +286,8 @@ def _branch() -> str | None:
 
 def toolbar(agent: Agent, hub: McpHub) -> FormattedText:
     """The line under the prompt: the model, the effort, the servers and how full
-    the context is, as `/context` counts it, with a meter that turns yellow and
+    the context is, as `/context` counts it (what does not fit the terminal's width is
+    left out, the least important first, never the meter), with a meter that turns yellow and
     then red as it fills (the share is written too, for a terminal without colour, and
     the meter's two glyphs differ in weight, not only in colour). They are box-drawing
     characters, which a terminal draws itself, so they fill their cells in any font.
@@ -302,26 +304,30 @@ def toolbar(agent: Agent, hub: McpHub) -> FormattedText:
         if share >= _METER_WARN
         else "class:toolbar.meter"
     )
-    bar: list[tuple[str, str]] = [("class:toolbar.strong", " " + config.model)]
+    # What goes between the model and the meter, as (how soon it is dropped when the line
+    # is too wide for the terminal, style, text): the meter, which is what the toolbar
+    # is for, is the last thing to go, and a failed server and the tools allowed
+    # without asking are what the user must not miss.
+    extras: list[tuple[int, str, str]] = []
     if config.reasoning_effort:
-        bar.append(("", f" · {config.reasoning_effort}"))
+        extras.append((3, "", f" · {config.reasoning_effort}"))
     if branch := _branch():
-        bar.append(("", f" · git:{branch}"))
+        extras.append((1, "", f" · git:{branch}"))
     if allowed := sorted(agent.always_allowed):
         shown = ", ".join(allowed) if len(allowed) <= 2 else f"{len(allowed)} tools"
-        bar.append(("class:toolbar.warn", f" · always: {shown}"))
+        extras.append((4, "class:toolbar.warn", f" · always: {shown}"))
     hub.poll()  # servers that have all answered are counted at once
     if hub.starting:
-        bar.append(("", " · starting MCP servers"))
+        extras.append((2, "", " · starting MCP servers"))
     else:
         statuses = hub.statuses.values()
         tools = sum(len(status.tools) for status in statuses)
         failed = sum(status.state == "failed" for status in statuses)
         if tools:
-            bar.append(("", f" · {tools} tools"))
+            extras.append((2, "", f" · {tools} tools"))
         if failed:
-            bar.append(("class:toolbar.bad", f" · {failed} MCP failed: /servers"))
-    bar += [
+            extras.append((5, "class:toolbar.bad", f" · {failed} MCP failed: /servers"))
+    tail = [
         ("", "  "),
         (meter, "━" * lit),
         ("", "─" * (_METER_CELLS - lit)),
@@ -329,5 +335,15 @@ def toolbar(agent: Agent, hub: McpHub) -> FormattedText:
             "",
             f"  {estimated}{share}% · {_tokens(used)} / {_tokens(config.max_context_tokens)}",
         ),
+    ]
+    head = " " + config.model
+    room = shutil.get_terminal_size().columns - 1 - len(head)
+    room -= sum(len(text) for _, text in tail)
+    while extras and sum(len(text) for _, _, text in extras) > room:
+        extras.remove(min(extras, key=lambda extra: extra[0]))
+    bar = [
+        ("class:toolbar.strong", head),
+        *((style, text) for _, style, text in extras),
+        *tail,
     ]
     return FormattedText(bar)
