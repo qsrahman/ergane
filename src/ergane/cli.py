@@ -24,7 +24,6 @@ from ergane.tools import (
     Tool,
     tool_clash,
     tools_in,
-    without_missing_programs,
 )
 
 
@@ -191,15 +190,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         # The banner is separated from the notices of servers that failed by the
         # console itself, which is why it is the same one.
         agent = Agent(config, server_notes=hub.instructions())
-        own, missing = without_missing_programs(
-            tools_in(builtin, console.notice) if config.builtin_tools else []
-        )
-        for tool in missing:
-            console.notice(
-                f"{tool.name} is off: {tool.requires} is not installed (see Requirements "
-                "in the README)",
-                "warning",
-            )
+        own = tools_in(builtin, console.notice) if config.builtin_tools else []
         for name in agent.add_tools([*own, *mcp_tools]):
             console.notice(tool_clash(name), "warning")
         Repl(agent, COMMANDS, session, console, hub, store).run(resume=saved)

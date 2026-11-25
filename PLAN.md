@@ -7,7 +7,8 @@ tools of opencode, pi and codex. The decisions at the end were settled in a roun
 questions and answers, and each is recorded there with what follows from it.
 
 **Status.** All seven phases are built and merged into `main`; the `builtin-tools` branch is
-gone. Since then `search_files` has moved onto ripgrep (decision 15). The build departed
+gone. Since then `search_files` moved onto ripgrep (15), and `list_directory` and
+`search_files` were removed (17); the sections that describe them are the record of why. The build departed
 from this plan in five places, all recorded in Decisions: `read_file` was split into
 `read_file` and `list_directory` (1); ergane's own config and state directories are not
 refused (2); `web_fetch`'s charset sniffing, address tables and depth guard were replaced
@@ -400,3 +401,4 @@ plan to.
 | 14 | Long command output | Head and tail with a note, and the whole saved to a file in the temp directory that the result names | First decided as no file; reversed after reading pi and opencode, which both save it: the middle of a build log is otherwise lost and the command must be run again. The files are not deleted |
 | 15 | Content search and file names | `search_files` runs ripgrep and is left out, with a warning, when `rg` is not installed (`Tool.requires`) | Removed the walk, the per-line matching, the `regex` dependency and its timeout (about 150 lines). `name` finds files only and is matched like a `.gitignore` line; `contains` is Rust regex syntax; `list_directory` keeps `pathspec`. The PyPI `ripgrep` package was looked at and rejected: wheels for two platforms only, a source build elsewhere, and no upstream publisher |
 | 16 | Choosing built-in tools | `builtin_tools` is `true` or `false` only; `--no-builtin` is false for a run | Reverses the list form of decision 7. A list needed a notice for names that are not tools and a function to pick them (`pick_tools`, gone); to drop one tool, delete its function. MCP servers keep their own `tools` list, since their tools are not ours to delete |
+| 17 | `list_directory` and `search_files` | Removed, with ripgrep, `pathspec`, `Tool.requires` and the `Directory` parameter type | Reverses 1, 12 and 15. The model lists and searches with `run_command` (`ls`, `grep`, `rg`), which asks first; a directory MCP server is the route for a tool that does it without asking. Less code, one dependency fewer (`pathspec`), and no program to install |

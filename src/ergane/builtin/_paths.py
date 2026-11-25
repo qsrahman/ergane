@@ -27,20 +27,13 @@ from typing import Annotated
 
 from pydantic import Field
 
-# The parameters that name a file or a directory, as the model reads them: the one wording
-# that every tool shares.
+# The parameter that names a file, as the model reads it: the one wording that every tool
+# shares.
 File = Annotated[
     str,
     Field(
         description="The file: absolute, relative to the working directory, or "
         "starting with ~."
-    ),
-]
-Directory = Annotated[
-    str,
-    Field(
-        description="The directory: absolute, relative to the working directory, or "
-        "starting with ~ (default: the working directory)."
     ),
 ]
 

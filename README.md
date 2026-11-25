@@ -8,7 +8,7 @@ A minimal terminal chat agent built on the OpenAI [Responses API](https://platfo
 - Streaming output, which can be turned off
 - Client-side conversation history that stays within a configurable context budget: when it gets long, the oldest turns are summarized by the model (the newest are kept as they are), and a long tool result is shortened to its start and end when it does not fit
 - Works with any OpenAI-compatible base URL
-- Tool calling: the model can call [built-in tools](#tools) (read, list and search files, edit and write them, run commands, fetch a web page, search the web) and the tools of your [MCP servers](#mcp-servers), sees their errors, and can correct itself; a tool that changes anything asks first, with the change shown as a diff
+- Tool calling: the model can call [built-in tools](#tools) (read, edit and write files, run commands, fetch a web page, search the web) and the tools of your [MCP servers](#mcp-servers), sees their errors, and can correct itself; a tool that changes anything asks first, with the change shown as a diff
 - Conversations are [saved](#sessions) after each prompt and can be continued (`--resume`, `/sessions`)
 - A terminal that stays out of the way: colours from your terminal's own theme (and none with `NO_COLOR`), a toolbar with the model, the git branch and how full the context is, a few `/` commands
 
@@ -16,7 +16,6 @@ A minimal terminal chat agent built on the OpenAI [Responses API](https://platfo
 
 - Python 3.14+
 - [uv](https://docs.astral.sh/uv/)
-- [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) on your `PATH`, for the `search_files` tool: `brew install ripgrep`, `sudo apt install ripgrep`, or see its [installation page](https://github.com/BurntSushi/ripgrep#installation). Without it ergane still runs: `search_files` is not offered to the model, and a warning at start says so. The other tools do not need it, and the model can still search with `run_command` (`grep`) if you allow that.
 
 ## Setup
 
@@ -224,8 +223,6 @@ The model can call tools. A tool that only reads runs at once, and `ergane` prin
 | Tool | Asks first | What it does |
 | ---- | ---------- | ------------ |
 | `read_file` | no | A text file (capped at about 16,000 characters, with the offset to continue from), or a png, jpeg, webp or gif picture for the model to look at (up to about 3.7 MB). A model without vision is refused once, and ergane sends it no more pictures for the rest of the session. |
-| `list_directory` | no | A directory's entries. What the repository's `.gitignore` files exclude, and `.git`, are left out and counted (a file you name is still read). |
-| `search_files` | no | Files by name (a glob written like a line of a `.gitignore`: `*.py` at any depth, `/*.py` only at the top), by content (a regular expression in ripgrep's Rust syntax, so no lookaround or backreferences, and none that can run for ever), or both, with the same `.gitignore` rules as `list_directory`. It lists files, never directories, and skips binary files, files over 1 MB and symbolic links. It runs [ripgrep](https://github.com/BurntSushi/ripgrep), and is not offered if `rg` is not installed. A search gives up after 30 seconds. |
 | `write_file` | yes | Creates or overwrites a file, and keeps an existing UTF-8 byte order mark. |
 | `edit_file` | yes | Replaces text in a file: the text must match once unless `replace_all` is set, and trailing whitespace and typographic quotes, dashes and spaces are forgiven. |
 | `run_command` | yes | Runs a shell command: stdin closed, stopped with its child processes after `timeout_s` (120 seconds by default). Output past about 16,000 characters keeps its start and end, and the whole of it is saved in the system temp directory in a file the result names, for `read_file` (those files are not deleted). |
@@ -277,7 +274,7 @@ A tool runs without asking unless it says `@tool(read_only=False)`, which it mus
 }
 ```
 
-`ergane` has file, shell and web [tools of its own](#tools), so an MCP server is for what they do not do. As an example of one that overlaps, [workshop-mcp](https://github.com/qsrahman/workshop-mcp) is a server made to go with `ergane` (a Node program that `npx` fetches on first use); its tools are offered as `workshop__NAME` next to the built-in ones, so set `builtin_tools` to `false` if you would rather the model had only its set:
+`ergane` has file, shell and web [tools of its own](#tools), so an MCP server is for what they do not do, such as listing a directory or searching file contents without a shell command. [workshop-mcp](https://github.com/qsrahman/workshop-mcp) is a server made to go with `ergane` (a Node program that `npx` fetches on first use); its tools are offered as `workshop__NAME` next to the built-in ones, and some overlap them, so set `builtin_tools` to `false` if you would rather the model had only its set:
 
 ```json
 {

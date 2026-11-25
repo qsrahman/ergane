@@ -16,7 +16,6 @@ from ergane.tools import (
     tool,
     tool_clash,
     tools_in,
-    without_missing_programs,
 )
 
 
@@ -510,37 +509,3 @@ class TestPreview:
         with_preview = Tool.from_function(self.save, read_only=False, preview=self.show)
 
         assert plain.param() == with_preview.param()
-
-
-class TestRequiredPrograms:
-    def tool_needing(self, program: str | None) -> Tool:
-        @tool(requires=program)
-        def look() -> str:
-            """Look."""
-            return ""
-
-        return look
-
-    def test_a_tool_that_needs_nothing_is_always_ready(self):
-        plain = self.tool_needing(None)
-
-        assert without_missing_programs([plain]) == ([plain], [])
-
-    def test_a_program_on_the_path_makes_the_tool_ready(self):
-        python = self.tool_needing("python3")
-
-        assert without_missing_programs([python]) == ([python], [])
-
-    def test_a_program_that_is_not_installed_leaves_the_tool_out(self):
-        missing = self.tool_needing("no-such-program-ergane")
-        plain = self.tool_needing(None)
-
-        ready, left_out = without_missing_programs([missing, plain])
-
-        assert ready == [plain] and left_out == [missing]
-
-    def test_the_builtin_search_needs_ripgrep(self):
-        found = {t.name: t for t in tools_in(builtin)}
-
-        assert found["search_files"].requires == "rg"
-        assert found["read_file"].requires is None

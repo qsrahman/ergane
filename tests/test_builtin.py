@@ -13,8 +13,7 @@ def test_every_built_in_has_a_description_and_every_parameter_too():
 def test_the_built_ins_that_only_read_run_without_asking():
     by_name = {tool.name: tool for tool in tools_in(builtin)}
 
-    for name in ("read_file", "list_directory", "search_files"):
-        assert by_name[name].read_only, name
+    assert by_name["read_file"].read_only
 
 
 def test_parameter_names_are_snake_case():
@@ -38,12 +37,10 @@ def test_the_built_ins_that_run_commands_or_go_out_ask_first():
         assert not by_name[name].read_only, name
 
 
-def test_the_tools_that_name_a_file_or_a_directory_say_it_the_same_way():
+def test_the_tools_that_name_a_file_say_it_the_same_way():
     by_name = {tool.name: tool for tool in tools_in(builtin)}
 
     def described(tool: str) -> str:
         return by_name[tool].parameters["properties"]["path"]["description"]
 
     assert described("read_file") == described("write_file") == described("edit_file")
-    assert described("list_directory") == described("search_files")
-    assert described("read_file") != described("list_directory")

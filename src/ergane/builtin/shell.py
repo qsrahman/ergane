@@ -179,7 +179,7 @@ def run_command(
     """Run a shell command and return its output; a failed command starts with its exit
     code, and stderr is labelled when there is any. Use it for tests, builds, git and
     other commands; not to read, write or edit files (use read_file, write_file and
-    edit_file) or to look for them (use list_directory and search_files). Do not run
+    edit_file). Do not run
     destructive commands (rm -rf, git reset --hard, force pushes) unless the user asked.
     stdin is closed and each call is a fresh process, so interactive commands do not
     work and cd does not persist: use cwd. The command and its child processes are

@@ -173,19 +173,6 @@ prints that text, and asks again. The preview runs only when the user asks, in t
 thread, and must change nothing. If it raises, the user is told, and the question stays.
 `write_file` and `edit_file` show a diff this way.
 
-## A tool that needs a program: `requires`
-
-```python
-@tool(requires="rg")
-def search(pattern: str) -> str:
-    """Search the files for a pattern."""
-```
-
-A tool that runs another program says which, and is not offered to the model, with a
-warning at start, when the program is not on the `PATH`. The model then never calls what
-cannot work, and the README's Requirements must name the program. `search_files` is the
-example: it needs [ripgrep](https://github.com/BurntSushi/ripgrep).
-
 ## Testing it
 
 A `Tool` is called with the JSON text the model would send, and never raises:

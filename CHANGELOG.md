@@ -34,11 +34,11 @@ The first release. ergane began on 2026-10-16 as `muagent`, and was renamed on 2
 
 **Tools**
 - Built-in tools: `read_file` (text, and png, jpeg, webp and gif pictures for models that
-  take them), `list_directory`, `search_files` (by name, by content or both, on
-  [ripgrep](https://github.com/BurntSushi/ripgrep)), `write_file`, `edit_file`,
+  take them), `write_file`, `edit_file`,
   `run_command`, `web_fetch` and `web_search` (DuckDuckGo, no key). `builtin_tools`
-  (`true` or `false`) and `--no-builtin` offer all of them or none; a tool whose program is
-  missing is left out with a warning.
+  (`true` or `false`) and `--no-builtin` offer all of them or none. There is no tool to
+  list a directory or to search files: the model uses `run_command` (`ls`, `grep`), which
+  asks first.
 - A `todo` tool for tasks of three or more steps, shown as a checklist, and `/todo`.
 - A tool that changes anything asks first, in a menu with the change shown as a diff;
   "always allow" lasts for the session. Calls that only read run at the same time.
@@ -72,14 +72,12 @@ The first release. ergane began on 2026-10-16 as `muagent`, and was renamed on 2
   from the working directory, so a project cannot change where your key and prompts go or
   start a program.
 - File tools are confined to the working directory and the system temp directory, never
-  write through a symbolic link, and `search_files` ignores a project's own ignore files
-  and ripgrep configuration.
+  write through a symbolic link.
 - `web_fetch` connects only to addresses it has checked, again on every redirect;
   `run_command` does not get `OPENAI_API_KEY`; tool results are treated as untrusted text.
 
 ### Requirements
-- Python 3.14 or later; [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for
-  `search_files`; the `mcp` extra for MCP servers.
+- Python 3.14 or later; the `mcp` extra for MCP servers.
 
 [Unreleased]: https://github.com/qsrahman/ergane/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/qsrahman/ergane/releases/tag/v0.1.0

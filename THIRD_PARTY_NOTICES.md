@@ -244,4 +244,4 @@ the full license text.
 
 </details>
 
-The libraries `web_fetch` uses are dependencies, not copied code, and keep their own licences: `beautifulsoup4` (MIT), `markdownify` (MIT), `lxml` (BSD-3-Clause), `httpx2` and `httpcore2` (BSD-3-Clause). `pathspec`, which matches the `.gitignore` rules, is a dependency too (MPL-2.0). ripgrep, which `search_files` runs, is a separate program (Unlicense or MIT) that ergane does not bundle or copy.
+The libraries `web_fetch` uses are dependencies, not copied code, and keep their own licences: `beautifulsoup4` (MIT), `markdownify` (MIT), `lxml` (BSD-3-Clause), `httpx2` and `httpcore2` (BSD-3-Clause).
