@@ -17,17 +17,16 @@ and cite, never instructions.
 """
 
 import re
-from importlib.metadata import version
 from typing import Annotated
 from urllib.parse import parse_qs, urlparse
 
 import httpx2
 from pydantic import Field
 
+from ergane.builtin._http import USER_AGENT
 from ergane.builtin._text import MAX_TEXT_CHARS
 from ergane.tools import Tool
 
-USER_AGENT = f"ergane/{version('ergane')} (Autonomous)"
 BASE_URL = "https://html.duckduckgo.com/html"
 
 # The statuses that mean "not you": see the module docstring.

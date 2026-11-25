@@ -116,8 +116,9 @@ The modules, in dependency order (each imports only from those above it):
 - `builtin/`: ergane's own tools, each module only `@tool` functions (and the helpers
   they share, whose names start with `_`, which `tools_in` skips). In dependency order:
   `_paths` (`resolve`: the one place a model's path becomes a real one), `_text`
-  (what counts as text; the line, character and head-and-tail cuts), `_images` (which
-  files are pictures), `_edit` (the text of an edit, pure), then `files` (`read_file`), `writes` (`write_file`, `edit_file`), `shell`
+  (the line, character and head-and-tail cuts, and reading a file by lines), `_images`
+  (which files are pictures), `_http` (what the web tools call themselves), `_edit` (the
+  text of an edit, pure), then `files` (`read_file`), `writes` (`write_file`, `edit_file`), `shell`
   (`run_command`), `fetch` (`web_fetch`) and `search` (`web_search`). A tool that needs
   a setting a test changes is made by a `make_*_tool` factory (the fetch and search
   ones), since tools cannot see `Config`. [TOOLS.md](TOOLS.md) is the guide; `PLAN.md`
@@ -229,8 +230,10 @@ What must stay true:
 - **A tool that is not `read_only` asks, and these are:** `write_file`, `edit_file`,
   `run_command`, `web_fetch` and `web_search` (a page the model read can tell it what to
   fetch or search). `read_file`, which only reads, runs on a thread and cannot be
-  stopped by Ctrl-C, so it is bounded without help: output caps, and reads in chunks (a
-  file of one huge line must not be read whole).
+  stopped by Ctrl-C, so it is bounded without help: output caps, reads in chunks (a file
+  of one huge line must not be read whole) that stop at what can be shown, and regular
+  files only (`_paths.regular_size`: opening a named pipe would block for ever; an edit
+  refuses one too).
 - **`run_command` leaves nothing running and tells nothing secret:** each call is a
   fresh `sh -c` in its own process group, stopped whole on a timeout, an overflow or
   Ctrl-C; stdin is closed; `OPENAI_API_KEY` is not in its environment; only its `cwd` is

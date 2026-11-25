@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 import tracemalloc
 from pathlib import Path
 
@@ -193,6 +194,46 @@ class TestReadFile:
             read_file, path="long.txt", offset=10
         )
 
+    def test_a_file_that_is_not_utf8_is_not_called_binary(self, tmp_path: Path):
+        # The model can read it with `run_command`; it can do nothing with a binary one.
+        (tmp_path / "latin1.txt").write_bytes("café au lait\n".encode("latin-1"))
+
+        result = call(read_file, path="latin1.txt")
+
+        assert "is not valid UTF-8 text" in result and "binary" not in result
+
+    @pytest.mark.timeout(10)
+    def test_a_named_pipe_is_refused_not_waited_for(self, tmp_path: Path):
+        # Opening a pipe nobody writes to blocks for ever, on a thread Ctrl-C cannot stop.
+        os.mkfifo(tmp_path / "pipe")
+
+        assert "not a regular file" in call(read_file, path="pipe")
+
+    def test_a_limit_does_not_read_the_rest_of_a_file_of_long_lines(
+        self, tmp_path: Path
+    ):
+        # 16,001 lines of 5,000 characters were read to show one of them: 80 MB.
+        with (tmp_path / "wide.txt").open("w") as handle:
+            for _ in range(20_000):
+                handle.write("x" * 5_000 + "\n")
+        tracemalloc.start()
+        try:
+            text = call(read_file, path="wide.txt", limit=1)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+
+        assert text == "x" * 5_000
+        assert peak < 5_000_000
+
+    def test_a_file_of_long_lines_still_says_where_to_continue(self, tmp_path: Path):
+        write(tmp_path / "wide.txt", ("x" * 5_000 + "\n") * 10)
+
+        result = call(read_file, path="wide.txt")
+
+        assert result.endswith("Continue with offset=4]")
+        assert result.count("x" * 5_000) == 3
+
     def test_a_binary_file_is_refused(self, tmp_path: Path):
         (tmp_path / "b.bin").write_bytes(b"\x00\x01\x02binary")
 
@@ -211,6 +252,21 @@ class TestReadFile:
 
         assert "File not found: src/confg.py" in result
         assert "Did you mean: src/config.py" in result
+
+    def test_a_missing_file_in_a_directory_that_cannot_be_listed_just_says_so(
+        self, tmp_path: Path
+    ):
+        locked = tmp_path / "locked"
+        locked.mkdir()
+        locked.chmod(0o311)  # may be entered, not read
+        try:
+            if os.access(locked, os.R_OK):  # running as root: nothing to test
+                pytest.skip("directory permissions do not apply")
+            result = call(read_file, path="locked/zzz.txt")
+        finally:
+            locked.chmod(0o755)
+
+        assert result == "Error: FileNotFoundError: File not found: locked/zzz.txt"
 
     def test_a_missing_file_with_nothing_close_just_says_so(self, tmp_path: Path):
         assert call(read_file, path="zzz.txt").endswith("File not found: zzz.txt")

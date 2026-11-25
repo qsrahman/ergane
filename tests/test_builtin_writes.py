@@ -209,6 +209,14 @@ class TestEditFile:
         assert "not valid UTF-8" in result
         assert (tmp_path / "bin").read_bytes() == b"caf\xe9 = 1\n"
 
+    @pytest.mark.timeout(10)
+    def test_a_named_pipe_is_refused_not_waited_for(self, tmp_path: Path):
+        os.mkfifo(tmp_path / "pipe")
+
+        result = call(edit_file, path="pipe", old_text="a", new_text="b")
+
+        assert "not a regular file" in result
+
     def test_a_huge_file_is_refused(self, tmp_path: Path, monkeypatch):
         monkeypatch.setattr("ergane.builtin.writes._MAX_EDIT_BYTES", 5)
 
@@ -319,6 +327,16 @@ class TestThePreviews:
         console.confirm(write_file, json.dumps({"path": "d", "content": "x"}))
 
         assert "Could not show the change: IsADirectoryError" in capsys.readouterr().out
+
+    def test_the_preview_of_overwriting_a_huge_file_does_not_read_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        (tmp_path / "big.txt").write_text("y" * 100)
+        monkeypatch.setattr("ergane.builtin.writes._MAX_EDIT_BYTES", 50)
+
+        result = _preview_write("big.txt", "new")
+
+        assert result == "big.txt is large; it would be overwritten (100 bytes)"
 
     def test_what_the_preview_shows_is_what_the_edit_writes(self, tmp_path: Path):
         (tmp_path / "f.py").write_text("a = 1\nb = 2\nc = 3\n")

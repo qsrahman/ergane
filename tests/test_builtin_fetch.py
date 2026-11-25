@@ -48,6 +48,10 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path == "/page":
             return self.send(200, ARTICLE.encode(), "text/html; charset=utf-8")
+        if path == "/empty":
+            return self.send(
+                200, b"<html><head></head><body><nav>x</nav></body></html>", "text/html"
+            )
         if path == "/plain":
             return self.send(200, b"hello plain")
         if path == "/long":
@@ -300,6 +304,15 @@ class TestWhatItReadsAndWhatItDoesNot:
         self, tool, site
     ):
         assert "is a application/pdf file, not text" in call(tool, site, "/big-pdf")
+
+    def test_a_page_with_nothing_left_after_simplifying_is_an_error_not_page_text(
+        self, tool, site
+    ):
+        result = call(tool, site, "/empty")
+
+        assert result.startswith("Error: FetchError: The page has no content")
+        assert "raw=true" in result and "<error>" not in result
+        assert "<nav>" in call(tool, site, "/empty", raw=True)
 
     def test_a_page_that_nests_too_deep_is_refused_at_once(self, tool, site):
         started = time.monotonic()

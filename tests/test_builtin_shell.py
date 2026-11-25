@@ -120,6 +120,13 @@ class TestTheResult:
 
         assert result.startswith("exit code 127") and "[stderr]" in result
 
+    def test_a_line_that_ends_with_a_carriage_return_is_not_lost(self):
+        assert run(r"printf 'Done\r'") == "Done"
+
+    def test_a_line_that_rewrites_itself_shows_its_last_version(self):
+        assert run(r"printf '\rbar 10%%\rbar 100%%\nnext\n'") == "bar 100%\nnext"
+        assert run(r"printf 'step 1\rstep 2\r\n'") == "step 2"
+
     def test_a_command_killed_by_a_signal_says_which(self):
         assert run("kill -9 $$").startswith("killed by signal 9")
 
@@ -204,6 +211,11 @@ class TestTheProcess:
         result = run("touch ran.txt", cwd="/etc")
 
         assert "Access denied" in result and not (tmp_path / "ran.txt").exists()
+
+    def test_cwd_that_does_not_exist_says_so_and_nothing_runs(self, tmp_path: Path):
+        result = run("touch ran.txt", cwd="nope")
+
+        assert "nope does not exist" in result and not (tmp_path / "ran.txt").exists()
 
     def test_cwd_that_is_a_file_is_refused(self, tmp_path: Path):
         (tmp_path / "f.txt").write_text("")

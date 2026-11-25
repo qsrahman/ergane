@@ -1,11 +1,10 @@
-"""Text helpers the built-in tools share: what counts as text, and how long output is cut.
+"""Text helpers the built-in tools share: how long output is cut, and reading a file by lines.
 
 A tool's result is cut from the end at `MAX_OUTPUT_CHARS` (20 KiB, in `tools.py`), which
 would lose a footer such as "continue with offset=N". So each tool keeps its own result
 under `MAX_TEXT_CHARS`, with room left for that footer, and says where it stopped.
 """
 
-import codecs
 from collections.abc import Sequence
 from typing import TextIO
 
@@ -21,53 +20,30 @@ _CHUNK = 65_536
 _NOTE_ROOM = 64
 
 
-def is_text(data: bytes) -> bool:
-    """Whether the start of a file looks like UTF-8 text: no NUL byte, and valid UTF-8.
+def take_lines(lines: Sequence[str], count: int | None = None) -> tuple[str, int]:
+    """Join lines, whole lines only, until a limit is reached.
 
-    `data` may end inside a multi-byte character, as when it is only the start of a
-    file: that is not an error.
-    """
-    if b"\0" in data:
-        return False
-    try:
-        codecs.getincrementaldecoder("utf-8")().decode(data, final=False)
-    except UnicodeDecodeError:
-        return False
-    return True
-
-
-def take_lines(
-    lines: Sequence[str],
-    start: int = 0,
-    count: int | None = None,
-    max_chars: int = MAX_TEXT_CHARS,
-) -> tuple[str, int]:
-    """Join lines from `start`, whole lines only, until a limit is reached.
-
-    The limits are `count` lines and `max_chars` characters, whichever comes first. At
-    least one line is taken.
+    The limits are `count` lines and `MAX_TEXT_CHARS` characters, whichever comes first.
+    At least one line is taken.
 
     Args:
         lines: The lines, without their line endings.
-        start: The index of the first line to take.
         count: The most lines to take, or None for as many as fit.
-        max_chars: The most characters in the result.
 
     Returns:
-        The text, and the index after the last line taken: the caller names it in its
+        The text, and how many lines were taken: the caller names the next one in its
         footer, and it equals `len(lines)` when nothing is left.
     """
     taken: list[str] = []
     used = 0
-    index = start
-    while index < len(lines) and (count is None or len(taken) < count):
-        line = lines[index]
-        if taken and used + len(line) + 1 > max_chars:
+    for line in lines:
+        if count is not None and len(taken) >= count:
+            break
+        if taken and used + len(line) + 1 > MAX_TEXT_CHARS:
             break
         taken.append(line)
         used += len(line) + 1
-        index += 1
-    return "\n".join(taken), index
+    return "\n".join(taken), len(taken)
 
 
 def _skip_line(handle: TextIO) -> bool:
@@ -98,15 +74,25 @@ def _next_line(handle: TextIO) -> str | None:
     return f"{line[:MAX_LINE_CHARS]}... [line cut: {length:,} characters]"
 
 
-def read_lines(handle: TextIO, start: int, count: int) -> list[str]:
+def read_lines(
+    handle: TextIO, start: int, count: int, max_chars: int = MAX_TEXT_CHARS
+) -> list[str]:
     """Up to `count` lines of an open text file from the 0-based line `start`, each cut
-    at `MAX_LINE_CHARS` (see `_next_line`)."""
+    at `MAX_LINE_CHARS` (see `_next_line`). Reading stops once the lines have more than
+    `max_chars` characters between them, with that line included, so that `take_lines`
+    can tell there is more: a file of long lines is not read past what can be shown."""
     for _ in range(start):
         if not _skip_line(handle):
             return []
     lines: list[str] = []
-    while len(lines) < count and (line := _next_line(handle)) is not None:
+    used = 0
+    while (
+        len(lines) < count
+        and used <= max_chars
+        and (line := _next_line(handle)) is not None
+    ):
         lines.append(line)
+        used += len(line) + 1
     return lines
 
 

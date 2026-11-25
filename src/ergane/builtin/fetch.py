@@ -35,7 +35,6 @@ import zlib
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from importlib.metadata import version
 from typing import TYPE_CHECKING, Annotated
 from urllib.parse import urljoin, urlparse
 
@@ -43,12 +42,11 @@ import httpcore2
 import httpx2
 from pydantic import Field
 
+from ergane.builtin._http import USER_AGENT
 from ergane.tools import Tool
 
 if TYPE_CHECKING:
     from bs4 import BeautifulSoup, Tag
-
-USER_AGENT = f"ergane/{version('ergane')} (Autonomous)"
 
 # The most body bytes read from one response. The body is streamed and the read stops
 # here, so a very large or endless response is not buffered. `max_length` cannot do
@@ -390,9 +388,10 @@ def extract_content_from_html(html: str, base_url: str = "") -> str:
         base_url: Where the page is, to make its relative links absolute.
 
     Returns:
-        The page as markdown, or an `<error>` line when it has nothing to show.
+        The page as markdown.
 
     Raises:
+        FetchError: If the page has nothing to show once it is simplified.
         RecursionError: If the page nests too deeply to be converted.
     """
     import markdownify
@@ -414,7 +413,10 @@ def extract_content_from_html(html: str, base_url: str = "") -> str:
     content = markdownify.markdownify(str(root), heading_style=markdownify.ATX)
     content = _BLANK_LINES.sub("\n\n", content).strip()
     if not content:
-        return "<error>Page failed to be simplified from HTML</error>"
+        raise FetchError(
+            "The page has no content to show once simplified (one that builds itself "
+            "with JavaScript comes back empty); try raw=true."
+        )
     # A page that does not name itself in its first heading gets its title as one.
     first = _words(content.split("\n", 1)[0])
     if title and not (first and (first in _words(title) or _words(title) in first)):

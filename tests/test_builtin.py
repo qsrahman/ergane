@@ -16,6 +16,13 @@ def test_the_built_ins_that_only_read_run_without_asking():
     assert by_name["read_file"].read_only
 
 
+def test_the_web_tools_say_the_same_thing_about_themselves():
+    from ergane.builtin import _http, fetch, search
+
+    assert fetch.USER_AGENT is search.USER_AGENT is _http.USER_AGENT
+    assert fetch.USER_AGENT.startswith("ergane/")
+
+
 def test_parameter_names_are_snake_case():
     for tool in tools_in(builtin):
         for name in tool.parameters["properties"]:

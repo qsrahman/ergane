@@ -7,7 +7,6 @@ from ergane.builtin._text import (
     MAX_TEXT_CHARS,
     count_lines,
     head_tail,
-    is_text,
     read_lines,
     take_lines,
 )
@@ -17,26 +16,6 @@ from ergane.tools import MAX_OUTPUT_CHARS
 def test_a_footer_fits_under_the_generic_cut():
     # The tool's own footer must never be what the 20 KiB cut removes.
     assert MAX_TEXT_CHARS + 1_000 < MAX_OUTPUT_CHARS
-
-
-class TestIsText:
-    @pytest.mark.parametrize(
-        "data",
-        [b"", b"plain", "café 中文".encode(), b"line\r\nline\n"],
-    )
-    def test_text(self, data: bytes):
-        assert is_text(data)
-
-    def test_a_nul_byte_is_binary(self):
-        assert not is_text(b"abc\0def")
-
-    def test_bytes_that_are_not_utf8_are_binary(self):
-        assert not is_text(b"\xff\xfe\x00\x01")
-        assert not is_text(b"caf\xe9 au lait")
-
-    def test_a_character_cut_in_two_at_the_end_is_not_an_error(self):
-        # The start of a file may end inside a multi-byte character.
-        assert is_text("café".encode()[:-1])
 
 
 LINES = [f"line {i}" for i in range(1, 11)]
@@ -49,33 +28,28 @@ class TestTakeLines:
         assert text == "\n".join(LINES)
         assert end == len(LINES)
 
-    def test_from_a_start(self):
-        text, end = take_lines(LINES, start=7)
-
-        assert text == "line 8\nline 9\nline 10"
-        assert end == 10
-
     def test_at_most_count_lines(self):
-        text, end = take_lines(LINES, start=2, count=3)
+        text, end = take_lines(LINES, count=3)
 
-        assert text == "line 3\nline 4\nline 5"
-        assert end == 5
+        assert text == "line 1\nline 2\nline 3"
+        assert end == 3
 
     def test_whole_lines_only_when_the_budget_runs_out(self):
-        text, end = take_lines(["aaaa"] * 10, max_chars=12)
+        # Each line costs its length and a newline.
+        line = "a" * (MAX_TEXT_CHARS // 2 - 1)
+        text, end = take_lines([line] * 4)
 
-        # Each line costs its length and a newline: 5, 10; a third would be 15.
-        assert text == "aaaa\naaaa"
+        assert text == f"{line}\n{line}"
         assert end == 2
 
     def test_at_least_one_line_even_over_the_budget(self):
-        text, end = take_lines(["a" * 50, "b"], max_chars=10)
+        text, end = take_lines(["a" * (MAX_TEXT_CHARS + 50), "b"])
 
-        assert text == "a" * 50
+        assert text == "a" * (MAX_TEXT_CHARS + 50)
         assert end == 1
 
-    def test_a_start_past_the_end_takes_nothing(self):
-        assert take_lines(LINES, start=99) == ("", 99)
+    def test_no_lines_take_nothing(self):
+        assert take_lines([]) == ("", 0)
 
     def test_the_default_budget_leaves_room_for_a_footer(self):
         text, _ = take_lines(["y" * 100] * 1_000)
@@ -101,6 +75,16 @@ class TestReadLines:
 
     def test_start_and_count_pick_the_range(self):
         assert read_lines(io.StringIO("a\nb\nc\nd\n"), 1, 2) == ["b", "c"]
+
+    def test_reading_stops_once_the_lines_are_more_than_can_be_shown(self):
+        handle = io.StringIO("".join("x" * 100 + "\n" for _ in range(1_000)))
+
+        lines = read_lines(handle, 0, 1_000, max_chars=1_000)
+
+        # The line that went over is included, so that `take_lines` can tell there is
+        # more; none after it is read.
+        assert len(lines) == 10  # 101 characters each: the tenth is the first over
+        assert handle.readline() == "x" * 100 + "\n"
 
     def test_a_last_line_without_a_newline_is_kept(self):
         assert read_lines(io.StringIO("a\nb"), 0, 10) == ["a", "b"]

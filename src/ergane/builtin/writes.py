@@ -20,7 +20,13 @@ from typing import Annotated
 from pydantic import Field
 
 from ergane.builtin._edit import EditError, edit_text
-from ergane.builtin._paths import File, absolute_path, not_found, resolve
+from ergane.builtin._paths import (
+    File,
+    absolute_path,
+    not_found,
+    regular_size,
+    resolve,
+)
 from ergane.tools import tool
 
 # A file bigger than this is not edited: it is not source, and it is read whole.
@@ -77,8 +83,8 @@ def _keeping_bom(real: Path, content: str) -> str:
 def _read_text(real: Path, shown: str) -> str:
     """The text of a file that an edit may change: there, UTF-8, and not huge."""
     if not real.exists():
-        raise FileNotFoundError(not_found(shown, real, "File"))
-    if real.stat().st_size > _MAX_EDIT_BYTES:
+        raise FileNotFoundError(not_found(shown, real))
+    if regular_size(real, shown) > _MAX_EDIT_BYTES:
         raise ValueError(f"{shown} is too large to edit")
     try:
         return real.read_bytes().decode("utf-8")
@@ -126,6 +132,9 @@ def _preview_write(path: str, content: str) -> str:
     """What `write_file` would do: a diff for a file that exists, else its start."""
     real = _target(path)
     if real.is_file():
+        size = real.stat().st_size
+        if size > _MAX_EDIT_BYTES:
+            return f"{path} is large; it would be overwritten ({size:,} bytes)"
         try:
             return _diff(
                 real.read_bytes().decode("utf-8"), _keeping_bom(real, content), path

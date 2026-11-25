@@ -26,7 +26,6 @@ import subprocess
 import tempfile
 import threading
 import time
-from pathlib import Path
 from typing import IO, Annotated
 
 from pydantic import Field
@@ -109,7 +108,13 @@ def _clean(data: bytes) -> str:
         return f"[binary output omitted: {len(data):,} bytes]"
     text = _ESCAPES.sub("", data.decode("utf-8", errors="replace"))
     text = text.replace("\r\n", "\n")
-    return "\n".join(line.rsplit("\r", 1)[-1] for line in text.split("\n")).strip("\n")
+    # A line that rewrites itself is what the terminal ends up showing: its last
+    # non-empty version (the empty one after a final `\r` is nothing to show).
+    lines = (
+        next((s for s in reversed(line.split("\r")) if s), "")
+        for line in text.split("\n")
+    )
+    return "\n".join(lines).strip("\n")
 
 
 def _format(
@@ -179,8 +184,8 @@ def run_command(
     """Run a shell command and return its output; a failed command starts with its exit
     code, and stderr is labelled when there is any. Use it for tests, builds, git and
     other commands; not to read, write or edit files (use read_file, write_file and
-    edit_file). Do not run
-    destructive commands (rm -rf, git reset --hard, force pushes) unless the user asked.
+    edit_file). Do not run destructive commands (rm -rf, git reset --hard, force
+    pushes) unless the user asked.
     stdin is closed and each call is a fresh process, so interactive commands do not
     work and cd does not persist: use cwd. The command and its child processes are
     stopped after timeout_s, so do not start dev servers or watchers. Output past about
@@ -188,13 +193,15 @@ def run_command(
     named at the end (read it with read_file). Only cwd must be inside the working
     directory or the system temp directory, not what the command touches."""
     directory = resolve(cwd)
+    if not directory.exists():
+        raise FileNotFoundError(f"{cwd} does not exist")
     if not directory.is_dir():
         raise NotADirectoryError(f"{cwd} is not a directory")
     environment = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
     process = subprocess.Popen(
         command,
         shell=True,
-        cwd=Path(directory),
+        cwd=directory,
         env=environment,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,

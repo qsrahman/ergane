@@ -20,6 +20,7 @@ The messages are for the model, and name the path as it was written.
 
 import difflib
 import os
+import stat
 import tempfile
 from collections.abc import Iterable
 from pathlib import Path
@@ -122,20 +123,34 @@ def resolve(
     return result
 
 
-def not_found(shown: str, real: Path, kind: str) -> str:
-    """The message for a path that is not there, with the names that are close to it.
+def not_found(shown: str, real: Path) -> str:
+    """The message for a file that is not there, with the names that are close to it.
 
     Args:
         shown: The path as the model wrote it.
         real: The path `resolve` gave.
-        kind: "File" or "Directory", for the first words of the message.
     """
-    message = f"{kind} not found: {shown}"
-    if real.parent.is_dir():
-        close = difflib.get_close_matches(
-            real.name, [entry.name for entry in os.scandir(real.parent)], n=3
-        )
-        if close:
-            near = ", ".join(str(Path(shown).parent / name) for name in close)
-            message += f". Did you mean: {near}?"
+    message = f"File not found: {shown}"
+    try:
+        names = [entry.name for entry in os.scandir(real.parent)]
+    except OSError:  # no such directory, or one that cannot be listed
+        return message
+    if close := difflib.get_close_matches(real.name, names, n=3):
+        near = ", ".join(str(Path(shown).parent / name) for name in close)
+        message += f". Did you mean: {near}?"
     return message
+
+
+def regular_size(real: Path, shown: str) -> int:
+    """The size of a file that exists, if it is a regular file.
+
+    A named pipe, a socket or a device is refused: opening a pipe with no writer blocks
+    for ever, and a tool that only reads runs on a thread that Ctrl-C cannot stop.
+
+    Raises:
+        ValueError: If it is not a regular file.
+    """
+    info = real.stat()
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError(f"{shown} is not a regular file (a pipe, socket or device)")
+    return info.st_size
