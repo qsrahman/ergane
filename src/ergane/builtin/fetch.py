@@ -43,6 +43,7 @@ import httpx2
 from pydantic import Field
 
 from ergane.builtin._http import USER_AGENT
+from ergane.surrogates import without_surrogates
 from ergane.tools import Tool
 
 if TYPE_CHECKING:
@@ -315,14 +316,16 @@ def _declared_length(response: httpx2.Response) -> int | None:
 def _decode_page(response: httpx2.Response, content: bytes) -> str:
     """Decode a fetched body: a byte order mark, the header's charset, a charset the
     HTML declares in a `<meta>` tag, then UTF-8 or windows-1252 (BeautifulSoup's
-    `UnicodeDammit`). UTF-7 is never used: it would rewrite the markup itself."""
+    `UnicodeDammit`). UTF-7 is never used: it would rewrite the markup itself. A charset
+    such as `unicode_escape` can give lone surrogates, which the HTML parser refuses;
+    they become `?`."""
     from bs4 import UnicodeDammit
 
     header = response.charset_encoding
     dammit = UnicodeDammit(
         content, [header] if header else [], is_html=True, exclude_encodings=["utf-7"]
     )
-    return dammit.unicode_markup or ""
+    return without_surrogates(dammit.unicode_markup or "")
 
 
 # --- Simplifying a page --------------------------------------------------------------

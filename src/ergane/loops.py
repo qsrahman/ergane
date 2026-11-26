@@ -35,7 +35,8 @@ def step_signature(calls: Sequence[tuple[str, str, str]]) -> str:
     """
     digest = hashlib.sha256()
     for part in (part for call in calls for part in call):
-        digest.update(part.encode())
+        # A lone surrogate, which an output can hold, has no strict UTF-8 form.
+        digest.update(part.encode(errors="surrogatepass"))
         digest.update(b"\0")
     return digest.hexdigest()
 

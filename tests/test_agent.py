@@ -1816,6 +1816,31 @@ class TestContextEstimate:
         assert after[:2] == before[:2]
 
 
+def test_lone_surrogates_do_not_stop_a_turn(make_agent, fake_server):
+    """A tool's output, the prompt or an earlier reply may hold one (see
+    `without_surrogates`): the request is sent with `?` in its place."""
+
+    def read(path: str) -> str:
+        """Read."""
+        return "out \ud800"
+
+    agent = make_agent(tools=[tool_with(read)])
+    agent.context.save_turn(
+        [
+            {"role": "user", "content": "before"},
+            {"role": "assistant", "content": "reply \ud800"},
+        ]
+    )
+
+    agent.run_turn("tool_call", confirm=lambda tool, arguments: True)
+    agent.run_turn("hello \ud800")
+
+    sent = fake_server.requests[-1]["input"]
+    assert [i["content"] for i in sent if i.get("role") == "user"][-1] == "hello ?"
+    assert "reply ?" in [i.get("content") for i in sent]
+    assert "out ?" in [i.get("output") for i in sent]
+
+
 def test_a_restored_conversation_is_sent_with_the_next_prompt(make_agent, fake_server):
     agent = make_agent(STREAMING=False)
     agent.last_input_tokens = 99

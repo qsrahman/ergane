@@ -23,6 +23,9 @@ move what is under Unreleased to a new heading with the version and the date, ch
 - A malformed link (such as `http://[`) on a page no longer fails the whole `web_fetch`
   or `web_search`.
 - `web_fetch` reads a raw deflate response whose first piece is a single byte.
+- Text with a character that cannot be encoded (a lone surrogate, from a web page or a
+  server's reply) no longer ends the turn, or leaves a session that cannot be saved or
+  read; it is sent and saved as `?`.
 
 ## [0.1.0] - 2026-11-25
 

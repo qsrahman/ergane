@@ -59,7 +59,8 @@ def estimate_tokens(item: Mapping[str, object]) -> int:
                 part = {**part, "image_url": ""}
             parts.append(part)
         counted["output"] = parts
-    text = len(json.dumps(counted, ensure_ascii=False).encode()) // 4
+    encoded = json.dumps(counted, ensure_ascii=False).encode(errors="replace")
+    text = len(encoded) // 4
     return text + images * IMAGE_TOKENS + 1
 
 

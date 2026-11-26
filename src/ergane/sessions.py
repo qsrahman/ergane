@@ -32,6 +32,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from ergane.surrogates import without_surrogates
+
 # How many sessions of a directory are kept: the newest, which saving prunes to.
 KEEP = 50
 
@@ -195,6 +197,7 @@ class SessionStore:
         Raises:
             OSError: If the file cannot be written.
         """
+        summary, items = without_surrogates((summary, items))
         stamp = now()
         info = SessionInfo(
             id=previous.id if previous else self._new_id(),

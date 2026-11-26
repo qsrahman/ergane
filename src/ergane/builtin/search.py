@@ -25,6 +25,7 @@ from pydantic import Field
 
 from ergane.builtin._http import USER_AGENT
 from ergane.builtin._text import MAX_TEXT_CHARS
+from ergane.surrogates import without_surrogates
 from ergane.tools import Tool
 
 BASE_URL = "https://html.duckduckgo.com/html"
@@ -74,7 +75,9 @@ def _parse(html: str, limit: int) -> list[tuple[str, str, str]]:
     from bs4 import BeautifulSoup
 
     found = []
-    for result in BeautifulSoup(html, "html.parser").select(".result"):
+    # An odd charset can leave lone surrogates in the text, which the parser refuses.
+    page = BeautifulSoup(without_surrogates(html), "html.parser")
+    for result in page.select(".result"):
         if "result--ad" in (result.get("class") or []):
             continue
         anchor = result.select_one(".result__a") or result.select_one(

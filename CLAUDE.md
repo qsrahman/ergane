@@ -136,6 +136,8 @@ The modules, in dependency order (each imports only from those above it):
   them, at a terminal in the background, and starts one again for `/reconnect`), and a
   `ServerStatus` per server (`McpHub.statuses`, by name), which records what became of it
   for `/servers`; `reconnect` starts a server again through the same `_Startup`.
+- `surrogates.py`: `without_surrogates`, for text that is about to be sent or saved.
+  Imports nothing of ergane.
 - `loops.py`: the loop guard's pure functions (`step_signature`, `is_looping`, `last_repeats`,
   `loop_note`). Imports nothing of ergane.
 - `errors.py`, `prompts.py`: `TurnError`, `StreamCut`, `describe_error`,
@@ -192,6 +194,9 @@ What must stay true:
   alternate; the summary is kept apart (`Context.summary`), put first in each request as
   a `user` message framed as notes, never as instructions, since it is written from text
   that may hold a web page's orders.
+- **No lone surrogate leaves the program:** `without_surrogates` is applied to
+  every request (`Responder`) and every saved session, and what measures or hashes the
+  history before then must take one. One can come from a reply, a web page or the input.
 - **Every function call has an output** before anything is sent or saved; calls and
   outputs are dropped together; only the newest turn keeps its tool work.
 - **A tool that is not `read_only` runs only if `confirm(tool, arguments)` returns true or

@@ -15,6 +15,7 @@ from openai.types.responses.response_create_params import ResponseCreateParamsBa
 
 from ergane.config import Config
 from ergane.errors import StreamCut, TurnError
+from ergane.surrogates import without_surrogates
 
 # How many times a round is sent again when its stream breaks before any text of the
 # reply has reached the user. The SDK retries a request that fails to start, but not
@@ -141,6 +142,7 @@ class Responder:
             params["max_output_tokens"] = max_output_tokens
         if tools:
             params["tools"] = list(tools)
+        params = without_surrogates(params)
 
         if not self.settings.streaming:
             response = with_output(self.client.responses.create(**params))
