@@ -7,6 +7,8 @@ from prompt_toolkit.data_structures import Size
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import fragment_list_to_text, to_formatted_text
 from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.input.typeahead import store_typeahead
+from prompt_toolkit.key_binding import KeyPress
 from prompt_toolkit.output import DummyOutput
 from prompt_toolkit.output.vt100 import Vt100_Output
 from prompt_toolkit.styles import default_ui_style, merge_styles
@@ -265,6 +267,17 @@ class TestMenu:
     def test_ctrl_c_is_a_keyboard_interrupt_like_at_the_prompt(self, tmp_path):
         with pytest.raises(KeyboardInterrupt):
             self.choose(tmp_path, "\x03")
+
+    def test_keys_the_editor_read_ahead_do_not_answer(self, tmp_path):
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, tmp_path / "history", input=pipe, output=DummyOutput()
+            )
+            assert session is not None
+            store_typeahead(pipe, [KeyPress("y", "y")])
+            pipe.send_text("\r")
+
+            assert choose(session, "Allow save?", self.OPTIONS) == "n"
 
     def test_the_menu_is_erased_when_it_is_answered(self):
         app = _Menu(message="m", options=self.OPTIONS)._create_application()  # pyright: ignore[reportPrivateUsage]

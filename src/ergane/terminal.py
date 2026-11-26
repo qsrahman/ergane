@@ -21,6 +21,7 @@ from prompt_toolkit.formatted_text import AnyFormattedText, FormattedText
 from prompt_toolkit.history import FileHistory, History, InMemoryHistory
 from prompt_toolkit.input import Input
 from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
+from prompt_toolkit.input.typeahead import clear_typeahead
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.lexers import SimpleLexer
@@ -125,7 +126,7 @@ def choose(
     """Ask a question on the session's terminal with a menu, and give the key of the
     option chosen. The first option is the default; arrows and Enter, the option's
     number or its key (when the key is one character) choose. Ctrl-C raises
-    KeyboardInterrupt, as at the prompt.
+    KeyboardInterrupt, as at the prompt. Keys the editor had read ahead are discarded.
 
     Args:
         session: The line editor, whose input and output the menu uses.
@@ -136,6 +137,9 @@ def choose(
     for key, _ in options:
         if len(key) == 1:  # a longer key, such as a session's id, is no key to press
             keys.add(key)(_exit_with(key))
+    # Keys the line editor read past its Enter are kept for the next application,
+    # which must not be this menu: they were typed before it was there to answer.
+    clear_typeahead(session.app.input)
     with create_app_session(input=session.app.input, output=session.app.output):
         return _Menu(
             message=message,

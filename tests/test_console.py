@@ -1,5 +1,7 @@
 import io
 import json
+import os
+import select
 import sys
 from pathlib import Path
 
@@ -219,6 +221,59 @@ def save(path: str) -> str:
 
 
 SAVE = Tool.from_function(save, read_only=False)
+
+
+class TestTypedAhead:
+    """What was typed before a question is no answer to it."""
+
+    @pytest.fixture
+    def keyboard(self, monkeypatch: pytest.MonkeyPatch):
+        """A terminal as stdin; gives a function that types on it, and one that says
+        whether anything typed is waiting to be read."""
+        typist, terminal = os.openpty()
+        with open(terminal) as stdin:
+            monkeypatch.setattr("sys.stdin", stdin)
+
+            def waiting() -> bool:
+                return bool(select.select([terminal], [], [], 0.2)[0])
+
+            def type_(keys: bytes) -> None:
+                os.write(typist, keys)
+                assert waiting()
+
+            yield type_, waiting
+        os.close(typist)
+
+    def test_it_is_gone_before_a_typed_question(
+        self, keyboard, monkeypatch: pytest.MonkeyPatch
+    ):
+        type_, waiting = keyboard
+        left = []
+
+        def fake_input(_prompt: str) -> str:
+            left.append(waiting())
+            return "n"
+
+        monkeypatch.setattr("builtins.input", fake_input)
+        type_(b"y\n")
+
+        Console().confirm(SAVE, "{}")
+
+        assert left == [False]
+
+    def test_it_is_gone_before_a_menu(self, keyboard):
+        type_, waiting = keyboard
+        left = []
+
+        def choose(_question, _options) -> str:
+            left.append(waiting())
+            return "n"
+
+        type_(b"yes also fix the readme\n")
+
+        Console(choose=choose).confirm(SAVE, "{}")
+
+        assert left == [False]
 
 
 class TestConfirm:

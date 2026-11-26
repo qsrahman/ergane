@@ -19,6 +19,7 @@ import shutil
 import sys
 import textwrap
 from collections.abc import Callable, Sequence
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, Literal
 
@@ -55,6 +56,20 @@ _STYLE = Style.from_dict(
         "todo-active": "bold",
     }
 )
+
+
+def _discard_typed_ahead() -> None:
+    """Drop what was typed and not yet read. The terminal keeps the keys pressed while
+    the model works, and a question asked after them would take them for its answer: a
+    `y` or an `a` in a sentence would allow a call that nobody has seen."""
+    try:
+        import termios  # not on Windows
+    except ImportError:
+        return
+    # An error means there is no terminal, and so nothing typed ahead.
+    with suppress(OSError, ValueError, termios.error):
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+
 
 # How serious a notice is: it is told by colour, and the words still say it.
 Level = Literal["info", "warning", "error"]
@@ -511,7 +526,7 @@ class Console:
             True if the user allows it (y or yes), "always" for a or always (allow
             this tool for the rest of the session), and False otherwise; end of input
             is a no. With no one to ask (`can_ask`) it is False, and the call's line
-            says why.
+            says why. What was typed before the question is discarded.
         """
         if not self.can_ask:
             self._call_line(
@@ -520,6 +535,7 @@ class Console:
             return False
         while True:
             self.end_line()
+            _discard_typed_ahead()
             if self.choose is not None:
                 answer = self._ask_menu(self.choose, tool, arguments)
             else:

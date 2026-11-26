@@ -205,7 +205,9 @@ What must stay true:
 - **A tool that is not `read_only` runs only if `confirm(tool, arguments)` returns true or
   `"always"`** (which allows that tool for the session). The default denies, and so does
   the console when input is not a terminal (`Console(can_ask=False)`, set by `cli.py`):
-  redirected lines are prompts, never answers. A call whose arguments `check` rejects is
+  redirected lines are prompts, never answers. Nor is anything typed before the question:
+  the terminal's pending input and the keys the line editor read ahead are discarded. A
+  call whose arguments `check` rejects is
   answered without asking.
 - **Only read-only calls run together** (on threads, `Agent._run_tools`); any other call
   runs alone, after the calls before it. The outputs are added in the order of the calls.

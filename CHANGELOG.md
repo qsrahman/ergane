@@ -14,6 +14,9 @@ move what is under Unreleased to a new heading with the version and the date, ch
 
 ### Fixed
 
+- Keys typed while the model works no longer answer the next permission question. Before,
+  a `y` or an `a` typed ahead, even inside a sentence, allowed the call before it was
+  seen. What is typed before a question is now discarded.
 - A tool that asks is now denied when input is not a terminal (a pipe or a file). Before,
   the next line of the input answered the question, so a line `y` or `a` allowed the call;
   a script that answered this way no longer can.
