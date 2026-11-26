@@ -222,6 +222,20 @@ SAVE = Tool.from_function(save, read_only=False)
 
 
 class TestConfirm:
+    def test_with_no_one_to_ask_it_is_denied_and_no_input_is_read(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ):
+        def no_input(_prompt: str) -> str:
+            raise AssertionError("read a line as the answer")
+
+        monkeypatch.setattr("builtins.input", no_input)
+        monkeypatch.setenv("COLUMNS", "100")
+
+        assert Console(can_ask=False).confirm(SAVE, '{"path": "notes.txt"}') is False
+
+        shown = capsys.readouterr().out
+        assert shown == ("▸ save  path=notes.txt  denied: input is not a terminal\n")
+
     @pytest.fixture
     def asked(self, monkeypatch: pytest.MonkeyPatch):
         """Ask Console().confirm with scripted input.

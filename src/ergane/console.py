@@ -197,7 +197,11 @@ class Console:
     """
 
     def __init__(
-        self, choose: Choose | None = None, output: Output | None = None
+        self,
+        choose: Choose | None = None,
+        output: Output | None = None,
+        *,
+        can_ask: bool = True,
     ) -> None:
         """Create a console, with the cursor at the start of a line.
 
@@ -206,7 +210,10 @@ class Console:
                 one the question is typed, and `input()` reads the answer.
             output: Where styled text is written, as prompt_toolkit has it; the
                 terminal if omitted. Giving one turns styling on.
+            can_ask: Whether there is a user to answer `confirm`. False when input is
+                not a terminal: the next line of a file or a pipe is no one's answer.
         """
+        self.can_ask = can_ask
         self.choose = choose
         self.output = output
         # Status lines are styled on a terminal, unless NO_COLOR asks for no colour.
@@ -503,8 +510,14 @@ class Console:
         Returns:
             True if the user allows it (y or yes), "always" for a or always (allow
             this tool for the rest of the session), and False otherwise; end of input
-            is a no.
+            is a no. With no one to ask (`can_ask`) it is False, and the call's line
+            says why.
         """
+        if not self.can_ask:
+            self._call_line(
+                tool.name, arguments, "denied: input is not a terminal", "class:denied"
+            )
+            return False
         while True:
             self.end_line()
             if self.choose is not None:

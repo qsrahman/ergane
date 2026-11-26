@@ -14,6 +14,9 @@ move what is under Unreleased to a new heading with the version and the date, ch
 
 ### Fixed
 
+- A tool that asks is now denied when input is not a terminal (a pipe or a file). Before,
+  the next line of the input answered the question, so a line `y` or `a` allowed the call;
+  a script that answered this way no longer can.
 - `edit_file` no longer edits a blank line when `old_text` is only whitespace that is not
   in the file.
 - `edit_file` reports `old_text` that matches two overlapping places as ambiguous,

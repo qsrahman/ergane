@@ -204,8 +204,10 @@ What must stay true:
 - **Every function call has an output** before anything is sent or saved; calls and
   outputs are dropped together; only the newest turn keeps its tool work.
 - **A tool that is not `read_only` runs only if `confirm(tool, arguments)` returns true or
-  `"always"`** (which allows that tool for the session). The default denies. A call whose
-  arguments `check` rejects is answered without asking.
+  `"always"`** (which allows that tool for the session). The default denies, and so does
+  the console when input is not a terminal (`Console(can_ask=False)`, set by `cli.py`):
+  redirected lines are prompts, never answers. A call whose arguments `check` rejects is
+  answered without asking.
 - **Only read-only calls run together** (on threads, `Agent._run_tools`); any other call
   runs alone, after the calls before it. The outputs are added in the order of the calls.
   `Console` is used from the main thread only, so a call that asks never asks at the same

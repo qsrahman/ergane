@@ -194,7 +194,9 @@ no output (400) and an output with no call:
 | is to a tool you answered `a` to earlier   | `▸ name  args`                  | its result                                         |
 
 ¹ At a terminal the question is a menu that goes away when answered, leaving this line;
-with input or output redirected it is the typed line `Allow name {args}? [y/N/a] y`.
+with only output redirected it is the typed line `Allow name {args}? [y/N/a] y`. When
+input is not a terminal nothing is asked: the line ends `denied: input is not a
+terminal`, and the model reads `The user denied this call.`
 
 - The `▸` line (`Console.call`) is as wide as the terminal at most, the arguments on one
   line with the middle of long values left out. It only reports a call, so plain

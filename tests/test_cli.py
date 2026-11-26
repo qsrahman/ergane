@@ -620,6 +620,29 @@ class TestMcpServersInTheBackground:
         assert "fake__add" in RecordingRepl.agent.tools
 
 
+@pytest.mark.parametrize("terminal", [True, False])
+def test_only_input_from_a_terminal_can_answer_a_question(
+    monkeypatch: pytest.MonkeyPatch, terminal: bool
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: terminal, raising=False)
+    monkeypatch.setattr("ergane.cli.terminal_session", lambda *a, **k: None)
+    seen = []
+
+    class Recording(RecordingRepl):
+        def __init__(
+            self, agent, commands, session=None, console=None, hub=None, store=None
+        ):
+            super().__init__(agent, commands, session, console, hub, store)
+            seen.append(console)
+
+    monkeypatch.setattr("ergane.cli.Repl", Recording)
+
+    main([])
+
+    assert seen[0].can_ask is terminal
+
+
 class TestResume:
     """`--resume [ID]` continues a saved session of the directory ergane runs in."""
 

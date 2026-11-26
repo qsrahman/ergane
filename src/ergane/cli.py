@@ -161,7 +161,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     except ValidationError as exc:
         _exit_with("Configuration error:", exc, config_file(path))
 
-    console = Console()
+    # Only a terminal can answer a permission question: redirected input holds prompts,
+    # and one of its lines must not be taken for a yes.
+    console = Console(can_ask=sys.stdin.isatty())
     state = private_state_dir()
     store = SessionStore(state / "sessions", Path.cwd())
     saved = None
