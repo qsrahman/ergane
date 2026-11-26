@@ -64,17 +64,23 @@ The first release. ergane began on 2026-10-16 as `muagent`, and was renamed on 2
 
 **Configuration**
 - `$XDG_CONFIG_HOME/ergane/config.json` and a flag for each setting, with `--config`
-  naming another file. `OPENAI_API_KEY` is the only variable read. Every flag and key is
-  in the README, with examples.
+  naming another file. `OPENAI_API_KEY` is the only variable ergane itself reads for a
+  setting (the OpenAI SDK reads others: see Known issues). Every flag and key is in the
+  README, with examples.
 
 ### Security
-- Credentials, servers and saved sessions are read only from the user's own files, never
-  from the working directory, so a project cannot change where your key and prompts go or
-  start a program.
+- No configuration, server list or saved session is read from the working directory, so a
+  project's files cannot start a program.
 - File tools are confined to the working directory and the system temp directory, never
   write through a symbolic link.
 - `web_fetch` connects only to addresses it has checked, again on every redirect;
   `run_command` does not get `OPENAI_API_KEY`; tool results are treated as untrusted text.
+
+### Known issues
+- With no `base_url` set, the OpenAI SDK sends the API key and prompts to
+  `OPENAI_BASE_URL` if the environment has it, which a project's `.envrc` can set. The SDK
+  also reads `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID` and `OPENAI_CUSTOM_HEADERS`. Set
+  `base_url` in `config.json` to pin the destination; the README lists the variables.
 
 ### Requirements
 - Python 3.14 or later; the `mcp` extra for MCP servers.

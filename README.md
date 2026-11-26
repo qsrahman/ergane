@@ -36,7 +36,7 @@ ergane --version
 
 **From the checkout**, for development: `uv sync --extra mcp`, then `uv run ergane`.
 
-Put your settings in `~/.config/ergane/config.json` (or `$XDG_CONFIG_HOME/ergane/config.json`). A `config.json` in the directory you run `ergane` from is not read, so a project you open cannot change where your API key and prompts are sent.
+Put your settings in `~/.config/ergane/config.json` (or `$XDG_CONFIG_HOME/ergane/config.json`). A `config.json` in the directory you run `ergane` from is not read, so a file in a project you open cannot change where your API key and prompts are sent. Environment variables can, unless you set `base_url`: see [Environment variables](#environment-variables).
 
 ```json
 {
@@ -52,12 +52,12 @@ Put your settings in `~/.config/ergane/config.json` (or `$XDG_CONFIG_HOME/ergane
 
 Only the key is required, and it may be written out, or as `${NAME}` to take it from the environment variable `NAME` (a variable that is not set is an error that names it). The servers under `mcpServers` are explained [below](#mcp-servers). A key that is not a setting is an error that names it. There is no `.env` file: put the key in the environment or in this file.
 
-Each setting comes from the first of these that sets it: **its command-line flag, `config.json`, its default.** The key is the one setting the environment can also give: the variable `OPENAI_API_KEY`, which the OpenAI SDK reads too, beats `api_key` in the file. There are no variables for the rest (not for the base URL, which would let a project's environment send your key and prompts elsewhere).
+Each setting comes from the first of these that sets it: **its command-line flag, `config.json`, its default.** The key is the one setting the environment can also give: the variable `OPENAI_API_KEY`, which the OpenAI SDK reads too, beats `api_key` in the file. ergane reads no variable of its own for the rest, but the libraries it uses do read some: see [Environment variables](#environment-variables).
 
 | File key             | Flag                     | Default               | Description |
 | -------------------- | ------------------------ | --------------------- | ----------- |
 | `api_key`            | none (it would show in the process list) | —       | API key (required); `OPENAI_API_KEY` in the environment wins over it |
-| `base_url`           | `--base-url URL`         | OpenAI default        | Base URL for an OpenAI-compatible API |
+| `base_url`           | `--base-url URL`         | `OPENAI_BASE_URL` if set, else OpenAI's | Base URL for an OpenAI-compatible API. Set it to pin where your key and prompts go. |
 | `model`              | `--model NAME`           | `gpt-5.4-mini`        | Model name |
 | `streaming`          | `--streaming`, `--no-streaming` | `true`         | Stream tokens as they arrive |
 | `max_context_tokens` | `--max-context-tokens N` | `65536`               | Token budget for one request: the system instructions, the definitions of the tools and the conversation history together (not the reply). Old turns are dropped to fit it, so many or long tool definitions leave less room for the history. Keep it well below the model's context window. |
@@ -171,6 +171,25 @@ or turn summarizing off, so that old turns are only dropped when the budget need
   }
 }
 ```
+
+### Environment variables
+
+**ergane reads** `OPENAI_API_KEY` (the key, which wins over `api_key`), `XDG_CONFIG_HOME` and `XDG_STATE_HOME` (where its files are), `NO_COLOR`, and any `NAME` you write as `${NAME}` in `api_key` or in an MCP server's `args`, `env` or `headers`.
+
+**The OpenAI SDK reads more, and ergane does not stop it:**
+
+| Variable | Effect |
+| -------- | ------ |
+| `OPENAI_BASE_URL` | Where your key and prompts are sent, **when neither `base_url` nor `--base-url` is set**. |
+| `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID` | The organization and project the requests are made for, even with `base_url` set. |
+| `OPENAI_CUSTOM_HEADERS` | Extra headers on every request, even with `base_url` set. |
+| `OPENAI_ADMIN_KEY`, `OPENAI_WEBHOOK_SECRET`, `OPENAI_LOG` | Read by the SDK too; ergane uses none of them (`OPENAI_LOG` turns on the SDK's logging). |
+
+> **Security.** A project can set environment variables, for example with a `.envrc` that [direnv](https://direnv.net/) loads. With no `base_url` in your settings, such a file can send your API key and every prompt to a server of its choosing. Put `"base_url": "https://api.openai.com/v1"` (or your own endpoint) in `config.json`, read a project's `.envrc` before you allow it, and check these variables before running `ergane` in a project you do not trust.
+
+**Libraries also read** the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) for requests to the API, but not for `web_fetch` or `web_search`; `HOME` and `TMPDIR` for paths (`TMPDIR` also moves the temp directory the file tools may use); `COLUMNS` and `LINES` for the terminal's size; and `VISUAL`, `EDITOR`, `TERM` and the `PROMPT_TOOLKIT_*` variables for the prompt.
+
+**Child processes:** `run_command` gets your environment except `OPENAI_API_KEY`. A local MCP server gets only a short list (`HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`) and the `env` you give it.
 
 ## Usage
 

@@ -11,11 +11,14 @@ How it is built, and why:
   the environment put over it, the flags over both, and one `Config.model_validate`.
   The flags arrive by field name; `None` is a value (`--reasoning-effort default`).
   There is no `.env` and no flag for the key (it would show in the process list).
-- The environment is read for the key only. A variable for the base URL would send the
-  key and every prompt wherever a project's `.envrc` said, one for the servers would
+- ergane reads the environment for the key only. A variable for the base URL would send
+  the key and every prompt wherever a project's `.envrc` said, one for the servers would
   start a program of its own, one naming the file would let a project pick it, and the
   common names (`MODEL`, `BASE_URL`) are exported by other programs. The file is the
-  user's, never one in the working directory, and only `--config` names another.
+  user's, never one in the working directory, and only `--config` names another. The
+  OpenAI SDK does not follow this: given no `base_url` it takes `OPENAI_BASE_URL`, and it
+  reads `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID` and `OPENAI_CUSTOM_HEADERS` in any case. A
+  known gap (see the README), not closed here.
 - The file's keys are the fields' names (`mcp_servers` is `mcpServers`, as in other
   tools' MCP files). `extra="forbid"`: a key that is not a setting names itself in the
   error. The file is read as one JSON object by a `TypeAdapter` titled with its path,

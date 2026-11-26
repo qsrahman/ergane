@@ -75,10 +75,13 @@ steps at the top of that file.
 
 Highest first: the command-line flags, the user's
 `$XDG_CONFIG_HOME/ergane/config.json` (default `~/.config/ergane/`), the defaults.
-The environment has one variable, `OPENAI_API_KEY`, which beats `api_key` in the file;
-there is none for any other setting (a variable for `base_url` would let a project's
-environment send the key and every prompt elsewhere, one for the servers would start a
-program of its own, and `MODEL`, `BASE_URL` are exported by other programs). Only
+ergane itself reads one variable for a setting, `OPENAI_API_KEY`, which beats `api_key`
+in the file; there is none of its own for any other setting (a variable for `base_url`
+would let a project's environment send the key and every prompt elsewhere, one for the
+servers would start a program of its own, and `MODEL`, `BASE_URL` are exported by other
+programs). The OpenAI SDK is not held to this: with `base_url` unset it uses
+`OPENAI_BASE_URL`, and it always reads `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID` and
+`OPENAI_CUSTOM_HEADERS`. This is a known gap, documented in the README, not fixed. Only
 `--config` names another file. `load_config(path=None, **flags)` reads the file, puts
 the key and the flags over it and validates the result as one `Config` (a plain pydantic
 model; there is no pydantic-settings); `main()` prints the per-key errors and exits with
