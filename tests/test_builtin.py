@@ -17,9 +17,9 @@ def test_the_built_ins_that_only_read_run_without_asking():
 
 
 def test_the_web_tools_say_the_same_thing_about_themselves():
-    from ergane.builtin import _http, fetch, search
+    from ergane.builtin import fetch, search
 
-    assert fetch.USER_AGENT is search.USER_AGENT is _http.USER_AGENT
+    assert fetch.USER_AGENT is search.USER_AGENT
     assert fetch.USER_AGENT.startswith("ergane/")
 
 

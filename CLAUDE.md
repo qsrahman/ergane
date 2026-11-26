@@ -123,8 +123,7 @@ The modules, in dependency order (each imports only from those above it):
 - `builtin/`: ergane's own tools, each module only `@tool` functions (and the helpers
   they share, whose names start with `_`, which `tools_in` skips). In dependency order:
   `_paths` (`resolve`: the one place a model's path becomes a real one), `_text`
-  (the line, character and head-and-tail cuts, and reading a file by lines), `_images`
-  (which files are pictures), `_http` (what the web tools call themselves), `_edit` (the
+  (the line, character and head-and-tail cuts, and reading a file by lines), `_edit` (the
   text of an edit, pure), then `files` (`read_file`), `writes` (`write_file`, `edit_file`), `shell`
   (`run_command`), `fetch` (`web_fetch`) and `search` (`web_search`). A tool that needs
   a setting a test changes is made by a `make_*_tool` factory (the fetch and search

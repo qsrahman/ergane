@@ -23,8 +23,8 @@ from urllib.parse import parse_qs, urlparse
 import httpx2
 from pydantic import Field
 
-from ergane.builtin._http import USER_AGENT
 from ergane.builtin._text import MAX_TEXT_CHARS
+from ergane.builtin.fetch import USER_AGENT
 from ergane.surrogates import without_surrogates
 from ergane.tools import Tool
 

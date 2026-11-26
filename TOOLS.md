@@ -38,7 +38,7 @@ A tool you do not want to put in the repository can be an
 
 A tool that returns a picture too is annotated `-> str | ToolOutput` and returns
 `ToolOutput(text, (Image(base64_data, mime_type),))`, as `read_file` does for a png,
-jpeg, webp or gif (`builtin/_images.py`); the picture goes with the text of the result.
+jpeg, webp or gif (`builtin/files.py`); the picture goes with the text of the result.
 
 Write the docstring for the model, not for a programmer: what the tool does, when to use
 it, what it returns, and what a wrong call looks like. The model decides from it alone

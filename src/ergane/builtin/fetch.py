@@ -35,6 +35,7 @@ import zlib
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from importlib.metadata import version
 from typing import TYPE_CHECKING, Annotated
 from urllib.parse import urljoin, urlparse
 
@@ -42,12 +43,16 @@ import httpcore2
 import httpx2
 from pydantic import Field
 
-from ergane.builtin._http import USER_AGENT
 from ergane.surrogates import without_surrogates
 from ergane.tools import Tool
 
 if TYPE_CHECKING:
     from bs4 import BeautifulSoup, Tag
+
+# What both web tools call themselves to the sites they ask. Honest on purpose:
+# DuckDuckGo answers an agent that says what it is, and turns away one that wears a
+# browser's headers (see `search.py`).
+USER_AGENT = f"ergane/{version('ergane')} (Autonomous)"
 
 # The most body bytes read from one response. The body is streamed and the read stops
 # here, so a very large or endless response is not buffered. `max_length` cannot do
