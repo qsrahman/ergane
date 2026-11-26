@@ -14,6 +14,10 @@ move what is under Unreleased to a new heading with the version and the date, ch
 
 ### Fixed
 
+- A streamed reply that the server ends with an error that passes (overloaded, a rate
+  limit, a server error) before any text is asked for again, twice, after a pause.
+- A request refused as too long inside a stream, and more of the ways servers word it,
+  are recognized: the request is shortened and sent again.
 - Keys typed while the model works no longer answer the next permission question. Before,
   a `y` or an `a` typed ahead, even inside a sentence, allowed the call before it was
   seen. What is typed before a question is now discarded.

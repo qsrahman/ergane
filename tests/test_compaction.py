@@ -18,6 +18,7 @@ from ergane.errors import (
     describe_error,
     is_context_overflow,
     is_images_rejected,
+    is_transient,
 )
 from ergane.outputs import PRUNE_CHARS, function_output
 from ergane.prompts import COMPACT_PROMPT
@@ -310,6 +311,23 @@ class TestCompaction:
         assert agent.context.items != before
 
 
+@pytest.mark.parametrize("how", ["event", "failed", "sdk"])
+def test_a_request_refused_as_too_long_inside_a_stream_is_sent_again_shorter(
+    make_agent, fake_server, how
+):
+    agent = make_agent(
+        STREAMING=True, MAX_CONTEXT_TOKENS=4000, AUTO_COMPACT=True,
+        COMPACT_AT=1, KEEP_RECENT_TOKENS=500,
+    )  # fmt: skip
+    agent.context.items = old_turns(10)[:12]
+
+    agent.run_turn(f"{how}_overflow_once")
+
+    kinds = ["summary" if summarizing(r) else "chat" for r in fake_server.requests]
+    assert kinds == ["chat", "summary", "chat"]
+    assert agent.context.items[-1] == {"role": "assistant", "content": TEXT}
+
+
 @pytest.mark.parametrize("streaming", [True, False])
 class TestTooLong:
     def test_a_request_the_server_refuses_as_too_long_is_summarized_and_sent_again(
@@ -414,6 +432,11 @@ class TestOverflowDetection:
             (400, "prompt is too long: 9000 tokens", None),
             (413, "request too large: token limit exceeded", None),
             (400, "input exceeds the context window", None),
+            (400, "too many tokens", None),
+            (400, "Too many input tokens", None),
+            (400, "input length exceeds the maximum", None),
+            (400, "the request exceeds the available context size", None),
+            (400, "exceeds the limit of 4096 tokens", None),
         ],
     )
     def test_the_ways_servers_say_it(self, status, message, code):
@@ -421,10 +444,47 @@ class TestOverflowDetection:
 
     @pytest.mark.parametrize(
         ("status", "message"),
-        [(400, "invalid tool schema"), (429, "context length"), (500, "too long")],
+        [
+            (400, "invalid tool schema"),
+            (429, "context length"),
+            (500, "too long"),
+            (400, "too many tokens per minute"),
+            (400, "rate limit reached: token limit exceeded"),
+            (400, "the file exceeds the limit"),
+            (400, "too many tools"),
+        ],
     )
     def test_other_errors_are_not_it(self, status, message):
         assert not is_context_overflow(self.error(status, message))
+
+
+class TestWhatMayPass:
+    @pytest.mark.parametrize(
+        ("code", "message"),
+        [
+            ("server_error", "boom"),
+            ("rate_limit_exceeded", "slow down"),
+            ("overloaded_error", ""),
+            (503, "no"),
+            (None, "The server is overloaded"),
+            (None, "Service Unavailable"),
+            (None, "upstream request timed out"),
+        ],
+    )
+    def test_a_fault_of_the_server_may(self, code, message):
+        assert is_transient(code, message)
+
+    @pytest.mark.parametrize(
+        ("code", "message"),
+        [
+            ("invalid_prompt", "server error"),  # the code decides
+            ("insufficient_quota", "rate limit"),
+            (None, "the model crashed"),
+            (None, "invalid api key"),
+        ],
+    )
+    def test_anything_else_does_not(self, code, message):
+        assert not is_transient(code, message)
 
 
 class TestImagesRejectedDetection:

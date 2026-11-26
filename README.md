@@ -344,7 +344,7 @@ Every request carries the whole history, so a long session would outgrow `max_co
 2. **Old turns are summarized.** When the next request would pass `compact_at` (75%) of the budget, the model is asked for a summary of the oldest turns, with headings: goal, constraints, progress, decisions, every request in order, exact references (paths, ids, errors), next steps. The newest turns (about `keep_recent_tokens`) stay as they are. The summary goes first in every later request, as notes and not instructions, and the next summary updates it. It uses the model you chat with, one extra request, and says so: `[Summarizing earlier messages…]`.
 3. **What still does not fit is dropped,** oldest turns first, as before. This is also what happens if a summary fails: the failure is shown, the conversation goes on, and after three failures in a row summaries pause until `/compact` works.
 
-`/compact [focus]` summarizes now, `/summary` shows it, `/context` shows where summaries start, and `--no-auto-compact` turns them off. If the server refuses a request as too long, ergane summarizes (or shortens the results) and sends it again, once.
+`/compact [focus]` summarizes now, `/summary` shows it, `/context` shows where summaries start, and `--no-auto-compact` turns them off. If the server refuses a request as too long, at once or inside the stream before any text, ergane summarizes (or shortens the results) and sends it again, once.
 
 A summary is written from everything in the conversation, web pages and tool output included, so it is sent as notes, not instructions, and nothing in it is trusted more than the text it came from. Summaries lose detail: anything that must survive exactly belongs in a file, not the chat.
 

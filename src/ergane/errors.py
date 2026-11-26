@@ -21,6 +21,70 @@ class StreamCut(TurnError):
     """
 
 
+class ServerBusy(StreamCut):
+    """A stream the server ended with a fault of its own that passes (overloaded, a
+    rate limit, an internal error): worth a second try after a pause."""
+
+
+class ContextOverflow(TurnError):
+    """A stream the server ended because the request is longer than the model takes,
+    before any of the reply was shown, so that a shorter request can be sent."""
+
+
+# The codes of an error inside a stream that a second try may get past: OpenAI's, those
+# of compatible servers, and the HTTP statuses some of them give as the code.
+_TRANSIENT_CODES = frozenset(
+    {
+        "server_error",
+        "rate_limit_exceeded",
+        "vector_store_timeout",
+        "api_error",
+        "overloaded_error",
+        "rate_limit_error",
+        "internal_server_error",
+        "service_unavailable",
+        "timeout",
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
+        "529",
+    }
+)
+# The same, told by the words of an error that has no code.
+_TRANSIENT_TEXT = re.compile(
+    r"overloaded|rate.?limit|(service|temporarily) unavailable|"
+    r"(internal|server) error|timed? ?out"
+)
+# How servers say that a request is longer than the model's context.
+_OVERFLOW_TEXT = re.compile(
+    r"too long"
+    r"|(context|token).*(length|window|limit|exceed)"
+    r"|exceed\w*.{0,60}(context|token)"
+    r"|input (length|size).{0,40}exceed"
+    r"|too many (input |prompt )?tokens"
+)
+# A limit on how fast, not on how long, which may be worded in tokens too.
+_RATE_TEXT = re.compile(r"rate.?limit|per (second|minute|hour|day)")
+
+
+def says_overflow(code: object, message: str) -> bool:
+    """Whether an error's code or words say that the request was too long."""
+    if code == "context_length_exceeded":
+        return True
+    text = message.lower()
+    return not _RATE_TEXT.search(text) and bool(_OVERFLOW_TEXT.search(text))
+
+
+def is_transient(code: object, message: str) -> bool:
+    """Whether the error a server ended a stream with may pass if asked again. A code
+    decides when there is one; the words only when there is none."""
+    if code:
+        return str(code) in _TRANSIENT_CODES
+    return bool(_TRANSIENT_TEXT.search(message.lower()))
+
+
 # What to check, by the status of an API error that has a usual cause.
 _STATUS_HINTS = {
     401: "Check the API key (OPENAI_API_KEY, or api_key in config.json).",
@@ -31,18 +95,16 @@ _STATUS_HINTS = {
 
 
 def is_context_overflow(exc: BaseException) -> bool:
-    """Whether a server refused a request for being longer than its context window.
+    """Whether a server refused a request for being longer than its context window,
+    at once or inside a stream.
 
     Servers word it in their own way; OpenAI sends the code `context_length_exceeded`.
     """
+    if isinstance(exc, ContextOverflow):
+        return True
     if not isinstance(exc, APIStatusError) or exc.status_code not in (400, 413):
         return False
-    if exc.code == "context_length_exceeded":
-        return True
-    text = exc.message.lower()
-    return "too long" in text or bool(
-        re.search(r"(context|token).*(length|window|limit|exceed)", text)
-    )
+    return says_overflow(exc.code, exc.message)
 
 
 def is_images_rejected(exc: BaseException) -> bool:

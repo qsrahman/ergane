@@ -1,8 +1,15 @@
 """The Responder on its own: a request to the fake API, no agent, no conversation."""
 
 import pytest
+from openai import APIError
 
-from ergane.errors import StreamCut, TurnError
+from ergane.errors import (
+    ContextOverflow,
+    ServerBusy,
+    StreamCut,
+    TurnError,
+    is_context_overflow,
+)
 from ergane.responses import STREAM_RETRIES, Responder, response_problem
 from fake_api import TEXT
 from helpers import make_config
@@ -117,6 +124,81 @@ class TestStreamRetries:
     def test_the_server_saying_why_ends_it_at_once(self, responder, fake_server):
         with pytest.raises(TurnError):
             send(responder(streaming=True), "error_event")
+
+        assert len(fake_server.requests) == 1
+
+    @pytest.mark.parametrize("how", ["event", "failed", "sdk"])
+    def test_a_busy_server_is_asked_again(self, responder, fake_server, how):
+        _response, pieces, notices = send(responder(streaming=True), f"{how}_busy_once")
+
+        assert len(fake_server.requests) == 2
+        assert len(notices) == 1 and "overloaded; trying again (1 of 2)" in notices[0]
+        assert "".join(pieces) == TEXT
+
+    @pytest.mark.parametrize("how", ["event", "failed", "sdk"])
+    def test_a_server_that_stays_busy_is_given_up_on(self, responder, fake_server, how):
+        with pytest.raises(ServerBusy, match="The server is overloaded"):
+            send(responder(streaming=True), f"{how}_busy")
+
+        assert len(fake_server.requests) == 1 + STREAM_RETRIES
+
+    def test_it_waits_longer_before_each_retry(self, responder, monkeypatch):
+        waited: list[float] = []
+        monkeypatch.setattr("ergane.responses.BUSY_DELAY_SECONDS", 2.0)
+        monkeypatch.setattr("ergane.responses.time.sleep", waited.append)
+
+        with pytest.raises(ServerBusy):
+            send(responder(streaming=True), "event_busy")
+
+        assert waited == [2.0, 4.0]
+
+    def test_a_cut_stream_is_sent_again_without_a_pause(self, responder, monkeypatch):
+        waited: list[float] = []
+        monkeypatch.setattr("ergane.responses.time.sleep", waited.append)
+
+        send(responder(streaming=True), "flaky")
+
+        assert waited == []
+
+    @pytest.mark.parametrize("how", ["event", "failed", "sdk"])
+    def test_a_request_too_long_is_told_apart_and_not_repeated(
+        self, responder, fake_server, how
+    ):
+        with pytest.raises(ContextOverflow) as caught:
+            send(responder(streaming=True), f"{how}_overflow")
+
+        assert is_context_overflow(caught.value)
+        assert len(fake_server.requests) == 1
+
+    def test_too_long_after_a_reply_began_is_not_one_to_shorten(
+        self, responder, fake_server, monkeypatch
+    ):
+        # A shorter request would show the reply again.
+        monkeypatch.setattr("fake_api.STREAM_ERROR", "the input is too long")
+
+        with pytest.raises(TurnError, match="the input is too long") as caught:
+            send(responder(streaming=True), "error_event_nocode")
+
+        assert not is_context_overflow(caught.value)
+        assert len(fake_server.requests) == 1
+
+    def test_another_error_event_ends_it_at_once(self, responder, fake_server):
+        with pytest.raises(TurnError, match="^Stream error: invalid_prompt: boom$"):
+            send(responder(streaming=True), "event_bad")
+
+        assert len(fake_server.requests) == 1
+
+    def test_another_failed_response_is_returned(self, responder, fake_server):
+        response, _, _ = send(responder(streaming=True), "failed_bad")
+
+        assert response_problem(response) == "Response failed: invalid_prompt: boom"
+        assert len(fake_server.requests) == 1
+
+    def test_another_error_the_sdk_raises_is_left_as_it_is(
+        self, responder, fake_server
+    ):
+        with pytest.raises(APIError, match="boom"):
+            send(responder(streaming=True), "sdk_bad")
 
         assert len(fake_server.requests) == 1
 

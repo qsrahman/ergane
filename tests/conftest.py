@@ -40,6 +40,12 @@ def isolate_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def no_pause(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A server that said it is busy is asked again at once: no test waits for it."""
+    monkeypatch.setattr("ergane.responses.BUSY_DELAY_SECONDS", 0)
+
+
 @pytest.fixture
 def fake_server() -> Iterator[ThreadingHTTPServer]:
     """Run the fake Responses API on a free local port. Received request bodies

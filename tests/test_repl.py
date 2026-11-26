@@ -152,7 +152,7 @@ class TestReplRendering:
         ("prompt", "notice"),
         [
             ("incomplete", "[Response incomplete: max_output_tokens]"),
-            ("failed", "[Response failed: server_error: boom]"),
+            ("failed", "[Response failed: invalid_prompt: boom]"),
             ("empty", "[No text in response]"),
             ("refusal", f"[Refused: {REFUSAL}]"),
         ],
@@ -491,7 +491,7 @@ class TestHowSeriousANoticeIs:
     def test_a_response_that_failed_is_an_error(self, monkeypatch, make_agent):
         shown = self.run(monkeypatch, make_agent, ["failed", "/exit"])
 
-        assert f"{self.RED}[Response failed: server_error: boom]" in shown
+        assert f"{self.RED}[Response failed: invalid_prompt: boom]" in shown
 
     def test_a_level_a_command_asks_for_is_used(self, monkeypatch, make_agent):
         shown = self.run(monkeypatch, make_agent, ["/effort extreme", "/exit"])

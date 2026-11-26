@@ -181,6 +181,15 @@ def how_it_dies(scenario: str, attempt: int, tool_output_sent: bool) -> str | No
     return None
 
 
+# The errors a stream can end with before any of the reply, as (code, message).
+STREAM_FAILURES = {
+    "busy": ("server_error", "The server is overloaded"),
+    "overflow": ("context_length_exceeded", "Your input exceeds the context window"),
+    "bad": ("invalid_prompt", "boom"),
+}
+STREAM_FAILURE = re.compile(r"(event|failed|sdk)_(busy|overflow|bad)(_once)?")
+
+
 def final_event(scenario: str, tool_output_sent: bool = False) -> tuple[str, dict]:
     """Return the terminal event type and response for a scenario."""
     if scenario == "tool_loop" or (scenario in TOOL_CALLS and not tool_output_sent):
@@ -214,7 +223,7 @@ def final_event(scenario: str, tool_output_sent: bool = False) -> tuple[str, dic
     if scenario == "failed":
         return "response.failed", make_response(
             "failed",
-            error={"code": "server_error", "message": "boom"},
+            error={"code": "invalid_prompt", "message": "boom"},
         )
     return "response.completed", make_response("completed", [MESSAGE])
 
@@ -232,7 +241,10 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     "tool_call_flaky" (like "tool_call", but the stream after the tool's output
     breaks once), "error_event" or "error_event_nocode" (a stream
     `error` event, with or without a code, after the first delta, then the stream
-    ends), "tool_call" (calls a tool until its output is in the input, then
+    ends), "HOW_WHAT" or "HOW_WHAT_once" (a stream that ends in an error before any
+    text: HOW is "event" for an `error` event, "failed" for `response.failed` or "sdk"
+    for the form the SDK raises itself; WHAT is "busy", "overflow" or "bad"; with
+    "_once" only the first time), "tool_call" (calls a tool until its output is in the input, then
     replies with text), "tool_call_reasoning" (the same, with a reasoning item
     before each call), "tool_call_parallel" (two calls in one response), "tool_call_mixed" (a call to
     read_file, one to write_file, another to read_file),
@@ -361,6 +373,12 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
+        if match := STREAM_FAILURE.fullmatch(scenario):
+            failed = self.server.__dict__.setdefault("failed_once", set())
+            if not (match[3] and scenario in failed):
+                failed.add(scenario)
+                self.fail_stream(match[1], *STREAM_FAILURES[match[2]])
+                return
         self.stream(
             scenario,
             event_type,
@@ -375,6 +393,24 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
             socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
         )
         self.connection.close()
+
+    def fail_stream(self, how: str, code: str, message: str) -> None:
+        """A stream that starts and then ends in an error, with no text."""
+        error = {"code": code, "message": message}
+        events: list[tuple[str, dict]] = [
+            ("response.created", {"response": make_response("in_progress")})
+        ]
+        if how == "event":
+            events.append(("error", error))
+        elif how == "failed":
+            response = make_response("failed", error=error)
+            events.append(("response.failed", {"response": response}))
+        for sequence, (type_, fields) in enumerate(events):
+            event = {"type": type_, "sequence_number": sequence, **fields}
+            self.wfile.write(f"event: {type_}\ndata: {json.dumps(event)}\n\n".encode())
+        if how == "sdk":
+            data = json.dumps({"error": error})
+            self.wfile.write(f"event: error\ndata: {data}\n\n".encode())
 
     def stream(
         self, scenario: str, event_type: str, response: dict, dies: str | None

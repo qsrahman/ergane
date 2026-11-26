@@ -307,7 +307,7 @@ class TestAgentRunTurn:
     @pytest.mark.parametrize(
         ("prompt", "message"),
         [
-            ("failed", "Response failed: server_error: boom"),
+            ("failed", "Response failed: invalid_prompt: boom"),
             ("empty", "No text in response"),
             ("null_output", "No text in response"),
             ("refusal", f"Refused: {REFUSAL}"),
@@ -1035,7 +1035,7 @@ class TestAgentToolLoop:
     @pytest.mark.parametrize(
         "scenario, reason",
         [
-            ("failed", "Response failed: server_error: boom"),
+            ("failed", "Response failed: invalid_prompt: boom"),
             ("empty", "No text in response"),
             ("null_output", "No text in response"),
             ("refusal", f"Refused: {REFUSAL}"),
@@ -1814,6 +1814,16 @@ class TestContextEstimate:
         assert before[1] > bare.context_estimate()[1]  # a tool is a definition
         assert before[2] == 0 and after[2] > 0  # the turn is history now
         assert after[:2] == before[:2]
+
+
+class TestErrorsInsideAStream:
+    @pytest.mark.parametrize("how", ["event", "failed", "sdk"])
+    def test_a_turn_goes_on_after_a_busy_server(self, make_agent, how):
+        agent = make_agent(tools=[READ_FILE], STREAMING=True)
+
+        agent.run_turn(f"tool_then_{how}_busy_once")
+
+        assert agent.context.items[-1] == {"role": "assistant", "content": TEXT}
 
 
 def test_lone_surrogates_do_not_stop_a_turn(make_agent, fake_server):

@@ -7,14 +7,22 @@ conversations, tools or budgets: the caller gives it the input, the instructions
 tool definitions, and reads what is wrong with the response with `response_problem`.
 """
 
+import time
 from collections.abc import Callable, Sequence
 
-from openai import APIConnectionError, OpenAI
+from openai import APIConnectionError, APIError, APIStatusError, OpenAI
 from openai.types.responses import FunctionToolParam, Response, ResponseInputParam
 from openai.types.responses.response_create_params import ResponseCreateParamsBase
 
 from ergane.config import Config
-from ergane.errors import StreamCut, TurnError
+from ergane.errors import (
+    ContextOverflow,
+    ServerBusy,
+    StreamCut,
+    TurnError,
+    is_transient,
+    says_overflow,
+)
 from ergane.surrogates import without_surrogates
 
 # How many times a round is sent again when its stream breaks before any text of the
@@ -22,6 +30,9 @@ from ergane.surrogates import without_surrogates
 # one that breaks halfway, and a turn of many rounds should not be lost to one dropped
 # connection: it happened, 25 rounds into reading a codebase.
 STREAM_RETRIES = 2
+# The pause before a server that said it is busy is asked again: this long before the
+# first retry, twice as long before the second.
+BUSY_DELAY_SECONDS = 2.0
 
 # What a response with neither text nor a call is reported as. Some compatible models
 # now and then answer with nothing; asking again once usually gets a reply.
@@ -35,6 +46,16 @@ def with_output(response: Response) -> Response:
     if response.output is None:
         response.output = []
     return response
+
+
+def _stream_failure(reason: str, code: object, message: str) -> TurnError:
+    """The exception for an error that a server ended a stream with: what can be done
+    about it is told by its class."""
+    if says_overflow(code, message):
+        return ContextOverflow(reason)
+    if is_transient(code, message):
+        return ServerBusy(reason)
+    return TurnError(reason)
 
 
 def response_problem(response: Response) -> str | None:
@@ -93,7 +114,8 @@ class Responder:
         """Get the model's final response, passing its text to on_text as it arrives.
 
         A stream that breaks (see `StreamCut`) before any text has been shown is
-        sent again, up to STREAM_RETRIES times, and each time `on_notice` says so.
+        sent again, up to STREAM_RETRIES times, and each time `on_notice` says so; so
+        is one the server ends with a fault that passes (`ServerBusy`), after a pause.
         Nothing of the round has run yet, so the same request is safe to repeat; once
         text has been shown it is not, because the reply would appear twice.
 
@@ -113,8 +135,11 @@ class Responder:
             The final response, whatever its status.
 
         Raises:
-            StreamCut: If the stream keeps breaking, or breaks after text was shown.
-            TurnError: If the server ends a stream with an `error` event; the message
+            StreamCut: If the stream keeps breaking, or breaks after text was shown
+                (`ServerBusy` if the server said it was a fault that passes).
+            ContextOverflow: If the server ends a stream because the request is too
+                long, before any text was shown.
+            TurnError: If the server ends a stream with any other error; the message
                 is the reason it gave.
         """
         params: ResponseCreateParamsBase = {
@@ -165,6 +190,12 @@ class Responder:
                 if shown or retries > STREAM_RETRIES:
                     raise
                 on_notice(f"{cut}; trying again ({retries} of {STREAM_RETRIES})")
+                if isinstance(cut, ServerBusy):
+                    time.sleep(BUSY_DELAY_SECONDS * retries)
+            except ContextOverflow as exc:
+                if shown:  # a shorter request would show the reply again
+                    raise TurnError(str(exc)) from exc
+                raise
 
     def _stream(
         self, params: ResponseCreateParamsBase, on_text: Callable[[str], None]
@@ -179,10 +210,14 @@ class Responder:
                 said nothing about why, or the connection drops after the stream
                 had begun. (One that fails before it begins was already retried by
                 the SDK.)
-            TurnError: If the server ends the stream with an `error` event.
+            TurnError: If the server ends the stream with an error: an `error` event,
+                or a response that failed for being too long or for a fault that
+                passes (see `_stream_failure`). Any other failed response is returned.
+            APIError: What the SDK raises for an error it finds in the stream, when it
+                is neither of those two.
         """
         final = None
-        reason = None
+        failure = None
         started = False
         try:
             with self.client.responses.stream(**params) as stream:
@@ -196,7 +231,9 @@ class Responder:
                             if event.code
                             else event.message
                         )
-                        reason = f"Stream error: {detail}"
+                        failure = _stream_failure(
+                            f"Stream error: {detail}", event.code, event.message
+                        )
                     # Take the final response from the terminal event:
                     # get_final_response() raises unless the stream ends with
                     # response.completed. Keep the == chain: pyright narrows the
@@ -211,9 +248,23 @@ class Responder:
             if not started:
                 raise
             raise StreamCut(f"Stream cut off: {str(exc).rstrip('.')}") from exc
+        except APIStatusError:
+            raise  # refused before the stream began
+        except APIError as exc:  # an error that the SDK found in the stream
+            error = _stream_failure(
+                f"Stream error: {exc.message}", exc.code, exc.message
+            )
+            if type(error) is TurnError:
+                raise
+            raise error from exc
         if final is None:
-            if reason:
-                # The server said why; the same request would get the same answer.
-                raise TurnError(reason)
+            if failure:
+                raise failure
             raise StreamCut("Stream ended without a final response")
+        if final.status == "failed" and final.error:
+            error = _stream_failure(
+                response_problem(final) or "", final.error.code, final.error.message
+            )
+            if type(error) is not TurnError:
+                raise error
         return final
