@@ -20,6 +20,9 @@ move what is under Unreleased to a new heading with the version and the date, ch
   instead of editing the first.
 - `edit_file` keeps the blank lines that `new_text` ends with when `old_text` matches only
   after trailing whitespace and typographic characters are ignored.
+- A malformed link (such as `http://[`) on a page no longer fails the whole `web_fetch`
+  or `web_search`.
+- `web_fetch` reads a raw deflate response whose first piece is a single byte.
 
 ## [0.1.0] - 2026-11-25
 

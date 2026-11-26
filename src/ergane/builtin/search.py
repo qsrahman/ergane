@@ -52,16 +52,19 @@ def _target(link: str) -> str | None:
     for an advertisement or anything that is not an absolute http(s) link (a link that
     starts with `//`, as the redirects do, is https)."""
     absolute = "https:" + link if link.startswith("//") else link
-    parsed = urlparse(absolute)
-    if parsed.hostname and parsed.hostname.endswith("duckduckgo.com"):
-        if parsed.path == "/y.js":  # an advertisement
-            return None
-        if parsed.path == "/l/":  # the redirect: the real address is `uddg`
-            wrapped = parse_qs(parsed.query).get("uddg")
-            if not wrapped:
+    try:
+        parsed = urlparse(absolute)
+        if parsed.hostname and parsed.hostname.endswith("duckduckgo.com"):
+            if parsed.path == "/y.js":  # an advertisement
                 return None
-            absolute = wrapped[0]
-            parsed = urlparse(absolute)
+            if parsed.path == "/l/":  # the redirect: the real address is `uddg`
+                wrapped = parse_qs(parsed.query).get("uddg")
+                if not wrapped:
+                    return None
+                absolute = wrapped[0]
+                parsed = urlparse(absolute)
+    except ValueError:  # such as `http://[`: one bad link must not lose the others
+        return None
     return absolute if parsed.scheme in ("http", "https") and parsed.netloc else None
 
 

@@ -180,11 +180,11 @@ class _BoundedInflater:
     """
 
     def __init__(self, coding: str) -> None:
-        self._gzip = coding in ("gzip", "x-gzip")
-        self._first = True
-        self._z = zlib.decompressobj(
-            zlib.MAX_WBITS | 16 if self._gzip else zlib.MAX_WBITS
-        )
+        gzip = coding in ("gzip", "x-gzip")
+        # While a deflate body may still turn out to be raw: the bytes taken so far,
+        # to be decoded again that way. None once it is settled (at once for gzip).
+        self._start: bytes | None = None if gzip else b""
+        self._z = zlib.decompressobj(zlib.MAX_WBITS | 16 if gzip else zlib.MAX_WBITS)
 
     @property
     def unconsumed_tail(self) -> bytes:
@@ -199,14 +199,19 @@ class _BoundedInflater:
         try:
             out = self._z.decompress(data, max_length)
         except zlib.error as exc:
-            if self._first and not self._gzip:
+            if self._start is not None:
                 # Servers often send deflate raw, without zlib's wrapper; httpx
-                # retries the same way.
-                self._first = False
+                # retries the same way, but only with the chunk that failed.
+                data, self._start = self._start + data, None
                 self._z = zlib.decompressobj(-zlib.MAX_WBITS)
                 return self.decompress(data, max_length)
             raise httpx2.DecodingError(f"Error decoding the response body: {exc}")
-        self._first = False
+        if self._start is not None:
+            # zlib judges the wrapper by its first two bytes: until it has had them,
+            # the body is not known to be wrapped.
+            self._start += data
+            if out or len(self._start) >= 2:
+                self._start = None
         return out
 
     def flush(self) -> bytes:
@@ -375,6 +380,15 @@ def _main_content(soup: BeautifulSoup) -> Tag | BeautifulSoup:
     return soup.body or soup
 
 
+def _absolute(base_url: str, link: str) -> str:
+    """The link made absolute, or as it is if no URL parser takes it (`http://[`):
+    one bad link must not lose the page."""
+    try:
+        return urljoin(base_url, link)
+    except ValueError:
+        return link
+
+
 def extract_content_from_html(html: str, base_url: str = "") -> str:
     """Extract and convert HTML content to Markdown format.
 
@@ -407,9 +421,9 @@ def extract_content_from_html(html: str, base_url: str = "") -> str:
     root = _main_content(soup)
     if base_url:
         for tag in root.find_all(href=True):
-            tag["href"] = urljoin(base_url, str(tag["href"]))
+            tag["href"] = _absolute(base_url, str(tag["href"]))
         for tag in root.find_all(src=True):
-            tag["src"] = urljoin(base_url, str(tag["src"]))
+            tag["src"] = _absolute(base_url, str(tag["src"]))
     content = markdownify.markdownify(str(root), heading_style=markdownify.ATX)
     content = _BLANK_LINES.sub("\n\n", content).strip()
     if not content:
