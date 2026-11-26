@@ -6,6 +6,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+from hypothesis import settings
 from openai import OpenAI
 from pydantic import TypeAdapter
 
@@ -16,6 +17,12 @@ from ergane.mcp_hub import McpHub
 from ergane.tools import Tool
 from fake_api import FakeResponsesHandler
 from helpers import FAKE, fake_config, make_config, serve_http
+
+# The property tests: no deadline per input, since a slow machine is not a bug, and a
+# long run on request (`--hypothesis-profile=thorough`; pytest's timeout is then off).
+settings.register_profile("default", deadline=None)
+settings.register_profile("thorough", deadline=None, max_examples=3000)
+settings.load_profile("default")
 
 
 @pytest.fixture(autouse=True)

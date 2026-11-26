@@ -49,6 +49,10 @@ steps at the top of that file.
   own `MCPServer`, with a tool for each case a client must handle; `test_mcp_client.py` and
   `test_mcp_hub.py` start it as a subprocess (`FAKE`, `serve_http` in `helpers.py`; the
   `make_server`, `http_url` and `tools` fixtures in `conftest.py`).
+- `test_properties.py` holds Hypothesis tests of the functions that take outside text:
+  what must hold for any input. A run tries 100 inputs each;
+  `--hypothesis-profile=thorough --timeout=0` tries 3,000. An input that once broke one
+  stays on it as an `@example`.
 - The autouse `isolate_config` fixture runs each test in an empty `tmp_path` that is
   also `XDG_CONFIG_HOME`, and clears `OPENAI_API_KEY`, the one variable ergane reads.
 - Test files mirror the modules (`test_mcp_config.py` tests the server models of `config.py`), plus `test_compaction.py` (summaries, shortened
