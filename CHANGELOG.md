@@ -12,6 +12,15 @@ move what is under Unreleased to a new heading with the version and the date, ch
 
 ## [Unreleased]
 
+### Fixed
+
+- `edit_file` no longer edits a blank line when `old_text` is only whitespace that is not
+  in the file.
+- `edit_file` reports `old_text` that matches two overlapping places as ambiguous,
+  instead of editing the first.
+- `edit_file` keeps the blank lines that `new_text` ends with when `old_text` matches only
+  after trailing whitespace and typographic characters are ignored.
+
 ## [0.1.0] - 2026-11-25
 
 The first release. ergane began on 2026-10-16 as `muagent`, and was renamed on 2026-11-19.

@@ -1,11 +1,12 @@
 """The matching and replacing behind `edit_file`: pure text in, text out.
 
 A replacement is made where `old` is found exactly. When it is not found, the lines are
-compared again after the differences that a model gets wrong when it copies text are
-removed: trailing whitespace, typographic quotes, Unicode dashes and Unicode spaces
-(opencode and pi both do this). Only whole lines are compared in that second try, and
-the first and last lines of the edit that the model left unchanged are taken from the
-file as they are, so a curly quote in an untouched line is not rewritten.
+compared again (unless old_text is blank) after the differences that a model gets wrong
+when it copies text are removed: trailing whitespace, typographic quotes, Unicode
+dashes and Unicode spaces (opencode and pi both do this). Only whole lines are compared
+in that second try, and the first and last lines of the edit that the model left
+unchanged are taken from the file as they are, so a curly quote in an untouched line is
+not rewritten.
 
 A text with CRLF line endings is edited as LF and written back as CRLF; a file that mixes
 the two is written back with the one it has most of.
@@ -35,26 +36,27 @@ def _plain(line: str) -> str:
     return line.rstrip().translate(_QUOTES).translate(_DASHES).translate(_SPACES)
 
 
-def _exact(text: str, old: str) -> list[int]:
-    """Where `old` is in `text`, without overlaps."""
+def _exact(text: str, old: str, overlaps: bool) -> list[int]:
+    """Where `old` is in `text`: every place with `overlaps`, to tell whether there is
+    only one, and else the places that can all be replaced."""
     found = []
     at = text.find(old)
     while at != -1:
         found.append(at)
-        at = text.find(old, at + len(old))
+        at = text.find(old, at + (1 if overlaps else len(old)))
     return found
 
 
-def _line_matches(lines: list[str], wanted: list[str]) -> list[int]:
-    """The first lines of the runs of `lines` that equal `wanted` once plain, without
-    overlaps."""
+def _line_matches(lines: list[str], wanted: list[str], overlaps: bool) -> list[int]:
+    """The first lines of the runs of `lines` that equal `wanted` once plain; `overlaps`
+    is as in `_exact`."""
     plain = [_plain(line) for line in wanted]
     found = []
     i = 0
     while i <= len(lines) - len(wanted):
         if all(_plain(lines[i + j]) == plain[j] for j in range(len(wanted))):
             found.append(i)
-            i += len(wanted)
+            i += 1 if overlaps else len(wanted)
         else:
             i += 1
     return found
@@ -134,7 +136,8 @@ def edit_text(
     old = old.replace("\r\n", "\n")
     new = new.replace("\r\n", "\n")
 
-    found = _exact(text, old)
+    # Two places that overlap are still two places that the model might have meant.
+    found = _exact(text, old, overlaps=not replace_all)
     if found:
         if len(found) > 1 and not replace_all:
             at = [text.count("\n", 0, start) + 1 for start in found]
@@ -142,11 +145,19 @@ def edit_text(
         result = text.replace(old, new) if replace_all else text.replace(old, new, 1)
         count = len(found) if replace_all else 1
     else:
-        # The newlines at the ends are not part of the comparison of lines.
+        # The newlines at the end of old_text are not part of the comparison of
+        # lines, so as many are taken off new_text: the file keeps its own, and any
+        # that new_text has over those are blank lines it adds.
         old_lines = old.rstrip("\n").split("\n")
-        new_lines = new.rstrip("\n").split("\n") if new.strip("\n") else []
+        shared = min(len(old) - len(old.rstrip("\n")), len(new) - len(new.rstrip("\n")))
+        new_lines = new[: len(new) - shared].split("\n") if new else []
         lines = text.split("\n")
-        starts = _line_matches(lines, old_lines)
+        # Blank text matches only exactly: once plain, it would equal any blank line.
+        starts = (
+            _line_matches(lines, old_lines, overlaps=not replace_all)
+            if old.strip()
+            else []
+        )
         if not starts:
             raise EditError(
                 f"Could not find old_text in {shown}. It must match exactly, including "

@@ -35,8 +35,12 @@ class TestExactMatches:
     def test_a_match_that_is_one_place_needs_no_replace_all(self):
         assert edit("a\nb\n", "a", "c", replace_all=True) == ("c\nb\n", 1)
 
-    def test_matches_do_not_overlap(self):
+    def test_replace_all_takes_no_overlapping_places(self):
         assert edit("aaaa", "aa", "b", replace_all=True) == ("bb", 2)
+
+    def test_places_that_overlap_are_several_places(self):
+        with pytest.raises(EditError, match=r"matches 2 places \(lines 1, 2\)"):
+            edit("x\nx\nx\n", "x\nx", "y")
 
     def test_the_replacement_is_taken_literally(self):
         assert edit("x = 1", "1", r"\1 \g<0> $1")[0] == r"x = \1 \g<0> $1"
@@ -151,6 +155,15 @@ class TestSecondTryAfterTheLinesAreMadePlain:
     def test_several_places_are_still_an_error_without_replace_all(self):
         with pytest.raises(EditError, match="matches 2 places \\(lines 1, 3\\)"):
             edit("a \nx\na \nx\n", "a\nx", "z")
+
+    def test_places_that_overlap_are_several_places_here_too(self):
+        with pytest.raises(EditError, match=r"matches 2 places \(lines 1, 2\)"):
+            edit("x\nx\nx\n", "x \nx ", "y")
+
+    def test_replace_all_takes_no_overlapping_places_here_either(self):
+        result = edit("x\nx\nx\n", "x \nx ", "y", replace_all=True)
+
+        assert result == ("y\nx\n", 1)
 
     def test_replace_all_works_on_this_try_too(self):
         result = edit("a \nx\nb\na \nx\n", "a\nx", "z", replace_all=True)
