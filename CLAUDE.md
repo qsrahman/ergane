@@ -101,86 +101,39 @@ the prompt history and the saved sessions too and is made `0700`.
 
 ## Architecture
 
-The modules, in dependency order (each imports only from those above it):
+The modules, in dependency order (each imports only from those above it). How each one
+works, and why, is in its docstring; this list says where to look and what is not to be
+found there.
 
-- `tools.py`: the `@tool` decorator and `Tool` (`name`, `description`, `parameters`,
-  `check`, `runner`, `read_only`, `preview`: what the user may ask to see before
-  allowing a call, a diff for a write). `Tool.call` never raises (except Ctrl-C): a bad call
-  or an exception comes back as text for the model, and output is cut at
-  `MAX_OUTPUT_CHARS`. `tools_in(package)` finds the tools of a package: a `@tool`
-  function in a module of `builtin/` is offered with nothing else to edit; [TOOLS.md](TOOLS.md)
-  is the guide to writing one.
-- `config.py`: `Config`, `load_config()`, `EFFORTS`, the XDG directories, the model of a
-  server in `config.json`: `LocalMcpServer` (a `command`) or `RemoteMcpServer` (a
-  `url`), told apart by `type` or by having a `url`, as the union `McpServerConfig` (a
-  field of the other kind is an error of its own, so there is no check of
-  combinations), and what the MCP code shares with it: the rules for a server's name
-  and the `${NAME}` placeholders (`fill_placeholders`).
-- `todos.py`: `TodoList` and its `todo` tool (whole-list replace, one `in_progress` at a
-  time, held in memory, not saved with a session). The agent offers it only when it has
-  another tool, shows a change as a checklist (`on_todos`, not a notice), and puts a list with open steps into the
-  instructions of each request, since old tool results are dropped from the history.
-- `builtin/`: ergane's own tools, each module only `@tool` functions (and the helpers
-  they share, whose names start with `_`, which `tools_in` skips). In dependency order:
-  `_paths` (`resolve`: the one place a model's path becomes a real one), `_text`
-  (the line, character and head-and-tail cuts, and reading a file by lines), `_edit` (the
-  text of an edit, pure), then `files` (`read_file`), `writes` (`write_file`, `edit_file`), `shell`
-  (`run_command`), `fetch` (`web_fetch`) and `search` (`web_search`). A tool that needs
-  a setting a test changes is made by a `make_*_tool` factory (the fetch and search
-  ones), since tools cannot see `Config`. [TOOLS.md](TOOLS.md) is the guide; `PLAN.md`
-  records why each tool is as it is.
-- `mcp_tools.py`: what an MCP server's tools and results become for the model: names,
-  the text and pictures of a result, the check of a call's arguments. Plain functions.
-- `mcp_client.py`: `McpClient`, one connection used from synchronous code (on anyio's
-  blocking portal, a thread with an event loop); its tools become `Tool`s. `start()`
-  blocks until the server is up, so servers are started at once on threads of their
-  own. Imports `mcp` only when a server starts. The design notes are in its docstring.
-- `mcp_hub.py`: the servers together: `close_servers`, `McpHub` (starts
-  them, at a terminal in the background, and starts one again for `/reconnect`), and a
-  `ServerStatus` per server (`McpHub.statuses`, by name), which records what became of it
-  for `/servers`; `reconnect` starts a server again through the same `_Startup`.
-- `surrogates.py`: `without_surrogates`, for text that is about to be sent or saved.
-  Imports nothing of ergane.
-- `loops.py`: the loop guard's pure functions (`step_signature`, `is_looping`, `last_repeats`,
-  `loop_note`). Imports nothing of ergane.
-- `errors.py`, `prompts.py`: `TurnError`, `StreamCut`, `describe_error`,
-  `is_context_overflow`, `is_images_rejected`; the three prompts as text. They import nothing of ergane.
-- `context.py`: `Context` (the history and the summary) and `estimate_tokens()`.
-- `sessions.py`: `SessionStore`: conversations saved to disk, one file each, for a working
-  directory, in the user's state directory (`0700`, files `0600`); the newest 50 are kept.
-  A file is two lines of JSON, the first of which lists it (`SessionInfo`). The format and
-  the reasons are in its docstring.
-- `outputs.py`: the results of tools in the history: their form (`function_output`,
-  pictures) and how they are made to fit (`drop_images`, `shorten`, `drop_outputs`,
-  `answer_open_calls`).
-- `compaction.py`: `Compactor`: when to summarize the oldest turns, what to keep, and the
-  summary itself, through a function that asks the model; `transcript` (the text it is
-  given) and `extract_summary` (the check of the answer). It needs nothing of the agent.
-- `responses.py`: `Responder` (one request to the API, streamed, sent again when the stream
-  breaks before any text) and `response_problem`. It needs nothing of the agent.
-- `agent.py`: `Agent`: `run_turn` (a loop of `_ask` and `_run_round` around a `_Turn`),
-  `compact` (which is `Compactor`'s), and the tools (`add_tools`: the first of a name
-  wins, here and wherever tools are added). It reads its settings from `Config`, each
-  where it is used (as do `Responder` and `Compactor`), and imports nothing of MCP (a
-  test pins this).
-- `markdown.py`: `Markdown`, the light styling of a streamed reply (`**bold**`, `` `code` ``,
-  `#` headings, dim fences) a piece at a time; the marks stay in the text. Imports nothing of
-  ergane.
-- `console.py`: all terminal output, `sanitize()`, and the permission question. A status
-  line is styled pieces (prompt_toolkit's), printed by prompt_toolkit where there is
-  colour; the question is a typed line, or a menu when `Repl` gives the console `choose`.
-- `commands.py`: the `@command` registry and the slash commands (imports `Repl` for type
-  checking only).
-- `terminal.py`: the prompt_toolkit side: `terminal_session` (the prompt, history,
-  completion and key bindings, and their styles), `toolbar` (the line under the prompt:
-  model, effort, git branch, tools allowed for the session, servers and the context
-  meter, the least important left out when the terminal is narrow, never the meter)
-  and `choose` (the menu of the permission question). Imports `Repl` for type checking
+- `tools.py`: `@tool`, `Tool`, `tools_in`. `Tool.call` never raises (except Ctrl-C).
+- `config.py`: `Config`, `load_config`, the XDG directories, the MCP server models.
+- `todos.py`: `TodoList` and its `todo` tool.
+- `builtin/`: ergane's own tools: `_paths`, `_text`, `_edit`, then `files`, `writes`,
+  `shell`, `fetch`, `search`. A module holds only `@tool` functions and their helpers,
+  whose names start with `_`. A tool with a setting that a test changes is made by a
+  `make_*_tool` factory, since tools cannot see `Config`. [TOOLS.md](TOOLS.md) is the
+  guide to writing one; `PLAN.md` records why each tool is as it is.
+- `mcp_tools.py`, `mcp_client.py`, `mcp_hub.py`: what a server's tools and results become,
+  one connection, and the servers together. `mcp` is imported only when a server starts.
+- `surrogates.py`, `loops.py`: `without_surrogates` and the loop guard's pure functions.
+  They import nothing of ergane.
+- `errors.py`, `prompts.py`: how a turn fails, and the prompts as text. They import
+  nothing of ergane.
+- `context.py`: `Context` (the history and the summary) and `estimate_tokens`.
+- `sessions.py`: `SessionStore`, the saved conversations.
+- `outputs.py`: the results of tools in the history, and how they are made to fit.
+- `compaction.py`: `Compactor`. It needs nothing of the agent (a test pins this).
+- `responses.py`: `Responder` and `response_problem`. They need nothing of the agent or
+  the history (a test pins this).
+- `agent.py`: `Agent`. The first tool of a name wins, wherever tools are added. It
+  imports nothing of MCP (a test pins this).
+- `markdown.py`: the styling of a streamed reply. Imports nothing of ergane.
+- `console.py`: all terminal output, `sanitize` and the permission question.
+- `commands.py`: the slash commands. Imports `Repl` for type checking only.
+- `terminal.py`: the prompt, its toolbar and the menu. Imports `Repl` for type checking
   only.
-- `repl.py`: `Repl`, the input loop: it saves the conversation after each prompt
-  (`save_session`), and continues a saved one (`restore`, for `--resume` and
-  `/sessions`).
-- `cli.py`: `main()`.
+- `repl.py`: `Repl`, the input loop, which saves and restores sessions.
+- `cli.py`: `main`.
 
 Dependencies are passed in through constructors (`Agent(config, client=None, tools=(),
 server_notes=None)`, `Repl(agent, commands, session=None, console=None, hub=None,
