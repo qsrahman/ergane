@@ -219,6 +219,33 @@ class TestTheEnvironment:
 
         assert load_config().mcp_servers == {}
 
+    @pytest.mark.parametrize("key", ["sk-k\n", "sk-k ", " sk-k", "sk-k\r\n", "\tsk-k"])
+    @pytest.mark.parametrize("source", ["variable", "file", "placeholder"])
+    def test_space_around_the_key_is_taken_off(
+        self, monkeypatch, tmp_path, key, source
+    ):
+        in_file = "${MY_KEY}" if source == "placeholder" else key
+        if source == "variable":
+            monkeypatch.setenv("OPENAI_API_KEY", key)
+        else:
+            monkeypatch.setenv("MY_KEY", key)
+            write_json(tmp_path / "ergane" / "config.json", {"api_key": in_file})
+
+        assert load_config().api_key.get_secret_value() == "sk-k"
+
+    @pytest.mark.parametrize("key", [" ", "\n"])
+    def test_a_blank_key_is_no_key(self, monkeypatch, key):
+        monkeypatch.setenv("OPENAI_API_KEY", key)
+
+        with pytest.raises(ValidationError, match="api_key"):
+            load_config()
+
+    def test_a_blank_variable_does_not_hide_the_files_key(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENAI_API_KEY", " \n")
+        write_json(tmp_path / "ergane" / "config.json", {"api_key": "file-key"})
+
+        assert load_config().api_key.get_secret_value() == "file-key"
+
     def test_openai_api_key_is_the_key(self, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "k")
 

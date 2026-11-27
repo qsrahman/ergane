@@ -3,7 +3,9 @@ was too long: the ways the context is kept inside the budget."""
 
 from typing import cast
 
+import httpx2
 import pytest
+from openai import APIStatusError, OpenAI
 from openai.types.responses import ResponseInputParam
 
 from ergane.compaction import (
@@ -485,6 +487,74 @@ class TestWhatMayPass:
     )
     def test_anything_else_does_not(self, code, message):
         assert not is_transient(code, message)
+
+
+class TestTheShapesOfAnError:
+    """What a server says is found whatever shape its error has, through the SDK."""
+
+    @staticmethod
+    def raised(body: str) -> APIStatusError:
+        def answer(request: httpx2.Request) -> httpx2.Response:
+            return httpx2.Response(400, text=body)
+
+        client = OpenAI(
+            api_key="k",
+            base_url="http://x",
+            max_retries=0,
+            http_client=httpx2.Client(transport=httpx2.MockTransport(answer)),
+        )
+        with pytest.raises(APIStatusError) as caught:
+            client.responses.create(model="m", input="x")
+        return caught.value
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            '{"error": {"message": "prompt is too long"}}',
+            '{"error": "prompt is too long"}',
+            '{"detail": "prompt is too long"}',
+            '{"detail": [{"loc": ["input"], "msg": "prompt is too long"}]}',
+            '{"message": "prompt is too long"}',
+            '{"errors": [{"message": "prompt is too long", "code": 400}]}',
+            '[{"error": {"message": "prompt is too long"}}]',
+            '{"error": {"detail": "prompt is too long"}}',
+            '"prompt is too long"',
+            "prompt is too long",
+        ],
+    )
+    def test_the_message_is_shown_and_understood(self, body):
+        exc = self.raised(body)
+
+        assert describe_error(exc).startswith("API error 400: prompt is too long ")
+        assert is_context_overflow(exc)
+
+    def test_so_is_a_refusal_of_pictures(self):
+        exc = self.raised('{"error": "this model does not support image input"}')
+
+        assert is_images_rejected(exc)
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "",
+            "{}",
+            "null",
+            '{"error": {}}',
+            '{"detail": []}',
+            "<html><body>Request too long</body></html>",
+            "[[[[[[[[[[1]]]]]]]]]]",
+        ],
+    )
+    def test_with_nothing_to_find_the_status_is_what_is_said(self, body):
+        exc = self.raised(body)
+
+        assert describe_error(exc) == "API error 400: Error code: 400"
+        assert not is_context_overflow(exc)
+
+    def test_a_very_long_message_is_cut(self):
+        exc = self.raised("x" * 5000)
+
+        assert len(describe_error(exc)) < 1100
 
 
 class TestImagesRejectedDetection:

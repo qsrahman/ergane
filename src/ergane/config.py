@@ -214,8 +214,14 @@ class Config(BaseModel):
     def _fill_in_variables(cls, value: object) -> object:
         """Let the key be `${NAME}` in the file, so that it can stay in the
         environment. This looks at the value that won, wherever it came from: a
-        placeholder in the file that the environment overrode is never looked at."""
-        return fill_placeholders(value, os.environ) if isinstance(value, str) else value
+        placeholder in the file that the environment overrode is never looked at.
+
+        Spaces and line ends around the key, which a file or a variable easily picks
+        up, are taken off: an HTTP header cannot carry them, and the request would
+        fail as if the server could not be reached."""
+        if not isinstance(value, str):
+            return value
+        return fill_placeholders(value, os.environ).strip()
 
 
 def _xdg_dir(variable: str, default: str) -> Path:
@@ -276,6 +282,6 @@ def load_config(path: Path | None = None, **flags: object) -> Config:
         # Titled with the path, so that the error says which file it is about.
         file_object = TypeAdapter(dict[str, Any], config=ConfigDict(title=str(file)))
         data = file_object.validate_json(file.read_bytes())
-    if key := os.environ.get("OPENAI_API_KEY"):
+    if key := os.environ.get("OPENAI_API_KEY", "").strip():  # blank is not set
         data["api_key"] = key
     return Config.model_validate(data | flags)

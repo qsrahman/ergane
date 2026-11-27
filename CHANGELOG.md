@@ -14,6 +14,11 @@ move what is under Unreleased to a new heading with the version and the date, ch
 
 ### Fixed
 
+- Spaces and line ends around the API key are taken off. Before, a key that ended in one
+  was reported as a connection error.
+- The message of an error from a compatible server is read from more shapes of response
+  (such as `{"error": "..."}` or `detail`), so it is shown, and a refusal for length or
+  for pictures is recognized.
 - A streamed reply that the server ends with an error that passes (overloaded, a rate
   limit, a server error) before any text is asked for again, twice, after a pause.
 - A request refused as too long inside a stream, and more of the ways servers word it,
