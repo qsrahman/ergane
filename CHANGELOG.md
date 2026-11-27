@@ -12,6 +12,8 @@ move what is under Unreleased to a new heading with the version and the date, ch
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-27
+
 ### Added
 
 - `/model` lists the models the server offers, and Tab completes their names after it.
@@ -119,5 +121,6 @@ The first release. ergane began on 2026-10-16 as `muagent`, and was renamed on 2
 ### Requirements
 - Python 3.14 or later; the `mcp` extra for MCP servers.
 
-[Unreleased]: https://github.com/qsrahman/ergane/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/qsrahman/ergane/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/qsrahman/ergane/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/qsrahman/ergane/releases/tag/v0.1.0
