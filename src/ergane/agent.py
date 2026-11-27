@@ -78,6 +78,10 @@ MAX_PARALLEL_CALLS = 8
 # How long to wait, after Ctrl-C, for calls that were cancelled to end.
 _CANCEL_SECONDS = 2
 
+# How long to wait for the server's list of models, which is asked for once, without
+# retries: the user is waiting for it, perhaps only for a name to be completed.
+_MODELS_SECONDS = 5.0
+
 
 class _Running:
     """A tool call running on a thread of its own, which ends when the call does.
@@ -191,6 +195,8 @@ class Agent:
         # to them, since each would cost a request that is refused. By model, since
         # `/model` can change it.
         self.no_pictures: set[str] = set()
+        # The server's models as last asked for; None until then.
+        self._models: list[str] | None = None
         # What the server counted in the last request it answered; None until then,
         # and when a compatible server sends no usage.
         self.last_input_tokens: int | None = None
@@ -532,6 +538,35 @@ class Agent:
                 return False
         on_notice("The request was too long for the model; trying again, shorter")
         return True
+
+    def models(self, *, refresh: bool = False) -> list[str]:
+        """The names of the models the server offers, sorted, which it is asked for
+        once and after that only with `refresh`. A name that could not be typed after
+        `/model` (one with a space or a control character) is left out. A server that
+        could not be asked is not asked again without `refresh`.
+
+        Raises:
+            Exception: Whatever the API client raises, such as an `openai.APIError`
+                from a server that has no list.
+        """
+        if refresh or self._models is None:
+            client = self.client.with_options(timeout=_MODELS_SECONDS, max_retries=0)
+            try:
+                listed = list(client.models.list())
+            except Exception:
+                self._models = []
+                raise
+            names = (getattr(model, "id", None) for model in listed)
+            self._models = sorted(
+                {
+                    name
+                    for name in names
+                    if isinstance(name, str)
+                    and name.isprintable()
+                    and name.split() == [name]
+                }
+            )
+        return self._models
 
     def add_tools(self, tools: Iterable[Tool]) -> list[str]:
         """Offer more tools. When a name is taken, the tool that has it stays: the

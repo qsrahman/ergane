@@ -260,6 +260,29 @@ class FakeResponsesHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
+    def do_GET(self):
+        """The list of models: `server.models`, a list of names; unset, two names;
+        None, a server that has no list (404); "broken", one that fails (500). Each
+        request is counted in `server.listed`."""
+        self.server.listed = getattr(self.server, "listed", 0) + 1  # pyright: ignore[reportAttributeAccessIssue]
+        names = getattr(self.server, "models", ["gpt-4o", "gpt-4o-mini"])
+        if names == "broken":
+            status, body = 500, {"error": {"message": "broken"}}
+        elif self.path != "/v1/models" or names is None:
+            status, body = 404, {"error": {"message": "no such page"}}
+        else:
+            data = [
+                {"id": name, "object": "model", "created": 0, "owned_by": "x"}
+                for name in names
+            ]
+            status, body = 200, {"object": "list", "data": data}
+        reply = json.dumps(body).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(reply)))
+        self.end_headers()
+        self.wfile.write(reply)
+
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         self.server.requests.append(body)  # pyright: ignore[reportAttributeAccessIssue]

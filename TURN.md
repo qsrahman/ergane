@@ -400,7 +400,7 @@ their text is printed when output is redirected or `NO_COLOR` is set.
 | `/compact [focus]` | summarizes the oldest turns now (§2a); the focus says what the summary must keep |
 | `/summary` | shows the summary                                                                          |
 | `/todo`   | shows the model's todo list, which `/reset` and a restored session clear                   |
-| `/model`, `/effort` | change the config; the next request reads it                                     |
+| `/model`, `/effort` | change the config; the next request reads it (`/model` alone lists the server's models) |
 
 ## 11. What must stay true
 

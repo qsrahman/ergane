@@ -231,6 +231,9 @@ def terminal_session(
     return PromptSession(
         history=_history_file(history),
         completer=CommandCompleter(commands),
+        # Some arguments are asked of a server (the models), which must not hold up
+        # the typing.
+        complete_in_thread=True,
         auto_suggest=AutoSuggestFromHistory(),
         # What is typed stays bold in the scrollback, so a prompt stands out from its reply.
         lexer=SimpleLexer("class:typed"),

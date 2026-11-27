@@ -207,12 +207,30 @@ def retry(repl: Repl, args: str) -> str | None:
     return None
 
 
-@command("/model")
+def _model_names(repl: Repl) -> list[str]:
+    """What is completed after `/model`: the server's models, or nothing if it cannot
+    be asked, which completing must not report."""
+    try:
+        return repl.agent.models()
+    except Exception:  # noqa: BLE001
+        return []
+
+
+@command("/model", _model_names)
 def model(repl: Repl, args: str) -> str:
-    """Show the model, or switch with /model NAME."""
+    """List the server's models, or switch with /model NAME."""
     if args:
         repl.agent.config.model = args
-    return f"Model: {repl.agent.config.model}"
+        return f"Model: {args}"
+    current = f"Model: {repl.agent.config.model}"
+    try:
+        names = repl.agent.models(refresh=True)
+    except Exception as exc:  # noqa: BLE001
+        return Warn(f"{current}. Could not list the models: {describe_error(exc)}")
+    if not names:
+        return f"{current} (the server lists no models)"
+    repl.console.columns([("available", ", ".join(names))])
+    return current
 
 
 @command("/effort", (*EFFORTS, "default"))

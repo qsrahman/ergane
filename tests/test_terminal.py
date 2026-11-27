@@ -533,8 +533,53 @@ class TestTerminalSession:
         assert self.complete(tmp_path, "/effort h") == ["high"]
         assert "default" in self.complete(tmp_path, "/effort ")
 
+    def test_the_servers_models_are_completed_after_model(
+        self, tmp_path, client, fake_server
+    ):
+        fake_server.models = ["gpt-b", "gpt-a", "other"]
+        agent = Agent(make_config(), client)
+
+        def found(text: str) -> list[str]:
+            with create_pipe_input() as pipe:
+                session = terminal_session(
+                    COMMANDS, tmp_path / "history", input=pipe, output=DummyOutput()
+                )
+                assert session is not None and session.completer is not None
+                Repl(agent, COMMANDS, session)
+                words = session.completer.get_completions(Document(text), None)  # pyright: ignore[reportArgumentType]
+                return [c.text for c in words]
+
+        assert found("/model ") == ["gpt-a", "gpt-b", "other"]
+        assert found("/model gpt-") == ["gpt-a", "gpt-b"]
+        assert fake_server.listed == 1  # asked once, not at each key
+
+    def test_a_server_without_a_list_completes_nothing_and_is_asked_once(
+        self, tmp_path, client, fake_server
+    ):
+        fake_server.models = None
+        agent = Agent(make_config(), client)
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, tmp_path / "history", input=pipe, output=DummyOutput()
+            )
+            assert session is not None and session.completer is not None
+            Repl(agent, COMMANDS, session)
+            for text in ("/model ", "/model g"):
+                words = session.completer.get_completions(Document(text), None)  # pyright: ignore[reportArgumentType]
+                assert list(words) == []
+
+        assert fake_server.listed == 1
+
+    def test_completing_does_not_hold_up_the_typing(self, tmp_path):
+        with create_pipe_input() as pipe:
+            session = terminal_session(
+                COMMANDS, tmp_path / "history", input=pipe, output=DummyOutput()
+            )
+
+        assert session is not None and session.complete_in_thread
+
     def test_a_command_that_lists_no_arguments_completes_none(self, tmp_path):
-        assert self.complete(tmp_path, "/model ") == []
+        assert self.complete(tmp_path, "/undo ") == []
         assert self.complete(tmp_path, "hello") == []
 
     def test_an_earlier_prompt_is_suggested(self, tmp_path):

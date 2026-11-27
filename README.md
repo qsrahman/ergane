@@ -213,7 +213,7 @@ Type a prompt at `❯` and press Enter. Up and Down recall earlier prompts, whic
 | `/summary`        | Show the summary that stands for the earliest turns |
 | `/todo`           | Show the model's todo list (see [Tools](#tools)) |
 | `/context`        | Show how much of the context budget the next request would use: the instructions, the tool definitions and the history (estimates), the total (the server's count of the last turn while the history is as it was), and the count the server gave for the last request |
-| `/model [NAME]`   | Show the model, or switch to `NAME` for the rest of the session                  |
+| `/model [NAME]`   | List the server's models and show the current one, or switch to `NAME` for the rest of the session (Tab completes the names) |
 | `/effort [LEVEL]` | Show the reasoning effort, or set it (`none` … `max`, or `default` to leave it out) |
 | `/reset`          | Clear the conversation history and start fresh (the old one stays saved)         |
 | `/sessions [N or ID]` | Continue a [saved session](#sessions) of this directory: choose one from the list, or give its number or id |

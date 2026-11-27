@@ -71,6 +71,55 @@ class TestCommandsWithAgent:
         assert "Nothing to retry" in capsys.readouterr().out
         assert fake_server.requests == []
 
+    def test_model_lists_the_servers_models(
+        self, monkeypatch, make_agent, fake_server, capsys
+    ):
+        # Enough names that they would not come out in order by chance.
+        letters = "qwertyuiopasdfghjkl"
+        fake_server.models = [*letters, "q", "two words", "a\x1bb"]
+
+        run_repl(monkeypatch, make_agent(), self.inputs("/model"))
+
+        out = capsys.readouterr().out
+        listed = ", ".join(sorted(letters))  # sorted, once, only names to type
+        assert f"available  {listed}\n" in out
+        assert out.index(listed) < out.index("Model: gpt-4o")
+
+    def test_model_asks_the_server_each_time(
+        self, monkeypatch, make_agent, fake_server
+    ):
+        run_repl(monkeypatch, make_agent(), self.inputs("/model", "/model"))
+
+        assert fake_server.listed == 2
+
+    def test_switching_asks_the_server_nothing(
+        self, monkeypatch, make_agent, fake_server, capsys
+    ):
+        agent = make_agent()
+
+        run_repl(monkeypatch, agent, self.inputs("/model Any-Name"))
+
+        assert agent.config.model == "Any-Name"
+        assert not hasattr(fake_server, "listed")
+
+    @pytest.mark.parametrize(
+        ("models", "shown"),
+        [
+            (None, "[Model: gpt-4o. Could not list the models: API error 404"),
+            ("broken", "[Model: gpt-4o. Could not list the models: API error 500"),
+            ([], "Model: gpt-4o (the server lists no models)"),
+        ],
+    )
+    def test_model_without_a_list_still_says_the_model(
+        self, monkeypatch, make_agent, fake_server, capsys, models, shown
+    ):
+        fake_server.models = models
+
+        run_repl(monkeypatch, make_agent(), self.inputs("/model"))
+
+        assert shown in " ".join(capsys.readouterr().out.split())
+        assert fake_server.listed == 1  # no retries
+
     def test_undo_removes_the_last_exchange(self, monkeypatch, make_agent, capsys):
         agent = make_agent()
 

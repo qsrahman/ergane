@@ -12,6 +12,10 @@ move what is under Unreleased to a new heading with the version and the date, ch
 
 ## [Unreleased]
 
+### Added
+
+- `/model` lists the models the server offers, and Tab completes their names after it.
+
 ### Fixed
 
 - Spaces and line ends around the API key are taken off. Before, a key that ended in one
