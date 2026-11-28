@@ -118,18 +118,29 @@ class Repl:
                 self.save_session()
             elif self.session:
                 erase_blank_prompt(self.session)
+        # A final chance for a save that failed earlier: Ctrl-D and a second Ctrl-C
+        # leave the loop without going through the save after a prompt. /exit goes
+        # through it already.
+        if self.running:
+            self.save_session()
         self.console.write("Bye.\n")
 
-    def save_session(self) -> None:
+    def save_session(self) -> bool:
         """Save the conversation if it changed since it was saved. A conversation
         with nothing in it is saved only if it was before: the file must not go on
-        saying what was undone."""
+        saying what was undone.
+
+        Returns:
+            Whether nothing is left to save, which what discards the conversation
+            must know first; a failure is told to the user here. Always true when
+            sessions are not saved.
+        """
         context = self.agent.context
         if self.store is None or context.revision == self._saved_revision:
-            return
-        self._saved_revision = context.revision
+            return True
         if not context.items and context.summary is None and self.saved is None:
-            return
+            self._saved_revision = context.revision  # there is nothing to save
+            return True
         try:
             self.saved = self.store.save(
                 self.saved,
@@ -138,11 +149,17 @@ class Repl:
                 self.agent.config.model,
             )
         except OSError as exc:
+            # The revision stays behind, so the next save tries again rather than
+            # treating a failed write as saved.
             self.console.notice(f"Could not save the session: {exc}", "warning")
+            return False
+        self._saved_revision = context.revision
+        return True
 
     def restore(self, saved: SavedSession) -> str:
-        """Continue a saved session in place of the conversation there is. That one
-        was saved after its last prompt, so nothing is lost.
+        """Continue a saved session in place of the conversation there is, which is
+        forgotten: the caller sees to it that it is saved (`save_session`), before
+        it reads `saved`, which may be the same session.
 
         Returns:
             A line that says what was restored, for the user.

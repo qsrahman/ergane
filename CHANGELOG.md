@@ -12,6 +12,12 @@ move what is under Unreleased to a new heading with the version and the date, ch
 
 ## [Unreleased]
 
+### Fixed
+
+- A session save that fails is tried again at the next prompt or on exit instead of
+  being treated as saved, and `/reset` and `/sessions` leave the conversation as it is
+  while it cannot be saved; before, turns could be lost after a disk error.
+
 ## [0.2.0] - 2026-11-27
 
 ### Added

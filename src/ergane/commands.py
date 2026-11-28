@@ -121,6 +121,8 @@ def help_(repl: Repl, args: str) -> None:
 @command("/reset")
 def reset(repl: Repl, args: str) -> str:
     """Clear the conversation history."""
+    if not repl.save_session():
+        return Warn("History kept, since it could not be saved")
     repl.agent.reset()
     repl.saved = None  # what follows is a new session; the old one stays saved
     return "History reset"
@@ -168,6 +170,9 @@ def sessions_(repl: Repl, args: str) -> str | None:
             [(str(n), _described(i, repl.saved)) for n, i in enumerate(found, 1)]
         )
         return "Continue one with /sessions NUMBER or /sessions ID"
+    # Before the file is read: it may be the one of this conversation.
+    if not repl.save_session():
+        return Warn("Session not changed, since this one could not be saved")
     try:
         return repl.restore(store.load(ref))
     except SessionError as exc:

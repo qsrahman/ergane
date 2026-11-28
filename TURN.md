@@ -311,6 +311,9 @@ Ctrl-C that kept a turn, `/undo`, `/retry` and `/compact` are all saved, and
 a prompt that changed nothing is not. A conversation with nothing in it is not saved,
 unless it was before, so that the file does not go on saying what was undone.
 `/reset` forgets which session the conversation is, so the next save is a new one.
+A save that fails leaves the revision as not saved, so the next prompt or the way out
+tries again, and `/reset` and `/sessions` call `save_session` first: they replace the
+conversation only if it says that nothing is left to save.
 
 `--resume` and `/sessions` go the other way: `Repl.restore` hands the saved items and
 summary to `Context.restore`, which leaves the history as `save_turn` would have, with

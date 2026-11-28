@@ -1,4 +1,5 @@
 import io
+import itertools
 from pathlib import Path
 
 import pytest
@@ -423,8 +424,171 @@ class TestSessions:
         )
 
         out = capsys.readouterr().out
-        assert out.count("[Could not save the session: disk full]") == 2
+        # Once per prompt, and once more at /exit: a failed save is tried again.
+        assert out.count("[Could not save the session: disk full]") == 3
         assert out.count(TEXT) == 2
+
+    def test_a_save_that_fails_is_tried_again_at_the_next_prompt(
+        self, monkeypatch, make_agent, store, capsys
+    ):
+        real_save = store.save
+        attempts = 0
+
+        def fail_once(*args, **kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise OSError("disk full")
+            return real_save(*args, **kwargs)
+
+        monkeypatch.setattr(store, "save", fail_once)
+
+        run_repl(
+            monkeypatch,
+            make_agent(STREAMING=False),
+            ["one", "/exit"],
+            store=store,
+        )
+
+        out = capsys.readouterr().out
+        assert out.count("[Could not save the session: disk full]") == 1
+        assert attempts == 2
+        assert [s.title for s in store.sessions()] == ["one"]
+
+    def test_a_save_that_fails_is_tried_again_on_the_way_out(
+        self, monkeypatch, make_agent, store, capsys
+    ):
+        real_save = store.save
+        attempts = 0
+
+        def fail_once(*args, **kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise OSError("disk full")
+            return real_save(*args, **kwargs)
+
+        monkeypatch.setattr(store, "save", fail_once)
+
+        run_repl(
+            monkeypatch,
+            make_agent(STREAMING=False),
+            ["one", EOFError()],
+            store=store,
+        )
+
+        assert "[Could not save the session: disk full]" in capsys.readouterr().out
+        assert attempts == 2
+        assert [s.title for s in store.sessions()] == ["one"]
+
+    @staticmethod
+    def fail_saves(monkeypatch, store, *failing: int) -> None:
+        """Make the saves with these numbers, counted from 1, fail."""
+        real_save = store.save
+        attempts = itertools.count(1)
+
+        def save(*args, **kwargs):
+            if next(attempts) in failing:
+                raise OSError("disk full")
+            return real_save(*args, **kwargs)
+
+        monkeypatch.setattr(store, "save", save)
+
+    @staticmethod
+    def prompts_on_disk(store) -> dict[str, list[str]]:
+        """The prompts of each saved session, by its title."""
+        return {
+            info.title: [
+                item["content"]
+                for item in store.load(info.id).items
+                if item.get("role") == "user"
+            ]
+            for info in store.sessions()
+        }
+
+    def test_reset_saves_what_could_not_be_saved_before_it_forgets_it(
+        self, monkeypatch, make_agent, store
+    ):
+        self.fail_saves(monkeypatch, store, 2)
+        agent = make_agent(STREAMING=False)
+
+        run_repl(monkeypatch, agent, ["one", "two", "/reset", "/exit"], store=store)
+
+        assert self.prompts_on_disk(store) == {"one": ["one", "two"]}
+        assert agent.context.items == []
+
+    def test_reset_keeps_a_conversation_that_cannot_be_saved(
+        self, monkeypatch, make_agent, store, capsys
+    ):
+        # After the prompt, in /reset, after /reset and at /exit.
+        self.fail_saves(monkeypatch, store, 1, 2, 3, 4)
+        agent = make_agent(STREAMING=False)
+
+        run_repl(monkeypatch, agent, ["one", "/reset", "/exit"], store=store)
+
+        assert "[History kept, since it could not be saved]" in capsys.readouterr().out
+        assert agent.has_conversation
+
+    def test_switching_saves_what_could_not_be_saved_before_it_forgets_it(
+        self, monkeypatch, make_agent, store
+    ):
+        run_repl(
+            monkeypatch,
+            make_agent(STREAMING=False),
+            ["old", "/exit"],
+            store=store,
+        )
+        [old] = store.sessions()
+        self.fail_saves(monkeypatch, store, 1)
+
+        run_repl(
+            monkeypatch,
+            make_agent(STREAMING=False),
+            ["new", f"/sessions {old.id}", "/exit"],
+            store=store,
+        )
+
+        assert self.prompts_on_disk(store) == {"old": ["old"], "new": ["new"]}
+
+    def test_choosing_the_current_session_keeps_what_could_not_be_saved(
+        self, monkeypatch, make_agent, store
+    ):
+        self.fail_saves(monkeypatch, store, 2)
+        agent = make_agent(STREAMING=False)
+
+        # The only session is the current one, so 1 names it.
+        run_repl(
+            monkeypatch, agent, ["one", "two", "/sessions 1", "/exit"], store=store
+        )
+
+        assert self.prompts_on_disk(store) == {"one": ["one", "two"]}
+        assert [i["content"] for i in agent.context.items if i["role"] == "user"] == [
+            "one",
+            "two",
+        ]
+
+    def test_switching_is_refused_while_the_conversation_cannot_be_saved(
+        self, monkeypatch, make_agent, store, capsys
+    ):
+        run_repl(
+            monkeypatch,
+            make_agent(STREAMING=False),
+            ["old", "/exit"],
+            store=store,
+        )
+        [old] = store.sessions()
+        self.fail_saves(monkeypatch, store, 1, 2, 3, 4)
+        agent = make_agent(STREAMING=False)
+
+        run_repl(
+            monkeypatch, agent, ["new", f"/sessions {old.id}", "/exit"], store=store
+        )
+
+        out = capsys.readouterr().out
+        assert "[Session not changed, since this one could not be saved]" in out
+        assert [i["content"] for i in agent.context.items if i["role"] == "user"] == [
+            "new"
+        ]
 
     def test_a_resumed_session_is_the_conversation_and_goes_on_being_saved(
         self, monkeypatch, make_agent, fake_server, store, capsys
