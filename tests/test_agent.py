@@ -1141,30 +1141,37 @@ class TestAgentToolLoop:
     def test_read_only_calls_of_one_response_run_at_the_same_time(
         self, make_agent, streaming
     ):
-        spans: list[tuple[float, float]] = []
+        barrier = threading.Barrier(2)
+        passed: list[str] = []
 
-        def slow_read(path: str) -> str:
+        def read(path: str) -> str:
             """Read a text file."""
-            begun = time.monotonic()
-            time.sleep(0.4)
-            spans.append((begun, time.monotonic()))
+            barrier.wait(timeout=5)
+            passed.append(path)
             return path
 
-        agent = make_agent(tools=[tool_with(slow_read)], STREAMING=streaming)
+        agent = make_agent(tools=[tool_with(read)], STREAMING=streaming)
 
         agent.run_turn("tool_call_parallel")
 
-        # Each began before either ended: one after the other would not do that.
-        assert len(spans) == 2
-        assert max(begun for begun, _ in spans) < min(end for _, end in spans)
+        # Both were inside the tool before either returned: one after the other
+        # could not pass the barrier.
+        assert sorted(passed) == ["notes.txt", "todo.txt"]
 
     def test_the_outputs_are_in_the_order_of_the_calls_whoever_ends_first(
         self, make_agent, fake_server, streaming
     ):
+        barrier = threading.Barrier(2)
+        second_done = threading.Event()
+
         def first_is_slower(path: str) -> str:
             """Read a text file."""
+            barrier.wait(timeout=5)
             if path == "notes.txt":
-                time.sleep(0.4)
+                if not second_done.wait(5):
+                    return "the other call did not finish first"
+            else:
+                second_done.set()
             return f"contents of {path}"
 
         agent = make_agent(tools=[tool_with(first_is_slower)], STREAMING=streaming)
@@ -1182,31 +1189,39 @@ class TestAgentToolLoop:
         ]
 
     def test_each_call_is_shown_before_any_of_them_ends(self, make_agent, streaming):
-        log: list[str] = []
+        both_shown = threading.Event()
+        shown: list[str] = []
+        ran: list[tuple[str, bool]] = []
+
+        def on_call(name, arguments):
+            shown.append(arguments)
+            if len(shown) == 2:
+                both_shown.set()
 
         def read(path: str) -> str:
             """Read a text file."""
-            time.sleep(0.2)
-            log.append(f"ran {path}")
+            ran.append((path, both_shown.wait(5)))
             return path
 
         agent = make_agent(tools=[tool_with(read)], STREAMING=streaming)
 
-        agent.run_turn(
-            "tool_call_parallel", on_call=lambda name, arguments: log.append("shown")
-        )
+        agent.run_turn("tool_call_parallel", on_call=on_call)
 
-        assert log[:2] == ["shown", "shown"]
+        assert len(shown) == 2
+        # Both calls were shown while both were still running.
+        assert sorted(path for path, _ in ran) == ["notes.txt", "todo.txt"]
+        assert all(ready for _, ready in ran)
 
     def test_calls_that_are_not_read_only_run_one_at_a_time_and_ask_each(
         self, make_agent, streaming
     ):
         log: list[str] = []
+        main_thread: list[bool] = []
 
         def write(path: str) -> str:
             """Write a text file."""
+            main_thread.append(threading.current_thread() is threading.main_thread())
             log.append(f"start {path}")
-            time.sleep(0.2)
             log.append(f"end {path}")
             return path
 
@@ -1228,6 +1243,7 @@ class TestAgentToolLoop:
             "start todo.txt",
             "end todo.txt",
         ]
+        assert main_thread == [True, True]  # run alone, where Ctrl-C reaches them
         assert len(asked) == 2
 
     def test_a_call_that_writes_waits_for_the_reads_before_it_and_the_reads_after_wait_for_it(
@@ -1238,7 +1254,10 @@ class TestAgentToolLoop:
         def read_file(path: str) -> str:
             """Read a text file."""
             log.append(f"read {path} start")
-            time.sleep(0.2)
+            if path == "notes.txt":
+                # Hold the first read open long enough that a write which ignores it
+                # would log itself before the read ends. The window is the point.
+                time.sleep(0.2)
             log.append(f"read {path} end")
             return path
 
