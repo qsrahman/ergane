@@ -80,6 +80,54 @@ class TestSave:
 
         assert [p.suffix for p in store.directory.iterdir()] == [".jsonl"]
 
+    def test_each_save_has_a_temporary_file_of_its_own(self, store, monkeypatch):
+        # Two erganes that resume one session save the same path; a fixed temporary
+        # name would let one write the file the other is about to move into place.
+        first = save(store)
+        sources: list[Path] = []
+        real_replace = sessions.os.replace
+
+        def replace(source, target):
+            sources.append(Path(source))
+            real_replace(source, target)
+
+        monkeypatch.setattr(sessions.os, "replace", replace)
+        save(store, previous=first)
+        save(store, previous=first)
+
+        assert len(sources) == 2 and len(set(sources)) == 2
+        assert all(source.parent == store.directory for source in sources)
+
+    def test_a_save_that_fails_leaves_no_temporary_file(self, store, monkeypatch):
+        first = save(store)
+        path = store.directory / f"{first.id}.jsonl"
+        before = path.read_bytes()
+
+        def replace(source, target):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(sessions.os, "replace", replace)
+        with pytest.raises(OSError, match="disk full"):
+            save(store, previous=first)
+
+        assert list(store.directory.iterdir()) == [path]
+        assert path.read_bytes() == before
+
+    def test_old_temporary_files_are_removed_and_new_ones_are_left(self, store):
+        first = save(store)
+        # The names of a save that was killed, now and in earlier versions.
+        old = [store.directory / name for name in (".a.x1.tmp", "b.tmp")]
+        new = store.directory / ".c.x2.tmp"  # perhaps another ergane's, in progress
+        for path in (*old, new):
+            path.write_text("half")
+        for path in old:
+            os.utime(path, (0, 0))
+
+        save(store, previous=first)
+
+        assert not any(path.exists() for path in old)
+        assert new.exists()
+
     def test_a_file_has_two_lines_the_first_of_which_lists_it(self, store):
         info = save(store)
 

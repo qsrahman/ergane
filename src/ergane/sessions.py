@@ -10,8 +10,9 @@ A file is two lines of JSON. The first says enough to list the session (`Session
 so listing reads one line of each file and not their histories, which can hold pictures.
 The second has the summary and the items, as `Context` keeps them: plain JSON, which
 the SDK's items already are. A file is written whole to a temporary name and moved into
-place, so a crash leaves the old one. Files are readable by the user only. Only the
-newest `KEEP` sessions of a directory are kept.
+place, so a crash leaves the old one; the temporary file of a save that was killed is
+removed by a later save. Files are readable by the user only. Only the newest `KEEP`
+sessions of a directory are kept.
 
 What is not saved: what the user allowed for the session (a resumed session asks
 again), the count of tokens the server made of it (the next reply gives it again), and
@@ -23,6 +24,7 @@ import json
 import os
 import re
 import secrets
+import tempfile
 import time
 from contextlib import suppress
 from dataclasses import dataclass
@@ -36,6 +38,10 @@ from ergane.surrogates import without_surrogates
 
 # How many sessions of a directory are kept: the newest, which saving prunes to.
 KEEP = 50
+
+# How old a temporary file is before it is taken for one that a killed save left: a
+# newer one may be a save that another ergane is making now.
+_STALE_SECONDS = 3600
 
 # How much of the first prompt is the title.
 _TITLE_CHARS = 60
@@ -212,7 +218,15 @@ class SessionStore:
         for old in self.sessions()[KEEP:]:
             if old.id != info.id:
                 (self.directory / f"{old.id}.jsonl").unlink(missing_ok=True)
+        self._remove_leftovers()
         return info
+
+    def _remove_leftovers(self) -> None:
+        """Remove old temporary files; each can hold a whole conversation."""
+        for path in self.directory.glob("*.tmp"):
+            with suppress(OSError):  # the session is saved; this can wait
+                if time.time() - path.stat().st_mtime > _STALE_SECONDS:
+                    path.unlink()
 
     def _new_id(self) -> str:
         """An id that sorts by time and that no file has."""
@@ -230,12 +244,19 @@ class SessionStore:
             with suppress(OSError):  # as private as the state directory
                 directory.chmod(0o700)
         path = self.directory / f"{info.id}.jsonl"
-        temporary = path.with_suffix(".tmp")
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
-            file.write(info.model_dump_json() + "\n")
-            file.write(json.dumps({"summary": summary, "items": items}) + "\n")
-        os.replace(temporary, path)
+        # A name of its own: two erganes that resume one session must not write the
+        # same temporary file, or the later replace would rename the other's write.
+        descriptor, temporary = tempfile.mkstemp(
+            dir=self.directory, prefix=f".{info.id}.", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+                file.write(info.model_dump_json() + "\n")
+                file.write(json.dumps({"summary": summary, "items": items}) + "\n")
+            os.replace(temporary, path)
+        finally:
+            with suppress(OSError):
+                os.unlink(temporary)
 
     def _read(self, session_id: str) -> SavedSession:
         path = self.directory / f"{session_id}.jsonl"
