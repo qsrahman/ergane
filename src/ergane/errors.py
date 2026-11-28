@@ -8,9 +8,10 @@ from openai import APIConnectionError, APIError, APIStatusError
 class TurnError(Exception):
     """A turn that ended without a normal reply.
 
-    History is left untouched, with two exceptions: an incomplete response after
-    some text keeps the partial reply the user has already seen, and a stop by the
-    loop guard keeps the whole turn plus a closing note.
+    History is left untouched, with these exceptions: an incomplete response after
+    some text keeps the partial reply the user has already seen; a stop by the loop
+    guard keeps the whole turn plus a closing note; and once a round has completed,
+    a failure or Ctrl-C keeps the turn with a note that says why.
     """
 
 

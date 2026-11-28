@@ -36,7 +36,7 @@ line, because lines move. Everything is in [`src/ergane/`](src/ergane/).
                        Context.save_turn (or nothing), then a TurnError becomes one notice line
 ```
 
-The agent does no terminal I/O. Everything you see passes through four callbacks
+The agent does no terminal I/O. Everything you see passes through five callbacks
 that `Repl.ask` hands it, which are methods of `Console`:
 
 | Callback    | Is                | Carries                                                       |
@@ -422,7 +422,7 @@ their text is printed when output is redirected or `NO_COLOR` is set.
 - **The todo tool is offered only with another tool,** and its list reaches the
   instructions only then, so a chat with no tools never mentions one.
 - **The agent prints nothing.** If a new message is for the user, it goes through one
-  of the four callbacks.
+  of the five callbacks.
 
 ## An example
 

@@ -256,7 +256,7 @@ class Agent:
                 turn past the context budget.
             Exception: Whatever the API client raises, such as an
                 `openai.APIError`. Once a round has completed, the turn is kept
-                (see above) before any of these is raised, except the budget one.
+                (see above) before any of these is raised.
             KeyboardInterrupt: On Ctrl-C, after the turn is kept (see above).
         """
         io = _Callbacks(on_text, on_notice, on_call, confirm, on_todos)

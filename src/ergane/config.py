@@ -257,7 +257,7 @@ def config_file(path: Path | None = None) -> Path:
 
 
 def load_config(path: Path | None = None, **flags: object) -> Config:
-    """Load the settings: the flags, then the environment, then the file.
+    """Load the settings: the file, then the environment (the key), then the flags.
 
     The file is `path` (`--config`), or `config.json` in `$XDG_CONFIG_HOME/ergane`, which
     may be missing; see the module docstring for why no variable or directory names it.
