@@ -12,6 +12,8 @@ move what is under Unreleased to a new heading with the version and the date, ch
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-28
+
 ### Fixed
 
 - A session save that fails is tried again at the next prompt or on exit instead of
@@ -129,6 +131,7 @@ The first release. ergane began on 2026-10-16 as `muagent`, and was renamed on 2
 ### Requirements
 - Python 3.14 or later; the `mcp` extra for MCP servers.
 
-[Unreleased]: https://github.com/qsrahman/ergane/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/qsrahman/ergane/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/qsrahman/ergane/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/qsrahman/ergane/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/qsrahman/ergane/releases/tag/v0.1.0
